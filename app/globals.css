@@ -14,12 +14,25 @@
   --faint: #bbb9b3;
   --accent: #2f6fed;
   --accent-soft: #eef2fe;
-  --code-bg: #f4f4f2;
+  --code-bg: #f3f3f1;
   --sel: rgba(47, 111, 237, 0.16);
+  --mark: #a6a49d;
   --error: #d4380d;
   --warning: #a16207;
   --info: #2f6fed;
   --ok: #2f9e44;
+
+  /* Syntax palette (GitHub Light) */
+  --sx-comment: #6e7781;
+  --sx-keyword: #cf222e;
+  --sx-string: #0a3069;
+  --sx-number: #0550ae;
+  --sx-function: #8250df;
+  --sx-type: #953800;
+  --sx-property: #0550ae;
+  --sx-tag: #116329;
+  --sx-meta: #6e7781;
+  --sx-punct: #6e7781;
 }
 
 .dark {
@@ -33,12 +46,25 @@
   --faint: #6a6a64;
   --accent: #6ea8fe;
   --accent-soft: #1e2733;
-  --code-bg: #262626;
+  --code-bg: #2a2a2a;
   --sel: rgba(110, 168, 254, 0.2);
+  --mark: #6f6f69;
   --error: #ff7875;
   --warning: #fab005;
   --info: #6ea8fe;
   --ok: #51cf66;
+
+  /* Syntax palette (GitHub Dark) */
+  --sx-comment: #8b949e;
+  --sx-keyword: #ff7b72;
+  --sx-string: #a5d6ff;
+  --sx-number: #79c0ff;
+  --sx-function: #d2a8ff;
+  --sx-type: #ffa657;
+  --sx-property: #79c0ff;
+  --sx-tag: #7ee787;
+  --sx-meta: #8b949e;
+  --sx-punct: #8b949e;
 }
 
 @theme inline {
@@ -131,4 +157,68 @@ body {
   font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.65;
+}
+
+/* Markdown live-editor: fenced code blocks read as a subtle card (monospace,
+   soft background, padded); GFM table rows go monospace so the pipes line up. */
+.cm-editor .cm-line.cm-md-code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding-left: 0.9em;
+  padding-right: 0.9em;
+}
+/* The opening ``` fence becomes a faint language label at the top of the card. */
+.cm-editor .cm-line.cm-md-fence-open {
+  font-size: 0.68rem;
+  line-height: 2.1;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-top-left-radius: 7px;
+  border-top-right-radius: 7px;
+}
+/* The closing ``` fence becomes a thin strip of padding at the bottom. */
+.cm-editor .cm-line.cm-md-fence-close {
+  font-size: 0.5rem;
+  line-height: 1.2;
+  border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
+}
+.cm-editor .cm-line.cm-md-table {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+/* GFM tables rendered as a real grid (Obsidian-style live preview). */
+.cm-md-table-wrap {
+  padding: 0.5em 0;
+  cursor: text;
+  overflow-x: auto;
+}
+.cm-md-rendered-table {
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.cm-md-rendered-table th,
+.cm-md-rendered-table td {
+  border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  padding: 0.4em 0.75em;
+  text-align: left;
+  vertical-align: top;
+}
+.cm-md-rendered-table th {
+  background: var(--panel);
+  font-weight: 650;
+}
+.cm-md-rendered-table code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--code-bg);
+  padding: 0.05em 0.3em;
+  border-radius: 4px;
+}
+.cm-md-rendered-table a {
+  color: var(--accent);
+  text-decoration: underline;
 }

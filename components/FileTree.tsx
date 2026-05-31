@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { TreeNode } from "@/lib/types";
+import { FileIcon, FolderIcon } from "./FileIcon";
 
 const HOVER = "hover:bg-black/5 dark:hover:bg-white/6";
 
@@ -16,7 +17,7 @@ function TreeItem({
   selected: string | null;
   onSelect: (rel: string) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const indent = { paddingLeft: `${depth * 14 + 8}px` };
 
   if (node.type === "dir") {
@@ -31,7 +32,7 @@ function TreeItem({
           className={`flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm text-fg ${HOVER}`}
         >
           <span aria-hidden className="w-3 text-muted">{open ? "▾" : "▸"}</span>
-          <span aria-hidden>{open ? "📂" : "📁"}</span>
+          <FolderIcon open={open} name={node.name} />
           <span className="truncate font-medium">{node.name}</span>
         </button>
         {open && node.children && node.children.length > 0 && (
@@ -59,7 +60,7 @@ function TreeItem({
         }`}
       >
         <span className="w-3" />
-        <span aria-hidden>{node.isSkillMd ? "📘" : node.glyph}</span>
+        <FileIcon name={node.name} />
         <span className={`truncate ${node.isSkillMd ? "font-semibold" : ""}`}>{node.name}</span>
       </button>
     </li>

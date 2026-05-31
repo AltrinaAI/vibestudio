@@ -8,6 +8,7 @@ import SkillDocument from "./SkillDocument";
 import FilePane from "./FilePane";
 import { Spinner } from "./ui";
 import { addRecent } from "./recents";
+import { confirmDiscardIfDirty } from "./editorState";
 import type { SkillData, FileData } from "@/lib/types";
 
 function skillName(d: SkillData): string {
@@ -66,6 +67,7 @@ export default function SkillApp({
   }, []);
 
   const goHome = useCallback(() => {
+    if (!confirmDiscardIfDirty()) return;
     setData(null);
     setSelected("SKILL.md");
     setFileData(null);
@@ -75,7 +77,8 @@ export default function SkillApp({
 
   const selectFile = useCallback(
     async (rel: string) => {
-      if (!data) return;
+      if (!data || rel === selected) return;
+      if (!confirmDiscardIfDirty()) return;
       const myReq = ++reqRef.current;
       setSelected(rel);
       if (rel === "SKILL.md") {
@@ -100,7 +103,7 @@ export default function SkillApp({
         if (myReq === reqRef.current) setFileLoading(false);
       }
     },
-    [data],
+    [data, selected],
   );
 
   if (!data) {
@@ -109,7 +112,7 @@ export default function SkillApp({
 
   return (
     <div className="flex h-screen flex-col bg-app text-fg">
-      <TopBar onHome={goHome} skillName={skillName(data)} selected={selected} toggleTheme={toggleTheme} />
+      <TopBar onHome={goHome} skillName={skillName(data)} selected={selected} root={data.root} toggleTheme={toggleTheme} />
       <div className="flex min-h-0 flex-1">
         <Sidebar data={data} selected={selected} onSelect={selectFile} />
         <main className="min-w-0 flex-1 overflow-auto">

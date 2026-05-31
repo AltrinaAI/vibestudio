@@ -6,7 +6,7 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Agent Skill Viewer",
+  title: "Agent Skill Studio",
   description: "View and edit Agent Skills (agentskills.io) in a human-readable way.",
 };
 

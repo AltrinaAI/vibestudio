@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import dynamic from "next/dynamic";
-import { useAutosave, type SaveStatus } from "./useAutosave";
+import { useManualSave } from "./useManualSave";
 import { humanSize } from "@/lib/fileTypes";
 import type { FileData } from "@/lib/types";
 
@@ -10,13 +10,6 @@ const LiveEditor = dynamic(() => import("./LiveEditor"), {
   ssr: false,
   loading: () => <div className="px-8 py-6 text-sm text-muted">Loading editor…</div>,
 });
-
-const STATUS_LABEL: Record<SaveStatus, string> = {
-  saved: "Saved",
-  editing: "Editing…",
-  saving: "Saving…",
-  error: "Save failed",
-};
 
 export default function FilePane({ root, file }: { root: string; file: FileData }) {
   const editable = file.content != null && !file.tooLarge && !file.isBinary && file.category !== "image";
@@ -36,22 +29,16 @@ export default function FilePane({ root, file }: { root: string; file: FileData 
     }
   }, [root, file.rel, content]);
 
-  const { status } = useAutosave(content, save);
+  useManualSave(content, save, editable);
 
   return (
-    <div className="mx-auto max-w-[52rem] px-6 py-8 sm:px-10">
+    <div className="mx-auto max-w-208 px-6 py-8 sm:px-10">
       <div className="mb-5 flex items-center gap-3 text-xs text-muted">
         <span className="font-mono text-faint">{file.rel}</span>
         <span>·</span>
         <span>{file.label}</span>
         <span>·</span>
         <span>{humanSize(file.size)}</span>
-        {editable && (
-          <span className="ml-auto inline-flex items-center gap-1.5" aria-live="polite">
-            <span className={`h-1.5 w-1.5 rounded-full ${status === "error" ? "bg-danger" : status === "saved" ? "bg-ok" : "bg-faint"}`} />
-            {STATUS_LABEL[status]}
-          </span>
-        )}
       </div>
 
       {file.category === "image" ? (
@@ -76,6 +63,7 @@ export default function FilePane({ root, file }: { root: string; file: FileData 
         <LiveEditor
           kind={file.category === "markdown" ? "markdown" : "code"}
           language={file.language}
+          filename={baseName}
           value={content}
           onChange={setContent}
         />

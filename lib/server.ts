@@ -3,6 +3,7 @@ import "server-only";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import JSZip from "jszip";
 
 import {
   parseSkillMd,
@@ -278,6 +279,43 @@ export async function writeTextFile(root: string, rel: string, content: string):
   const abs = await resolveWithinReal(root, rel, { mustExist: false });
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, content, "utf8");
+}
+
+/** Package an entire skill directory into a zip (named after the folder). */
+export async function zipSkill(input: string): Promise<{ buf: Buffer; filename: string }> {
+  const root = resolveRoot(input);
+  const stat = await fs.stat(root).catch(() => null);
+  if (!stat || !stat.isDirectory()) throw new HttpError(404, `Skill not found: ${root}`);
+  if (!(await pathExists(path.join(root, "SKILL.md")))) {
+    throw new HttpError(422, "Not a skill directory (no SKILL.md).");
+  }
+
+  const dirName = path.basename(root);
+  const zip = new JSZip();
+  const MAX_TOTAL = 100 * 1024 * 1024; // 100 MB safety cap
+  let total = 0;
+
+  async function walk(dir: string, prefix: string): Promise<void> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue; // never follow symlinks out of the skill
+      if (entry.isDirectory()) {
+        if (IGNORED_DIRS.has(entry.name)) continue;
+        await walk(path.join(dir, entry.name), `${prefix}${entry.name}/`);
+      } else if (entry.isFile()) {
+        const abs = path.join(dir, entry.name);
+        const st = await fs.stat(abs).catch(() => null);
+        if (!st) continue;
+        total += st.size;
+        if (total > MAX_TOTAL) throw new HttpError(413, "Skill is too large to download.");
+        zip.file(`${dirName}/${prefix}${entry.name}`, await fs.readFile(abs));
+      }
+    }
+  }
+
+  await walk(root, "");
+  const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  return { buf, filename: `${dirName}.zip` };
 }
 
 /** Serialize and write the SKILL.md frontmatter + body. */

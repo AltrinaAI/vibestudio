@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Spinner, ThemeToggle } from "./ui";
+import { BrandIcon } from "./FileIcon";
 import { useRecents, removeRecent } from "./recents";
 
 const EXAMPLES = [
@@ -29,8 +30,8 @@ export default function Home({
     <div className="flex min-h-screen flex-col">
       <header className="flex items-center px-6 py-4">
         <div className="flex items-center gap-2 font-medium text-fg">
-          <span aria-hidden>📘</span>
-          <span>Skill Viewer</span>
+          <BrandIcon />
+          <span>Agent Skill Studio</span>
         </div>
         <div className="ml-auto">
           <ThemeToggle onClick={toggleTheme} />

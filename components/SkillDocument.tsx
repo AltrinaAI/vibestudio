@@ -2,7 +2,7 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { useAutosave, type SaveStatus } from "./useAutosave";
+import { useManualSave } from "./useManualSave";
 import {
   serializeSkillMd,
   validateSkill,
@@ -74,35 +74,19 @@ function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) 
   return <textarea ref={ref} rows={1} {...props} />;
 }
 
-function StatusPill({ status }: { status: SaveStatus }) {
-  const map: Record<SaveStatus, { label: string; cls: string }> = {
-    saved: { label: "Saved", cls: "text-muted" },
-    editing: { label: "Editing…", cls: "text-muted" },
-    saving: { label: "Saving…", cls: "text-muted" },
-    error: { label: "Save failed", cls: "text-danger" },
-  };
-  const { label, cls } = map[status];
-  return (
-    <span className={`inline-flex items-center gap-1.5 ${cls}`} aria-live="polite">
-      <span className={`h-1.5 w-1.5 rounded-full ${status === "error" ? "bg-danger" : status === "saved" ? "bg-ok" : "bg-faint"}`} />
-      {label}
-    </span>
-  );
-}
-
 function ValidationPill({ issues }: { issues: ValidationIssue[] }) {
   const [open, setOpen] = useState(false);
   const { errors, warnings, ok } = summarizeIssues(issues);
-  const label = !ok ? `${errors} issue${errors === 1 ? "" : "s"}` : warnings > 0 ? `${warnings} warning${warnings === 1 ? "" : "s"}` : "Spec compliant";
+  const label = !ok
+    ? `${errors} issue${errors === 1 ? "" : "s"}`
+    : warnings > 0
+      ? `${warnings} warning${warnings === 1 ? "" : "s"}`
+      : "Spec compliant";
   const cls = !ok ? "text-danger" : warnings > 0 ? "text-warn" : "text-muted";
   return (
     <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={`inline-flex items-center gap-1.5 ${cls} hover:underline`}
-      >
-        <span>{ok ? (warnings > 0 ? "▲" : "✓") : "▲"}</span>
+      <button type="button" onClick={() => setOpen((o) => !o)} className={`inline-flex items-center gap-1.5 ${cls} hover:underline`}>
+        <span aria-hidden>{ok ? (warnings > 0 ? "▲" : "✓") : "▲"}</span>
         {label}
       </button>
       {open && issues.length > 0 && (
@@ -128,6 +112,15 @@ function ValidationPill({ issues }: { issues: ValidationIssue[] }) {
 const inputCls =
   "w-full bg-transparent text-sm text-fg outline-none placeholder:text-faint border-b border-transparent focus:border-border-strong py-0.5";
 
+function PropRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-3">
+      <span className="w-28 shrink-0 pt-0.5 text-xs text-muted">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 export default function SkillDocument({ data }: { data: SkillData }) {
   const fm = data.frontmatter;
   const [name, setName] = useState(asString(fm.name));
@@ -138,8 +131,8 @@ export default function SkillDocument({ data }: { data: SkillData }) {
   const [meta, setMeta] = useState<MetaRow[]>(() => metaRowsOf(fm));
   const [body, setBody] = useState(data.body);
 
-  const hasProps = !!(license || compatibility || allowedTools || meta.length);
-  const [showProps, setShowProps] = useState(hasProps);
+  const propCount = [license, compatibility, allowedTools].filter(Boolean).length + meta.length;
+  const [showProps, setShowProps] = useState(false);
 
   const extraFields = useMemo(() => extraOf(fm), [fm]);
   const frontmatter = useMemo(
@@ -154,31 +147,28 @@ export default function SkillDocument({ data }: { data: SkillData }) {
   );
   const nameError = issues.find((i) => i.field === "name" && i.level === "error");
 
-  const save = useCallback(
-    async () => {
-      const res = await fetch("/api/skill", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ root: data.root, frontmatter, body }),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error || "Save failed");
-      }
-    },
-    [data.root, frontmatter, body],
-  );
-  const { status } = useAutosave(serialized, save);
+  const save = useCallback(async () => {
+    const res = await fetch("/api/skill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root: data.root, frontmatter, body }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || "Save failed");
+    }
+  }, [data.root, frontmatter, body]);
+  useManualSave(serialized, save);
 
   const dupKeys = useMemo(() => {
     const trimmed = meta.map((r) => r.key.trim());
     return new Set(trimmed.filter((k, i) => k && trimmed.indexOf(k) !== i));
   }, [meta]);
+  const emptyWithValue = meta.some((r) => !r.key.trim() && r.value.trim());
 
   return (
-    <div className="mx-auto max-w-[46rem] px-6 py-10 sm:px-10">
+    <div className="mx-auto max-w-184 px-6 py-10 sm:px-10">
       <div className="mb-7 flex items-center gap-4 text-xs">
-        <StatusPill status={status} />
         <ValidationPill issues={issues} />
         <span className="ml-auto font-mono text-faint">SKILL.md</span>
       </div>
@@ -201,14 +191,15 @@ export default function SkillDocument({ data }: { data: SkillData }) {
         className="mt-3 w-full resize-none overflow-hidden bg-transparent text-[1.05rem] leading-relaxed text-muted outline-none placeholder:text-faint"
       />
 
-      {/* Properties */}
       <div className="mt-5">
         <button
           type="button"
           onClick={() => setShowProps((s) => !s)}
+          aria-expanded={showProps}
           className="text-xs font-medium text-muted hover:text-fg"
         >
           {showProps ? "▾" : "▸"} Properties
+          {!showProps && propCount > 0 && <span className="ml-1 text-faint">· {propCount}</span>}
         </button>
         {showProps && (
           <div className="mt-2 space-y-2">
@@ -254,6 +245,12 @@ export default function SkillDocument({ data }: { data: SkillData }) {
                 >
                   + Add metadata
                 </button>
+                {(dupKeys.size > 0 || emptyWithValue) && (
+                  <p className="text-xs text-warn">
+                    {dupKeys.size > 0 && "Duplicate keys are merged (last value wins). "}
+                    {emptyWithValue && "Rows with an empty key are dropped on save."}
+                  </p>
+                )}
               </div>
             </PropRow>
           </div>
@@ -263,15 +260,6 @@ export default function SkillDocument({ data }: { data: SkillData }) {
       <hr className="my-7 border-border" />
 
       <LiveEditor kind="markdown" value={body} onChange={setBody} placeholder="Write the skill instructions in Markdown…" />
-    </div>
-  );
-}
-
-function PropRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-3">
-      <span className="w-28 shrink-0 pt-0.5 text-xs text-muted">{label}</span>
-      {children}
     </div>
   );
 }
