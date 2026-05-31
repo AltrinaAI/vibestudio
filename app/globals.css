@@ -1,0 +1,254 @@
+@import "tailwindcss";
+@import "highlight.js/styles/github-dark.css";
+
+/* Class-based dark mode (toggled on <html>). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #e2e5ea;
+  --border-strong: #cfd4dc;
+  --text: #1b2024;
+  --muted: #687076;
+  --accent: #5b5bd6;
+  --accent-soft: #ecebfb;
+  --error: #d92d20;
+  --warning: #b54708;
+  --info: #1d68d6;
+  --ok: #067647;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
+}
+
+.dark {
+  --bg: #0b0e14;
+  --surface: #12161f;
+  --surface-2: #1a2030;
+  --border: #262d3b;
+  --border-strong: #353d4e;
+  --text: #e6e8ec;
+  --muted: #8b94a3;
+  --accent: #8b8bf5;
+  --accent-soft: #21223f;
+  --error: #f97066;
+  --warning: #fdb022;
+  --info: #67a3ff;
+  --ok: #47c592;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+@theme inline {
+  --color-app: var(--bg);
+  --color-surface: var(--surface);
+  --color-panel: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--error);
+  --color-warn: var(--warning);
+  --color-info: var(--info);
+  --color-ok: var(--ok);
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* Thin, theme-aware scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Rendered Markdown body                                                  */
+/* ---------------------------------------------------------------------- */
+.prose-skill {
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  word-wrap: break-word;
+}
+.prose-skill > :first-child {
+  margin-top: 0;
+}
+.prose-skill > :last-child {
+  margin-bottom: 0;
+}
+.prose-skill h1,
+.prose-skill h2,
+.prose-skill h3,
+.prose-skill h4 {
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 1.6em 0 0.6em;
+  scroll-margin-top: 5rem;
+}
+.prose-skill h1 {
+  font-size: 1.6rem;
+  letter-spacing: -0.01em;
+}
+.prose-skill h2 {
+  font-size: 1.3rem;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.prose-skill h3 {
+  font-size: 1.1rem;
+}
+.prose-skill h4 {
+  font-size: 1rem;
+}
+.prose-skill p {
+  margin: 0.8em 0;
+}
+.prose-skill a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.prose-skill a:hover {
+  text-decoration: underline;
+}
+.prose-skill ul,
+.prose-skill ol {
+  margin: 0.7em 0;
+  padding-left: 1.5em;
+}
+.prose-skill ul {
+  list-style: disc;
+}
+.prose-skill ol {
+  list-style: decimal;
+}
+.prose-skill li {
+  margin: 0.3em 0;
+}
+.prose-skill li::marker {
+  color: var(--muted);
+}
+.prose-skill blockquote {
+  margin: 1em 0;
+  padding: 0.4em 1em;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
+  border-radius: 0 6px 6px 0;
+  color: var(--muted);
+}
+.prose-skill blockquote p {
+  margin: 0.3em 0;
+}
+.prose-skill hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.6em 0;
+}
+.prose-skill img {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+/* Inline code */
+.prose-skill code:not(pre code) {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0.12em 0.4em;
+  border-radius: 5px;
+  white-space: break-spaces;
+}
+/* Fenced code blocks (highlight.js github-dark provides the colors). */
+.prose-skill pre {
+  margin: 1em 0;
+  border-radius: 10px;
+  border: 1px solid #30363d;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.prose-skill pre code.hljs {
+  display: block;
+  padding: 1em 1.1em;
+  background: transparent;
+  font-family: var(--font-mono);
+}
+/* Tables */
+.prose-skill table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.88rem;
+  display: block;
+  overflow-x: auto;
+}
+.prose-skill th,
+.prose-skill td {
+  border: 1px solid var(--border);
+  padding: 0.5em 0.8em;
+  text-align: left;
+}
+.prose-skill th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+.prose-skill tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+}
+
+/* github-dark sets its own background; give fenced blocks a consistent panel. */
+.prose-skill pre,
+.codeblock {
+  background: #0d1117;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Standalone file viewer (CodeView) with line-number gutter              */
+/* ---------------------------------------------------------------------- */
+.codeview {
+  background: #0d1117;
+  border-color: #30363d;
+}
+.codeview code.hljs {
+  background: transparent;
+  padding: 0;
+}
+.codeview pre {
+  margin: 0;
+  background: transparent;
+}
+.codeview-gutter {
+  color: #6b7585;
+  border-right: 1px solid #21262d;
+  background: #0b0f15;
+}
+
