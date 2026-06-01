@@ -7,6 +7,9 @@ on:
 
 jobs:
   build:
+    # tauri-action creates the GitHub Release and uploads assets — needs write.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -17,7 +20,7 @@ jobs:
           - platform: windows-latest
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'ubuntu')
@@ -30,7 +33,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev patchelf
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
