@@ -3,7 +3,6 @@
 import { ThemeToggle } from "./ui";
 import NavBar from "./NavBar";
 import { requestSave, useEditorStatus } from "./editorState";
-import { exportZip } from "@/lib/api";
 
 function SaveButton() {
   const { present, dirty, saving, error } = useEditorStatus();
@@ -43,15 +42,15 @@ export default function TopBar({
   onHome,
   skillName,
   selected,
-  root,
   onManage,
+  onExport,
   toggleTheme,
 }: {
   onHome: () => void;
   skillName: string;
   selected: string | null;
-  root: string;
   onManage: () => void;
+  onExport: () => void;
   toggleTheme: () => void;
 }) {
   return (
@@ -91,7 +90,7 @@ export default function TopBar({
       </button>
       <button
         type="button"
-        onClick={() => exportZip(root)}
+        onClick={onExport}
         title="Export skill as .zip"
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-panel hover:text-fg"
       >

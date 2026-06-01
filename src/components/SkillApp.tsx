@@ -7,22 +7,17 @@ import Home from "./Home";
 import SkillDocument from "./SkillDocument";
 import FilePane from "./FilePane";
 import ManagePanel from "./ManagePanel";
+import ExportDialog from "./ExportDialog";
 import { Spinner } from "./ui";
 import { addRecent } from "./recents";
 import { confirmDiscardIfDirty } from "./editorState";
 import { agentForPath, skillKind } from "@/lib/agents";
+import { requiredEnv, withRequiredEnv } from "@/lib/skill";
 import * as api from "@/lib/api";
 import type { SkillData, FileData } from "@/lib/types";
 
 function skillName(d: SkillData): string {
   return typeof d.frontmatter.name === "string" && d.frontmatter.name ? d.frontmatter.name : d.dirName;
-}
-
-// Env vars the skill declares it needs, via an optional `secrets:` list in
-// SKILL.md frontmatter — surfaced in the Manage drawer's Secrets section.
-function declaredSecrets(d: SkillData): string[] {
-  const raw = (d.frontmatter as Record<string, unknown>).secrets;
-  return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
 }
 
 export default function SkillApp({
@@ -43,6 +38,10 @@ export default function SkillApp({
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  // Bumped when we replace `data` for the *same* root (e.g. after a re-scan
+  // rewrites SKILL.md) so the mount-initialized editor remounts with it.
+  const [docVersion, setDocVersion] = useState(0);
   const reqRef = useRef(0);
 
   const toggleTheme = useCallback(() => {
@@ -52,7 +51,42 @@ export default function SkillApp({
     } catch {}
   }, []);
 
-  // Record a deep-linked / SSR-loaded skill in recents once.
+  // Auto-declare the env vars a skill references: scan its files for managed
+  // secret names and fold any new ones into `metadata.required-env`. Additive
+  // (never drops a manual entry) and only for our own skills — we own that
+  // field, but don't rewrite official/plugin skills. Returns the (possibly
+  // reloaded) data plus the referenced names; cancelled=true if a dirty-edit
+  // discard prompt was declined.
+  const reconcileRequiredEnv = useCallback(
+    async (
+      sd: SkillData,
+      guardDirty = false,
+    ): Promise<{ data: SkillData; found: string[]; cancelled?: boolean }> => {
+      if (skillKind(sd.root).kind !== "personal") return { data: sd, found: [] };
+      let found: string[] = [];
+      try {
+        found = await api.detectRequiredEnv(sd.root);
+      } catch {
+        return { data: sd, found: [] };
+      }
+      const current = requiredEnv(sd.frontmatter);
+      const merged = Array.from(new Set([...current, ...found])).sort();
+      if (merged.length === current.length) return { data: sd, found }; // nothing new
+      if (guardDirty && !confirmDiscardIfDirty()) return { data: sd, found, cancelled: true };
+      try {
+        await api.saveSkillMd(sd.root, withRequiredEnv(sd.frontmatter, merged), sd.body);
+        return { data: await api.loadSkill(sd.root), found };
+      } catch {
+        return { data: sd, found };
+      }
+    },
+    [],
+  );
+
+  // Record a deep-linked / SSR-loaded skill in recents once. (Auto-declare runs
+  // in the load path below; SSR-provided `initialData` isn't used in this app,
+  // so we don't reconcile here — doing so safely would need a same-root editor
+  // remount + a navigation guard, and there's no live path that exercises it.)
   useEffect(() => {
     if (initialData) addRecent({ root: initialData.root, name: skillName(initialData) });
   }, [initialData]);
@@ -62,7 +96,8 @@ export default function SkillApp({
     setLoading(true);
     setLoadError(null);
     try {
-      const sd = await api.loadSkill(p);
+      const loaded = await api.loadSkill(p);
+      const sd = (await reconcileRequiredEnv(loaded)).data;
       setData(sd);
       setSelected("SKILL.md");
       setFileData(null);
@@ -73,7 +108,7 @@ export default function SkillApp({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [reconcileRequiredEnv]);
 
   // Open a deep-linked skill (?path=) once on mount.
   useEffect(() => {
@@ -99,6 +134,28 @@ export default function SkillApp({
     setFileError(null);
     setLoadError(null);
   }, []);
+
+  // Manual re-scan (e.g. after adding a secret to the store mid-session). May
+  // rewrite + reload SKILL.md; bump docVersion so the already-mounted editor
+  // remounts with the new declaration. null = cancelled the discard prompt.
+  const detectEnv = useCallback(async (): Promise<string[] | null> => {
+    if (!data) return [];
+    const { data: fresh, found, cancelled } = await reconcileRequiredEnv(data, true);
+    if (cancelled) return null;
+    if (fresh !== data) {
+      setData(fresh);
+      setDocVersion((v) => v + 1);
+    }
+    return found;
+  }, [data, reconcileRequiredEnv]);
+
+  // Skills with no declared env can export in one click; otherwise the dialog
+  // surfaces the bundle-secrets option and the not-bundled warning.
+  const onExport = useCallback(() => {
+    if (!data) return;
+    if (requiredEnv(data.frontmatter).length === 0) void api.exportZip(data.root);
+    else setExportOpen(true);
+  }, [data]);
 
   const selectFile = useCallback(
     async (rel: string) => {
@@ -139,15 +196,15 @@ export default function SkillApp({
         onHome={goHome}
         skillName={skillName(data)}
         selected={selected}
-        root={data.root}
         onManage={() => setManageOpen(true)}
+        onExport={onExport}
         toggleTheme={toggleTheme}
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar data={data} selected={selected} onSelect={selectFile} />
         <main className="min-w-0 flex-1 overflow-auto">
           {selected === "SKILL.md" ? (
-            <SkillDocument key={data.root} data={data} />
+            <SkillDocument key={`${data.root}:${docVersion}`} data={data} />
           ) : fileLoading ? (
             <div role="status" aria-live="polite" className="flex h-full items-center justify-center text-muted">
               <Spinner /> <span className="ml-2">Loading file…</span>
@@ -165,9 +222,18 @@ export default function SkillApp({
           dirName={data.dirName}
           kind={skillKind(data.root).kind}
           agent={agentForPath(data.root)}
-          declaredSecrets={declaredSecrets(data)}
+          declaredSecrets={requiredEnv(data.frontmatter)}
+          onDetectEnv={detectEnv}
           onClose={() => setManageOpen(false)}
           onDeleted={afterDelete}
+        />
+      )}
+      {exportOpen && (
+        <ExportDialog
+          root={data.root}
+          dirName={data.dirName}
+          declared={requiredEnv(data.frontmatter)}
+          onClose={() => setExportOpen(false)}
         />
       )}
     </div>

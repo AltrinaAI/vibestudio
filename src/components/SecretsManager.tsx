@@ -14,14 +14,22 @@ const btnGhost =
 const mask = (v: string) => "•".repeat(Math.min(12, Math.max(4, v.length)));
 
 /** Global secret store UI. `declared` highlights the keys the current skill
- *  asks for (from its SKILL.md `secrets:` frontmatter) so missing ones stand out. */
-export default function SecretsManager({ declared = [] }: { declared?: string[] }) {
+ *  asks for (from its SKILL.md `metadata.required-env`) so missing ones stand
+ *  out. `onDetect` scans the skill's files to populate that declaration. */
+export default function SecretsManager({
+  declared = [],
+  onDetect,
+}: {
+  declared?: string[];
+  onDetect?: () => Promise<string[] | null>;
+}) {
   const [status, setStatus] = useState<SecretsStatus | null>(null);
   const [secrets, setSecrets] = useState<SecretEntry[] | null>(null);
   const [reveal, setReveal] = useState<Set<string>>(new Set());
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [busy, setBusy] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -88,6 +96,23 @@ export default function SecretsManager({ declared = [] }: { declared?: string[] 
     }
   };
 
+  const runDetect = async () => {
+    if (!onDetect) return;
+    setDetecting(true);
+    setErr(null);
+    setNote(null);
+    try {
+      const found = await onDetect();
+      if (found === null) setNote("Save or discard your edits first, then re-scan.");
+      else if (found.length === 0) setNote("No stored secrets are referenced in this skill's files.");
+      else setNote(`References ${found.join(", ")}.`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Detection failed");
+    } finally {
+      setDetecting(false);
+    }
+  };
+
   if (secrets === null || status === null) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted">
@@ -107,6 +132,20 @@ export default function SecretsManager({ declared = [] }: { declared?: string[] 
         <span className="font-mono text-[0.9em] text-fg">skill-studio</span> activation skill — never pasted into prompts
         or agent configs.
       </p>
+
+      {onDetect && (
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-panel px-3 py-2">
+          <p className="text-[0.7rem] text-muted">
+            {declared.length
+              ? `Auto-declared ${declared.length} required var${declared.length === 1 ? "" : "s"} from this skill's files.`
+              : "No referenced secrets detected in this skill's files."}{" "}
+            Re-scan after adding new secrets to the store.
+          </p>
+          <button type="button" onClick={() => void runDetect()} disabled={detecting || busy} className={btnGhost}>
+            {detecting ? "Scanning…" : "Re-scan"}
+          </button>
+        </div>
+      )}
 
       {missing.length > 0 && (
         <div className="rounded-lg border border-border bg-panel px-3 py-2 text-xs text-warn">

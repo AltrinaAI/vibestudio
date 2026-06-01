@@ -36,8 +36,8 @@ async fn pick_skill_folder(app: tauri::AppHandle) -> Result<Option<String>, Stri
 }
 
 #[tauri::command]
-async fn export_skill_zip(app: tauri::AppHandle, root: String) -> Result<bool, String> {
-    let (filename, buf) = skill::zip_skill_bytes(&root)?;
+async fn export_skill_zip(app: tauri::AppHandle, root: String, env_vars: Vec<String>) -> Result<bool, String> {
+    let (filename, buf) = skill::zip_skill_bytes(&root, &env_vars)?;
     let chosen = app
         .dialog()
         .file()
@@ -49,6 +49,12 @@ async fn export_skill_zip(app: tauri::AppHandle, root: String) -> Result<bool, S
     };
     std::fs::write(std::path::PathBuf::from(dest.to_string()), buf).map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+#[tauri::command]
+async fn detect_required_env(root: String) -> Result<Vec<String>, String> {
+    let candidates = secrets::secret_keys()?;
+    Ok(skill::scan_for_env_vars(std::path::Path::new(&root), &candidates))
 }
 
 #[tauri::command]
@@ -128,6 +134,7 @@ pub fn run() {
             discover_skills,
             pick_skill_folder,
             export_skill_zip,
+            detect_required_env,
             sync_targets,
             sync_skill,
             delete_skill,

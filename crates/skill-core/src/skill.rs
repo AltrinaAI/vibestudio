@@ -1,5 +1,6 @@
 // Filesystem layer, ported from the original lib/server.ts. Transport-agnostic
 // (no Tauri) — reused by the desktop commands and the headless server.
+use std::collections::BTreeSet;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
@@ -339,8 +340,11 @@ pub fn list_dir_impl(path: &str) -> Result<DirListing, String> {
     })
 }
 
-/// Resolve + validate a skill root and return (filename, zip bytes).
-pub fn zip_skill_bytes(root_input: &str) -> Result<(String, Vec<u8>), String> {
+/// Resolve + validate a skill root and return (filename, zip bytes). When
+/// `env_vars` is non-empty, the values of those (managed) secrets are rendered
+/// into a `.env` inside the bundle so the recipient can run it immediately —
+/// the opt-in "bundle secrets" path. Names absent from the store are skipped.
+pub fn zip_skill_bytes(root_input: &str, env_vars: &[String]) -> Result<(String, Vec<u8>), String> {
     let root = resolve_root(root_input);
     let meta = std::fs::metadata(&root).map_err(|_| format!("Skill not found: {}", root.display()))?;
     if !meta.is_dir() {
@@ -353,15 +357,23 @@ pub fn zip_skill_bytes(root_input: &str) -> Result<(String, Vec<u8>), String> {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "skill".into());
-    let buf = build_zip(&root, &dir_name)?;
+    let buf = build_zip(&root, &dir_name, env_vars)?;
     Ok((format!("{dir_name}.zip"), buf))
 }
 
-fn build_zip(root: &Path, dir_name: &str) -> Result<Vec<u8>, String> {
+fn build_zip(root: &Path, dir_name: &str, env_vars: &[String]) -> Result<Vec<u8>, String> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let mut total: u64 = 0;
     walk_zip(root, "", dir_name, &mut zip, &options, &mut total)?;
+    if !env_vars.is_empty() {
+        let body = crate::secrets::render_dotenv(env_vars)?;
+        if !body.is_empty() {
+            zip.start_file(format!("{dir_name}/.env"), options)
+                .map_err(|e| e.to_string())?;
+            zip.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+        }
+    }
     let cursor = zip.finish().map_err(|e| e.to_string())?;
     Ok(cursor.into_inner())
 }
@@ -391,6 +403,12 @@ fn walk_zip(
             }
             walk_zip(&abs, &format!("{prefix}{name}/"), dir_name, zip, options, total)?;
         } else if ft.is_file() {
+            // Never ship a `.env` from disk — it's secret-bearing, and the opt-in
+            // bundle writes an authoritative one (so this also avoids a duplicate
+            // `{dir_name}/.env` zip entry when both exist).
+            if name == ".env" {
+                continue;
+            }
             let data = match std::fs::read(&abs) {
                 Ok(d) => d,
                 Err(_) => continue,
@@ -405,4 +423,118 @@ fn walk_zip(
         }
     }
     Ok(())
+}
+
+/// Scan a skill's text files for which of `candidates` (env-var names) appear as
+/// whole tokens, so the `metadata.required-env` declaration can be auto-detected
+/// from the secrets the scripts actually reference. Skips symlinks, IGNORED_DIRS,
+/// oversized files, and binaries. Returns the matched names, sorted.
+pub fn scan_for_env_vars(root: &Path, candidates: &[String]) -> Vec<String> {
+    let mut found: BTreeSet<String> = BTreeSet::new();
+    scan_dir(root, candidates, &mut found);
+    found.into_iter().collect()
+}
+
+fn scan_dir(dir: &Path, candidates: &[String], found: &mut BTreeSet<String>) {
+    if candidates.iter().all(|c| found.contains(c)) {
+        return; // nothing left to look for
+    }
+    let rd = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    for entry in rd.filter_map(|e| e.ok()) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let ft = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if ft.is_symlink() {
+            continue;
+        }
+        let abs = entry.path();
+        if ft.is_dir() {
+            if IGNORED_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            scan_dir(&abs, candidates, found);
+        } else if ft.is_file() {
+            let meta = match std::fs::metadata(&abs) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.len() > MAX_TEXT_BYTES {
+                continue;
+            }
+            let bytes = match std::fs::read(&abs) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            if bytes.contains(&0u8) {
+                continue; // binary
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            for c in candidates {
+                if !found.contains(c) && contains_token(&text, c) {
+                    found.insert(c.clone());
+                }
+            }
+        }
+    }
+}
+
+/// True if `needle` occurs in `hay` not flanked by another identifier char, so
+/// `OPENAI_API_KEY` matches `$OPENAI_API_KEY` but not `MY_OPENAI_API_KEY_2`.
+fn contains_token(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = hay.as_bytes();
+    for (pos, _) in hay.match_indices(needle) {
+        let before_ok = pos == 0 || !is_ident_byte(bytes[pos - 1]);
+        let after = pos + needle.len();
+        let after_ok = after >= bytes.len() || !is_ident_byte(bytes[after]);
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b == b'_' || b.is_ascii_alphanumeric()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_boundary_rejects_substrings() {
+        assert!(contains_token("export OPENAI_API_KEY=x", "OPENAI_API_KEY"));
+        assert!(contains_token("\"OPENAI_API_KEY\"", "OPENAI_API_KEY"));
+        assert!(contains_token("os.environ['GITHUB_TOKEN']", "GITHUB_TOKEN"));
+        assert!(!contains_token("MY_OPENAI_API_KEY_2", "OPENAI_API_KEY"));
+        assert!(!contains_token("OPENAI_API_KEYS", "OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn scan_detects_referenced_keys_only() {
+        let base = std::env::temp_dir().join(format!("ass_scan_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("scripts")).unwrap();
+        std::fs::write(base.join("SKILL.md"), "Reads OPENAI_API_KEY at runtime.").unwrap();
+        std::fs::write(base.join("scripts/run.sh"), "#!/bin/sh\necho \"$GITHUB_TOKEN\"\n").unwrap();
+        // A near-miss substring must NOT trigger UNUSED_KEY's cousin.
+        std::fs::write(base.join("notes.txt"), "see MY_OPENAI_API_KEY_2 elsewhere").unwrap();
+
+        let candidates = vec![
+            "OPENAI_API_KEY".to_string(),
+            "GITHUB_TOKEN".to_string(),
+            "UNUSED_KEY".to_string(),
+        ];
+        let found = scan_for_env_vars(&base, &candidates);
+        assert_eq!(found, vec!["GITHUB_TOKEN".to_string(), "OPENAI_API_KEY".to_string()]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

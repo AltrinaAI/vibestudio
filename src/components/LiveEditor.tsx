@@ -139,6 +139,25 @@ function alignOf(cell: string): string {
   return l && r ? "center" : r ? "right" : l ? "left" : "";
 }
 
+// Absolute document positions where each cell's content begins, for a table-row
+// line that starts at `lineStart`. Mirrors splitRow's cell boundaries so a click
+// on a rendered cell can drop the caret at that cell's source.
+function cellPositions(line: string, lineStart: number): number[] {
+  const positions: number[] = [];
+  const n = line.length;
+  let k = 0;
+  if (line[k] === "|") k++;
+  while (k <= n) {
+    let cs = k;
+    while (cs < n && line[cs] === " ") cs++;
+    positions.push(lineStart + cs);
+    while (k < n && !(line[k] === "|" && line[k - 1] !== "\\")) k++;
+    if (k >= n) break;
+    k++;
+  }
+  return positions;
+}
+
 class TableWidget extends WidgetType {
   constructor(
     readonly from: number,
@@ -153,38 +172,55 @@ class TableWidget extends WidgetType {
     return true;
   }
   toDOM(view: EditorView): HTMLElement {
-    const lines = this.source.split("\n").filter((l) => l.trim());
-    const rows = lines.map(splitRow);
+    // Keep non-blank source rows with their absolute offsets so a click on a
+    // rendered cell can drop the caret at that cell's source position.
+    let off = this.from;
+    const lineInfos: { text: string; start: number }[] = [];
+    for (const text of this.source.split("\n")) {
+      if (text.trim()) lineInfos.push({ text, start: off });
+      off += text.length + 1;
+    }
+    const rows = lineInfos.map((li) => splitRow(li.text));
     let header: string[] | null = null;
+    let headerInfo: { text: string; start: number } | null = null;
     let aligns: string[] = [];
     let body = rows;
+    let bodyInfos = lineInfos;
     if (rows.length >= 2 && isDelimiterRow(rows[1])) {
       header = rows[0];
+      headerInfo = lineInfos[0];
       aligns = rows[1].map(alignOf);
       body = rows.slice(2);
+      bodyInfos = lineInfos.slice(2);
     }
 
     const table = document.createElement("table");
     table.className = "cm-md-rendered-table";
-    if (header) {
+    if (header && headerInfo) {
+      const hInfo = headerInfo;
+      const pos = cellPositions(hInfo.text, hInfo.start);
       const thead = document.createElement("thead");
       const tr = document.createElement("tr");
       header.forEach((cell, i) => {
         const th = document.createElement("th");
         if (aligns[i]) th.style.textAlign = aligns[i];
         th.innerHTML = inlineMd(cell);
+        th.dataset.pos = String(pos[i] ?? hInfo.start);
         tr.appendChild(th);
       });
       thead.appendChild(tr);
       table.appendChild(thead);
     }
     const tbody = document.createElement("tbody");
-    body.forEach((r) => {
+    body.forEach((r, ri) => {
+      const info = bodyInfos[ri];
+      const pos = info ? cellPositions(info.text, info.start) : [];
       const tr = document.createElement("tr");
       r.forEach((cell, i) => {
         const td = document.createElement("td");
         if (aligns[i]) td.style.textAlign = aligns[i];
         td.innerHTML = inlineMd(cell);
+        td.dataset.pos = String(pos[i] ?? info?.start ?? this.from);
         tr.appendChild(td);
       });
       tbody.appendChild(tr);
@@ -194,10 +230,19 @@ class TableWidget extends WidgetType {
     const wrap = document.createElement("div");
     wrap.className = "cm-md-table-wrap";
     wrap.appendChild(table);
-    const from = this.from;
-    wrap.addEventListener("mousedown", (e) => {
+    const tableFrom = this.from;
+    const tableTo = this.from + this.source.length;
+    // Double-click opens the source for editing, caret in the clicked cell.
+    wrap.addEventListener("dblclick", (e) => {
       e.preventDefault();
-      view.dispatch({ selection: { anchor: from }, scrollIntoView: true });
+      e.stopPropagation();
+      const cell = (e.target as HTMLElement).closest("td,th") as HTMLElement | null;
+      const anchor = cell?.dataset.pos ? parseInt(cell.dataset.pos, 10) : tableFrom;
+      view.dispatch({
+        selection: { anchor },
+        effects: setEdit.of({ from: tableFrom, to: tableTo }),
+        scrollIntoView: true,
+      });
       view.focus();
     });
     return wrap;
@@ -218,28 +263,80 @@ const focusWatcher = EditorView.domEventHandlers({
     view.dispatch({ effects: setFocused.of(true) });
   },
   blur: (_e, view) => {
-    view.dispatch({ effects: setFocused.of(false) });
+    view.dispatch({ effects: [setFocused.of(false), setEdit.of(null)] });
+  },
+});
+
+// Reveal markup for editing only on an explicit double-click — a single click
+// just places the caret, so reading/navigating never reflows. `editField` holds
+// the block opened for editing; it collapses when the caret leaves it or on blur.
+type EditRange = { from: number; to: number } | null;
+const setEdit = StateEffect.define<EditRange>();
+const editField = StateField.define<EditRange>({
+  create: () => null,
+  update(val, tr) {
+    for (const e of tr.effects) if (e.is(setEdit)) return e.value;
+    if (!val) return null;
+    let { from, to } = val;
+    if (tr.docChanged) {
+      from = tr.changes.mapPos(from, -1);
+      to = tr.changes.mapPos(to, 1);
+    }
+    if (tr.selection) {
+      const head = tr.state.selection.main.head;
+      if (head < from || head > to) return null; // caret left the block → collapse
+    }
+    return { from, to };
+  },
+});
+
+// The top-level block (paragraph, heading, table, fenced code, …) containing pos.
+function blockRangeAt(state: EditorState, pos: number): { from: number; to: number } {
+  const tree = syntaxTree(state);
+  let node = tree.resolveInner(pos, 1);
+  while (node.parent && node.parent.name !== "Document") node = node.parent;
+  if (!node.parent) {
+    // On a blank line between blocks — just the clicked line.
+    const line = state.doc.lineAt(pos);
+    return { from: line.from, to: line.to };
+  }
+  const startLine = state.doc.lineAt(node.from);
+  const endPos = Math.min(node.to, state.doc.length);
+  const endLine = state.doc.lineAt(endPos > startLine.from ? endPos - 1 : startLine.from);
+  return { from: startLine.from, to: endLine.to };
+}
+
+// Double-click → open the block under the pointer with the caret where clicked.
+// (Tables handle their own dblclick in the widget for cell-precise placement.)
+const editGate = EditorView.domEventHandlers({
+  dblclick: (event, view) => {
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (pos == null) return false;
+    view.dispatch({
+      selection: { anchor: pos },
+      effects: setEdit.of(blockRangeAt(view.state, pos)),
+    });
+    return true;
   },
 });
 
 function buildMarkdownDecorations(state: EditorState): DecorationSet {
   const doc = state.doc;
   const tree = syntaxTree(state);
-  const sel = state.selection.ranges;
   const focused = state.field(focusField, false);
+  const edit = state.field(editField, false);
   const decos: Range<Decoration>[] = [];
 
-  // Lines touched by a selection (only while focused) reveal their raw markup so
-  // they can be edited — "click the line to see the markdown" behaviour.
-  const activeLines = new Set<number>();
-  if (focused) {
-    for (const r of sel) {
-      const first = doc.lineAt(r.from).number;
-      const last = doc.lineAt(r.to).number;
-      for (let n = first; n <= last; n++) activeLines.add(n);
-    }
-  }
-  const lineActive = (pos: number) => activeLines.has(doc.lineAt(pos).number);
+  // Markup is revealed only inside the block opened by a double-click (editField),
+  // and only while focused — a single click just places the caret, so reading
+  // never reflows. `editIntersects` covers multi-line blocks (tables, fences).
+  const active = focused && edit ? edit : null;
+  const editIntersects = (from: number, to: number) =>
+    active != null && active.from <= to && active.to >= from;
+  const lineActive = (pos: number) => {
+    const line = doc.lineAt(pos);
+    return editIntersects(line.from, line.to);
+  };
 
   // Hide a marker, plus any whitespace up to the line's content (for # and >).
   const concealSpaced = (from: number, to: number) => {
@@ -270,7 +367,7 @@ function buildMarkdownDecorations(state: EditorState): DecorationSet {
           const isClose = i === starts.length - 1 && starts.length > 1;
           decos.push((isOpen ? fenceOpenDeco : isClose ? fenceCloseDeco : codeLineDeco).range(lf));
         });
-        const editing = focused && sel.some((r) => r.from <= block.to && r.to >= block.from);
+        const editing = editIntersects(block.from, block.to);
         if (!editing) {
           for (const m of block.getChildren("CodeMark")) decos.push(hideDeco.range(m.from, m.to));
         }
@@ -295,7 +392,7 @@ function buildMarkdownDecorations(state: EditorState): DecorationSet {
         const startLine = doc.lineAt(block.from);
         const lastPos = Math.min(block.to, doc.length);
         const endLine = doc.lineAt(lastPos > startLine.from ? lastPos - 1 : startLine.from);
-        const editing = focused && sel.some((r) => r.from <= endLine.to && r.to >= startLine.from);
+        const editing = editIntersects(startLine.from, endLine.to);
         if (editing) {
           let pos = startLine.from;
           while (true) {
@@ -350,7 +447,7 @@ const markdownBlocks = StateField.define<DecorationSet>({
     if (
       tr.docChanged ||
       tr.selection ||
-      tr.effects.some((e) => e.is(setFocused)) ||
+      tr.effects.some((e) => e.is(setFocused) || e.is(setEdit)) ||
       syntaxTree(tr.startState) !== syntaxTree(tr.state)
     ) {
       return buildMarkdownDecorations(tr.state);
@@ -367,6 +464,8 @@ const markdownExtensions: Extension[] = [
   syntaxHighlighting(codeHighlight),
   focusField,
   focusWatcher,
+  editField,
+  editGate,
   markdownBlocks,
   baseTheme,
 ];

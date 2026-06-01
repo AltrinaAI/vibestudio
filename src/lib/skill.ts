@@ -158,6 +158,28 @@ export function parseAllowedTools(value: unknown): string[] {
   return value.trim().split(/\s+/).filter(Boolean);
 }
 
+/**
+ * `metadata` key skills use to declare the env vars their scripts read. Stored
+ * as a space-separated string (the spec coerces metadata values to strings), so
+ * it stays valid under `skills-ref validate` and travels inside SKILL.md.
+ */
+export const REQUIRED_ENV_KEY = "required-env";
+
+/** Env var names the skill declares it needs (from `metadata.required-env`). */
+export function requiredEnv(fm: SkillFrontmatter): string[] {
+  const raw = fm.metadata?.[REQUIRED_ENV_KEY];
+  if (typeof raw !== "string") return [];
+  return raw.trim().split(/\s+/).filter(Boolean);
+}
+
+/** A frontmatter with `metadata.required-env` set to `names` (cleared if empty). */
+export function withRequiredEnv(fm: SkillFrontmatter, names: string[]): SkillFrontmatter {
+  const metadata: Record<string, string> = { ...(normalizeMetadata(fm.metadata) ?? {}) };
+  if (names.length) metadata[REQUIRED_ENV_KEY] = names.join(" ");
+  else delete metadata[REQUIRED_ENV_KEY];
+  return { ...fm, metadata };
+}
+
 /** Rough token estimate (~4 chars/token) used only for the size advisory. */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);

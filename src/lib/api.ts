@@ -106,19 +106,31 @@ export async function imageDataUrl(root: string, rel: string): Promise<string> {
   return `data:${mime};base64,${base64}`;
 }
 
-/** Export the skill as a .zip — native save dialog (desktop) or browser download. */
-export async function exportZip(root: string): Promise<void> {
+/**
+ * Export the skill as a .zip — native save dialog (desktop) or browser download.
+ * `vars` (declared env names present in the store) bundles their values as a
+ * `.env` so the recipient can run it immediately; empty means declaration-only.
+ */
+export async function exportZip(root: string, vars: string[] = []): Promise<void> {
   if (isTauri) {
-    await invoke<boolean>("export_skill_zip", { root });
+    await invoke<boolean>("export_skill_zip", { root, envVars: vars });
     return;
   }
+  const q = new URLSearchParams({ root });
+  if (vars.length) q.set("vars", vars.join(","));
   const a = document.createElement("a");
-  a.href = `${API_BASE}/api/download?root=${encodeURIComponent(root)}`;
+  a.href = `${API_BASE}/api/download?${q.toString()}`;
   a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
   a.remove();
 }
+
+/** Scan the skill's files for which managed secrets it references (auto-detect). */
+export const detectRequiredEnv = (root: string) =>
+  isTauri
+    ? invoke<string[]>("detect_required_env", { root })
+    : http<string[]>("POST", "detect-required-env", { root });
 
 /** Native folder dialog — desktop only (browser uses the FolderPicker modal + listDir). */
 export const pickSkillFolder = () => invoke<string | null>("pick_skill_folder");

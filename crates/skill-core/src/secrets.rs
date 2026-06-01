@@ -185,6 +185,54 @@ pub fn secrets_list() -> Result<Vec<SecretEntry>, String> {
         .collect())
 }
 
+/// Names of all stored secrets — the candidate set for scanning a skill's files
+/// to auto-detect which env vars it references.
+pub fn secret_keys() -> Result<Vec<String>, String> {
+    Ok(load_store()?.into_keys().collect())
+}
+
+/// Quote a value for a portable `.env` file (consumed by dotenv loaders, not
+/// `source`). Single-quoted dotenv values are literal — no interpolation, no
+/// escapes — so use them for the common case (API tokens) to dodge `$`/escape
+/// surprises. Single quotes can't be escaped inside single-quoted dotenv values,
+/// so fall back to double quotes (which loaders unescape) when the value
+/// contains a `'`, newline, or carriage return.
+fn dotenv_quote(s: &str) -> String {
+    if !s.contains('\'') && !s.contains('\n') && !s.contains('\r') {
+        return format!("'{s}'");
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Render the requested env-var names that exist in the store as a dotenv file
+/// body (`NAME='value'`). Names not in the store are skipped; empty if none are
+/// present. Used to optionally bundle live secrets into an exported skill .zip.
+pub fn render_dotenv(names: &[String]) -> Result<String, String> {
+    let store = load_store()?;
+    let mut body = String::new();
+    for name in names {
+        if let Some(val) = store.get(name) {
+            if body.is_empty() {
+                body.push_str("# Secrets bundled by Agent Skill Studio. Keep this file private.\n");
+            }
+            body.push_str(&format!("{name}={}\n", dotenv_quote(val)));
+        }
+    }
+    Ok(body)
+}
+
 pub fn secret_set(key: &str, value: &str) -> Result<(), String> {
     let key = key.trim();
     if !valid_key(key) {
@@ -361,6 +409,18 @@ mod tests {
         let env = std::fs::read_to_string(env_path().unwrap()).unwrap();
         assert!(env.contains("export FOO='bar baz'"));
         assert!(env.contains(r"export OPENAI_API_KEY='sk-test'\''x'"));
+
+        // secret_keys + render_dotenv: only present names, dotenv-quoted (no `export`).
+        let keys = secret_keys().unwrap();
+        assert!(keys.contains(&"FOO".to_string()) && keys.contains(&"OPENAI_API_KEY".to_string()));
+        let dotenv = render_dotenv(&["FOO".to_string(), "MISSING".to_string()]).unwrap();
+        assert!(dotenv.contains("FOO='bar baz'")); // plain value → single-quoted literal
+        assert!(!dotenv.contains("export "));
+        assert!(!dotenv.contains("MISSING"));
+        assert!(render_dotenv(&["MISSING".to_string()]).unwrap().is_empty());
+        // A value containing a single quote falls back to double-quoting (dotenv loaders unescape it).
+        let dq = render_dotenv(&["OPENAI_API_KEY".to_string()]).unwrap();
+        assert!(dq.contains("OPENAI_API_KEY=\"sk-test'x\""), "single-quote value double-quoted: {dq}");
 
         secret_delete("FOO").unwrap();
         assert_eq!(secrets_list().unwrap().len(), 1);

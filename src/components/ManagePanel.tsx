@@ -381,6 +381,7 @@ export default function ManagePanel({
   dirName,
   kind,
   declaredSecrets = [],
+  onDetectEnv,
   onClose,
   onDeleted,
 }: {
@@ -389,6 +390,9 @@ export default function ManagePanel({
   kind: SkillKind;
   agent: string | null;
   declaredSecrets?: string[];
+  /** Scan the skill's files for referenced secrets; returns the names found
+   *  (or null if cancelled). Folds new ones into `metadata.required-env`. */
+  onDetectEnv?: () => Promise<string[] | null>;
   onClose: () => void;
   /** Called after the skill folder is deleted, so the host can navigate away. */
   onDeleted: () => void;
@@ -418,7 +422,7 @@ export default function ManagePanel({
             <VersionSection root={root} dirName={dirName} kind={kind} />
           </Section>
           <Section title="Secrets">
-            <SecretsManager declared={declaredSecrets} />
+            <SecretsManager declared={declaredSecrets} onDetect={kind === "personal" ? onDetectEnv : undefined} />
           </Section>
           <Section title="Sync to another agent">
             <SyncSection root={root} />

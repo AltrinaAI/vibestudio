@@ -149,6 +149,10 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
             json_reply(sync::sync_skill(&s("root"), &s("target"), overwrite, link))
         }
         (Method::Post, "/api/delete-skill") => json_reply(sync::delete_skill(&s("root"))),
+        (Method::Post, "/api/detect-required-env") => {
+            let root = s("root");
+            json_reply(secrets::secret_keys().map(|keys| skill::scan_for_env_vars(Path::new(&root), &keys)))
+        }
         (Method::Post, "/api/git-info") => json_reply(gitops::git_info(&s("root"))),
         (Method::Post, "/api/git-init") => json_reply(gitops::git_init(&s("root"))),
         (Method::Post, "/api/git-commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
@@ -169,7 +173,11 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
         }
         (Method::Get, "/api/download") => {
             let root = query_param(url, "root").unwrap_or_default();
-            match skill::zip_skill_bytes(&root) {
+            // Optional `vars=A,B` → bundle those managed secrets' values as a .env.
+            let env_vars: Vec<String> = query_param(url, "vars")
+                .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+                .unwrap_or_default();
+            match skill::zip_skill_bytes(&root, &env_vars) {
                 Ok((filename, bytes)) => Reply {
                     status: 200,
                     body: bytes,
