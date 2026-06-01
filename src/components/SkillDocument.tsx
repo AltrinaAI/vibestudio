@@ -217,7 +217,7 @@ export default function SkillDocument({ data }: { data: SkillData }) {
         placeholder="skill-name"
         spellCheck={false}
         aria-label="Skill name"
-        className="w-full bg-transparent text-3xl font-bold tracking-tight text-fg outline-none placeholder:text-faint"
+        className="w-full bg-transparent text-3xl font-bold leading-snug tracking-tight text-fg outline-none placeholder:text-faint"
       />
       {nameError && <p className="mt-1.5 text-xs text-danger">{nameError.message}</p>}
 
