@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ThemeToggle } from "./ui";
+import { useNavigate } from "react-router-dom";
+import { ThemeToggle } from "@/components/ui";
+import { toggleTheme } from "@/lib/theme";
 import NewTerminalDialog from "./NewTerminalDialog";
 import TerminalPane from "./TerminalPane";
 import * as api from "@/lib/api";
@@ -22,13 +24,9 @@ function TerminalIcon() {
  * the backend process exits (see skill-term). Polls the list so externally
  * exited / watchdog-reaped sessions drop out.
  */
-export default function TerminalsWorkspace({
-  onClose,
-  toggleTheme,
-}: {
-  onClose: () => void;
-  toggleTheme: () => void;
-}) {
+export default function TerminalsWorkspace({ visible }: { visible: boolean }) {
+  const navigate = useNavigate();
+  const onClose = () => navigate("/");
   const [sessions, setSessions] = useState<TermSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -133,7 +131,7 @@ export default function TerminalsWorkspace({
 
         <main className="min-w-0 flex-1 bg-surface">
           {active ? (
-            <TerminalPane key={active.id} id={active.id} />
+            <TerminalPane key={active.id} id={active.id} visible={visible} />
           ) : (
             <div className="flex h-full items-center justify-center px-6 text-center">
               <div>

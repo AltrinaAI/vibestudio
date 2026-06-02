@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Spinner } from "./ui";
+import { Spinner } from "@/components/ui";
 import { agentColor } from "@/lib/agents";
 import * as api from "@/lib/api";
 import type { SecretEntry, SecretsStatus } from "@/lib/api";

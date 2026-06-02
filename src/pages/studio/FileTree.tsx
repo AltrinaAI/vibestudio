@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { TreeNode } from "@/lib/types";
-import { FileIcon, FolderIcon } from "./FileIcon";
+import { FileIcon, FolderIcon } from "@/components/FileIcon";
 
 const HOVER = "hover:bg-black/5 dark:hover:bg-white/6";
 

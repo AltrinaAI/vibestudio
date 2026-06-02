@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Spinner } from "./ui";
+import { Spinner } from "@/components/ui";
 import { NAME_REGEX, LIMITS } from "@/lib/skill";
 import * as api from "@/lib/api";
 import type { SkillHome } from "@/lib/api";

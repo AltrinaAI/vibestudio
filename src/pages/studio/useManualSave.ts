@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { clearEditorStatus, publishEditorStatus } from "./editorState";
+import { clearEditorStatus, publishEditorStatus } from "@/lib/editorState";
 
 export type SaveStatus = "saved" | "dirty" | "saving" | "error";
 

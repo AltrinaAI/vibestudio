@@ -1,17 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Spinner, ThemeToggle } from "./ui";
-import NavBar from "./NavBar";
-import { FolderIcon } from "./FileIcon";
-import FolderPicker from "./FolderPicker";
+import { Spinner, ThemeToggle } from "@/components/ui";
+import NavBar from "@/components/NavBar";
+import { FolderIcon } from "@/components/FileIcon";
+import FolderPicker from "@/components/FolderPicker";
 import NewSkillDialog from "./NewSkillDialog";
 import ImportSkillDialog from "./ImportSkillDialog";
-import SecretsManager from "./SecretsManager";
-import { useRecents, removeRecent } from "./recents";
+import SecretsManager from "@/components/SecretsManager";
+import { useRecents, removeRecent } from "@/lib/recents";
 import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO } from "@/lib/agents";
 import * as api from "@/lib/api";
 import type { AgentSkills, DiscoveredSkill } from "@/lib/api";
+import { useNavigate } from "react-router-dom";
+import { studioPath } from "@/lib/routes";
+import { toggleTheme } from "@/lib/theme";
 
 const EXAMPLES = [
   { name: "docx", path: "examples/docx", blurb: "Create & edit Word documents" },
@@ -110,7 +113,12 @@ function AgentSection({ group, onOpen }: { group: AgentSkills; onOpen: (p: strin
   if (group.skills.length === 0) return null;
   const own = group.skills.filter((s) => kindMeta(s.kind).kind === "personal").sort(byKindThenName);
   const bundled = group.skills.filter((s) => kindMeta(s.kind).kind !== "personal").sort(byKindThenName);
-  const officialCount = bundled.filter((s) => kindMeta(s.kind).kind === "official").length;
+  // The Skill Studio activation skill counts as official here; its distinct
+  // badge sets it apart in the list, so it needs no separate tally.
+  const officialCount = bundled.filter((s) => {
+    const k = kindMeta(s.kind).kind;
+    return k === "official" || k === "studio";
+  }).length;
   const pluginCount = bundled.length - officialCount;
   const bundledLabel = [
     officialCount ? `${officialCount} official` : null,
@@ -176,20 +184,11 @@ function AgentSection({ group, onOpen }: { group: AgentSkills; onOpen: (p: strin
   );
 }
 
-export default function Home({
-  onOpen,
-  loading,
-  error,
-  toggleTheme,
-  onOpenTerminals,
-}: {
-  onOpen: (path: string) => void;
-  loading: boolean;
-  error: string | null;
-  toggleTheme: () => void;
-  onOpenTerminals: () => void;
-}) {
+export function Component() {
   const recents = useRecents();
+  const navigate = useNavigate();
+  const onOpen = (p: string) => navigate(studioPath(p));
+  const onOpenTerminals = () => navigate("/terminals");
   const [path, setPath] = useState("");
   const [secretsOpen, setSecretsOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
@@ -312,15 +311,12 @@ export default function Home({
             </button>
             <button
               type="submit"
-              disabled={loading || !path.trim()}
-              aria-busy={loading}
+              disabled={!path.trim()}
               className="inline-flex min-w-20 items-center justify-center gap-2 rounded-lg bg-fg px-4 py-2 text-sm font-medium text-app disabled:opacity-40"
             >
-              {loading ? <Spinner className="h-3.5 w-3.5" /> : "Open"}
+              Open
             </button>
           </form>
-
-          {error && <p className="mt-3 text-sm text-danger">{error}</p>}
         </div>
 
         {recents.length > 0 && (

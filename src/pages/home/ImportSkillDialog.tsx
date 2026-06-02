@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Spinner } from "./ui";
-import FolderPicker from "./FolderPicker";
+import { Spinner } from "@/components/ui";
+import FolderPicker from "@/components/FolderPicker";
 import * as api from "@/lib/api";
 import type { ImportResult, SkillHome } from "@/lib/api";
 

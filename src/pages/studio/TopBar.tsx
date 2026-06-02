@@ -1,8 +1,8 @@
 "use client";
 
-import { ThemeToggle } from "./ui";
-import NavBar from "./NavBar";
-import { requestSave, useEditorStatus } from "./editorState";
+import { ThemeToggle } from "@/components/ui";
+import NavBar from "@/components/NavBar";
+import { requestSave, useEditorStatus } from "@/lib/editorState";
 
 function SaveButton() {
   const { present, dirty, saving, error } = useEditorStatus();

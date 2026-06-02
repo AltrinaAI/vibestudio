@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Spinner } from "./ui";
-import SecretsManager from "./SecretsManager";
+import { Spinner } from "@/components/ui";
+import SecretsManager from "@/components/SecretsManager";
 import { agentColor, KIND_TAG, type SkillKind } from "@/lib/agents";
 import * as api from "@/lib/api";
 import type { GitInfo, GitCommit, SyncTarget } from "@/lib/api";

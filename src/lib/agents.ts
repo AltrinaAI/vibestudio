@@ -53,7 +53,8 @@ export function agentForPath(p: string): string | null {
 // --- skill provenance ---------------------------------------------------
 // We rank skills by how "yours" they are: a skill you wrote/customized ranks
 // above a first-party official one, which ranks above a third-party package.
-export type SkillKind = "personal" | "official" | "plugin";
+// "studio" is the bundled activation skill this app ships (see isBootstrapSkill).
+export type SkillKind = "personal" | "official" | "plugin" | "studio";
 
 export interface KindMeta {
   kind: SkillKind;
@@ -64,7 +65,10 @@ export interface KindMeta {
 export const KIND_META: Record<SkillKind, KindMeta> = {
   personal: { kind: "personal", label: "Personal", rank: 0 },
   official: { kind: "official", label: "Official", rank: 1 },
-  plugin: { kind: "plugin", label: "Plugin", rank: 2 },
+  // The Skill Studio activation skill tallies with official but keeps its own
+  // badge; rank it just after official so the list order matches that tally.
+  studio: { kind: "studio", label: "Skill Studio", rank: 2 },
+  plugin: { kind: "plugin", label: "Plugin", rank: 3 },
 };
 
 /** Short pill label + classes for a kind tag shown on a skill card / header. */
@@ -72,6 +76,7 @@ export const KIND_TAG: Record<SkillKind, { label: string; cls: string }> = {
   personal: { label: "Yours", cls: "bg-accent-soft text-accent" },
   official: { label: "Official", cls: "bg-[color-mix(in_srgb,var(--ok)_16%,transparent)] text-ok" },
   plugin: { label: "Plugin", cls: "bg-panel text-muted" },
+  studio: { label: "Skill Studio", cls: "bg-panel text-muted" },
 };
 
 export function kindMeta(kind: string): KindMeta {
@@ -85,7 +90,7 @@ export function kindMeta(kind: string): KindMeta {
 export function skillKind(root: string): KindMeta {
   const s = root.replace(/\\/g, "/");
   if (/\/\.codex\/skills\/\.system\//.test(s)) return KIND_META.official;
-  if (isBootstrapSkill(root)) return KIND_META.official; // shipped by Skill Studio, not yours
+  if (isBootstrapSkill(root)) return KIND_META.studio; // shipped by Skill Studio, not yours
   if (/\/\.cursor\/skills-cursor\//.test(s)) return KIND_META.official; // built-in Cursor skills
 
   const isPackaged =
@@ -103,10 +108,10 @@ export function skillKind(root: string): KindMeta {
 // The "skill-studio" skill that this app installs into your shared skills dirs
 // (~/.agents/skills, ~/.claude/skills, …) to load the secrets you manage here.
 // It lands in a personal dir, so discovery would tag it "personal" and surface
-// it as one of your own — but you didn't author it, so the UI relabels it and
-// groups it with bundled skills (behind the dropdown) instead of your cards.
+// it as one of your own — but you didn't author it, so we give it the "studio"
+// kind: it keeps its folder name but tucks into the bundled dropdown with a
+// "Skill Studio" tag instead of showing as one of your cards.
 export const BOOTSTRAP_SKILL_DIRNAME = "skill-studio";
-export const BOOTSTRAP_SKILL_LABEL = "Skill Studio";
 
 /** True for the bundled activation skill, matched by its installed folder name. */
 export function isBootstrapSkill(root: string): boolean {

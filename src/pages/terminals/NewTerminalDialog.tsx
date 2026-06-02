@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Spinner } from "./ui";
-import FolderPicker from "./FolderPicker";
+import { Spinner } from "@/components/ui";
+import FolderPicker from "@/components/FolderPicker";
 import * as api from "@/lib/api";
 import type { AgentOption } from "@/lib/api";
 

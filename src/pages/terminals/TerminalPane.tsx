@@ -27,8 +27,10 @@ function themeFromCss(): Record<string, string | undefined> {
  * unmounting detaches (the session keeps running). Remount with a new `id`
  * (via `key`) to switch sessions.
  */
-export default function TerminalPane({ id }: { id: string }) {
+export default function TerminalPane({ id, visible = true }: { id: string; visible?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  // Refreshed on each (re)attach; invoked when the pane becomes visible again.
+  const refitRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const host = hostRef.current;
@@ -73,14 +75,30 @@ export default function TerminalPane({ id }: { id: string }) {
     ro.observe(host);
     term.focus();
 
+    refitRef.current = () => {
+      try {
+        fit.fit();
+        handle.resize(term.cols, term.rows);
+      } catch {
+        /* transient zero-size during layout */
+      }
+    };
+
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       dataSub.dispose();
       handle.detach();
       term.dispose();
+      refitRef.current = () => {};
     };
   }, [id]);
+
+  // Kept alive across navigation via display:none, where the host has zero size
+  // and fit() can't measure; re-fit (and resize the pty) once shown again.
+  useEffect(() => {
+    if (visible) requestAnimationFrame(() => refitRef.current());
+  }, [visible]);
 
   return <div ref={hostRef} className="h-full w-full overflow-hidden bg-surface p-1.5" />;
 }

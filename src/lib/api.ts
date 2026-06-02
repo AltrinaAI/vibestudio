@@ -12,7 +12,7 @@ import {
   type SkillFrontmatter,
 } from "@/lib/skill";
 import type { SkillData, FileData, TreeNode } from "@/lib/types";
-import { isBootstrapSkill, BOOTSTRAP_SKILL_LABEL } from "@/lib/agents";
+import { isBootstrapSkill } from "@/lib/agents";
 
 /** True when running inside the Tauri desktop shell (vs a plain browser). */
 export const isTauri =
@@ -66,14 +66,12 @@ export async function discoverSkills(): Promise<AgentSkills[]> {
     ? await invoke<AgentSkills[]>("discover_skills")
     : await http<AgentSkills[]>("GET", "discover");
   // The bundled "skill-studio" activation skill ships with the app and installs
-  // into a personal dir, so discovery tags it "personal". Relabel it "Skill
-  // Studio" and mark it "official" so it tucks into the bundled dropdown rather
-  // than showing as one of your own skills.
+  // into a personal dir, so discovery tags it "personal". Re-tag it "studio" so
+  // it keeps its folder name but tucks into the bundled dropdown (with a "Skill
+  // Studio" tag) rather than showing as one of your own skills.
   return groups.map((g) => ({
     ...g,
-    skills: g.skills.map((s) =>
-      isBootstrapSkill(s.root) ? { ...s, name: BOOTSTRAP_SKILL_LABEL, kind: "official" } : s,
-    ),
+    skills: g.skills.map((s) => (isBootstrapSkill(s.root) ? { ...s, kind: "studio" } : s)),
   }));
 }
 

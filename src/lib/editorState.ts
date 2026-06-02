@@ -74,6 +74,20 @@ export function isEditorDirty(): boolean {
   return status.dirty;
 }
 
+// One-shot bypass for a navigation that intentionally discards the editor — e.g.
+// the edited skill folder was just deleted, so prompting to "save" a gone file is
+// wrong. Armed synchronously right before navigating; consumed (read-and-reset)
+// once inside the navigation guard so it can never leak to a later navigation.
+let discardBypass = false;
+export function armDiscardBypass() {
+  discardBypass = true;
+}
+export function consumeDiscardBypass(): boolean {
+  if (!discardBypass) return false;
+  discardBypass = false;
+  return true;
+}
+
 export function useEditorStatus(): EditorStatus {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
