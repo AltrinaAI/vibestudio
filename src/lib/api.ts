@@ -12,6 +12,7 @@ import {
   type SkillFrontmatter,
 } from "@/lib/skill";
 import type { SkillData, FileData, TreeNode } from "@/lib/types";
+import { isBootstrapSkill, BOOTSTRAP_SKILL_LABEL } from "@/lib/agents";
 
 /** True when running inside the Tauri desktop shell (vs a plain browser). */
 export const isTauri =
@@ -60,8 +61,21 @@ const readImage = (root: string, rel: string) =>
     ? invoke<{ mime: string; base64: string }>("read_image_base64", { root, rel })
     : http<{ mime: string; base64: string }>("POST", "read-image", { root, rel });
 
-export const discoverSkills = () =>
-  isTauri ? invoke<AgentSkills[]>("discover_skills") : http<AgentSkills[]>("GET", "discover");
+export async function discoverSkills(): Promise<AgentSkills[]> {
+  const groups = isTauri
+    ? await invoke<AgentSkills[]>("discover_skills")
+    : await http<AgentSkills[]>("GET", "discover");
+  // The bundled "skill-studio" activation skill ships with the app and installs
+  // into a personal dir, so discovery tags it "personal". Relabel it "Skill
+  // Studio" and mark it "official" so it tucks into the bundled dropdown rather
+  // than showing as one of your own skills.
+  return groups.map((g) => ({
+    ...g,
+    skills: g.skills.map((s) =>
+      isBootstrapSkill(s.root) ? { ...s, name: BOOTSTRAP_SKILL_LABEL, kind: "official" } : s,
+    ),
+  }));
+}
 
 // --- composed helpers ---
 export async function loadSkill(path: string): Promise<SkillData> {

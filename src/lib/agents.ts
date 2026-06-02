@@ -85,6 +85,7 @@ export function kindMeta(kind: string): KindMeta {
 export function skillKind(root: string): KindMeta {
   const s = root.replace(/\\/g, "/");
   if (/\/\.codex\/skills\/\.system\//.test(s)) return KIND_META.official;
+  if (isBootstrapSkill(root)) return KIND_META.official; // shipped by Skill Studio, not yours
   if (/\/\.cursor\/skills-cursor\//.test(s)) return KIND_META.official; // built-in Cursor skills
 
   const isPackaged =
@@ -96,4 +97,18 @@ export function skillKind(root: string): KindMeta {
   const official =
     /\/marketplaces\/[^/]*official[^/]*\/plugins\//i.test(s) && !/\/external_plugins\//.test(s);
   return official ? KIND_META.official : KIND_META.plugin;
+}
+
+// --- bootstrap activation skill ----------------------------------------
+// The "skill-studio" skill that this app installs into your shared skills dirs
+// (~/.agents/skills, ~/.claude/skills, …) to load the secrets you manage here.
+// It lands in a personal dir, so discovery would tag it "personal" and surface
+// it as one of your own — but you didn't author it, so the UI relabels it and
+// groups it with bundled skills (behind the dropdown) instead of your cards.
+export const BOOTSTRAP_SKILL_DIRNAME = "skill-studio";
+export const BOOTSTRAP_SKILL_LABEL = "Skill Studio";
+
+/** True for the bundled activation skill, matched by its installed folder name. */
+export function isBootstrapSkill(root: string): boolean {
+  return root.replace(/\\/g, "/").split("/").filter(Boolean).pop() === BOOTSTRAP_SKILL_DIRNAME;
 }
