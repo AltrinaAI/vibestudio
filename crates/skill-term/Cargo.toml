@@ -1,0 +1,12 @@
+[package]
+name = "skill-term"
+version = "0.1.0"
+edition = "2021"
+description = "App-managed, tmux-backed agent terminals (PTY bridge) shared by the desktop app and headless server"
+
+[dependencies]
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+base64 = "0.22"
+dirs = "5"
+skill-core = { path = "../skill-core" }

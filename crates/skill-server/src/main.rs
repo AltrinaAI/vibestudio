@@ -4,13 +4,15 @@
 //
 // Usage: skill-server [--port N] [--host H] [--dist PATH]
 //   defaults: --host 127.0.0.1  --port 8765  --dist ./dist
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
 use serde_json::{json, Value};
 use skill_core::{discover, gitops, secrets, skill, sync};
-use tiny_http::{Header, Method, Response, Server};
+use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 struct Reply {
     status: u16,
@@ -162,6 +164,40 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
             let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
             json_reply(sync::import_skill_zip_base64(&s("data"), &s("target"), overwrite))
         }
+        // --- app-managed agent terminals (tmux-backed) ---
+        (Method::Get, "/api/terminal/agents") => json_reply(Ok(skill_term::detect_agents())),
+        (Method::Get, "/api/terminal/list") => json_reply(skill_term::list_sessions()),
+        (Method::Post, "/api/terminal/create") => {
+            let u16f = |k: &str, d: u16| v.get(k).and_then(|x| x.as_u64()).map(|n| n as u16).unwrap_or(d);
+            let boolf = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
+            let extra: Vec<String> = v
+                .get("extraArgs")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            json_reply(skill_term::create_session(
+                &s("agent"),
+                &s("cwd"),
+                u16f("cols", 80),
+                u16f("rows", 24),
+                boolf("ide"),
+                boolf("skipPermissions"),
+                &extra,
+            ))
+        }
+        (Method::Post, "/api/terminal/kill") => {
+            json_reply(skill_term::kill_session(&s("id")).map(|_| json!({ "ok": true })))
+        }
+        (Method::Post, "/api/terminal/input") => {
+            let data = skill_term::b64_decode(&s("data"));
+            json_reply(skill_term::write(&s("id"), &data).map(|_| json!({ "ok": true })))
+        }
+        (Method::Post, "/api/terminal/resize") => {
+            let u16f = |k: &str, d: u16| v.get(k).and_then(|x| x.as_u64()).map(|n| n as u16).unwrap_or(d);
+            json_reply(
+                skill_term::resize(&s("id"), u16f("cols", 80), u16f("rows", 24)).map(|_| json!({ "ok": true })),
+            )
+        }
         (Method::Post, "/api/detect-required-env") => {
             let root = s("root");
             json_reply(secrets::secret_keys().map(|keys| skill::scan_for_env_vars(Path::new(&root), &keys)))
@@ -213,6 +249,95 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
     }
 }
 
+// ───────────────── terminal output streaming (Server-Sent Events) ─────────────────
+// We take over the raw socket (`into_writer`) and hand-roll a chunked
+// `text/event-stream`: PTY output → `data: <base64>\n\n` frames, each flushed
+// immediately. (tiny_http's normal `respond` streams a reader via a
+// never-returning `io::copy` and only flushes at the very end, so it can't do
+// SSE.) Browser input/resize ride the POST routes above. Holding the
+// `Attachment` Arc keeps the tmux-attach client alive; returning from this fn
+// drops it → detaches, leaving the tmux session running (nohup w.r.t. the UI).
+
+/// Write one HTTP/1.1 chunk and flush it to the socket immediately.
+fn write_chunk(w: &mut dyn Write, frame: &[u8]) -> std::io::Result<()> {
+    write!(w, "{:x}\r\n", frame.len())?;
+    w.write_all(frame)?;
+    w.write_all(b"\r\n")?;
+    w.flush()
+}
+
+// Bound concurrent attach streams so a flood of `/api/terminal/attach` requests
+// can't spawn unbounded threads. Terminals are few in practice; this is a backstop.
+static ACTIVE_STREAMS: AtomicUsize = AtomicUsize::new(0);
+const MAX_STREAMS: usize = 256;
+
+fn reply_status(request: Request, status: u16, error: &str) {
+    let body = serde_json::to_vec(&json!({ "error": error })).unwrap_or_default();
+    let mut resp = Response::from_data(body).with_status_code(StatusCode(status));
+    for (k, val) in [("Content-Type", "application/json"), ("Access-Control-Allow-Origin", "*")] {
+        if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
+            resp.add_header(h);
+        }
+    }
+    let _ = request.respond(resp);
+}
+
+/// Handle `GET /api/terminal/attach?id=&cols=&rows=` on its own thread (it blocks
+/// for the session's lifetime, so it must not occupy a pooled worker).
+fn stream_terminal(request: Request, url: &str) {
+    // RAII slot accounting so the count is released on every exit path.
+    struct Slot;
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            ACTIVE_STREAMS.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+    if ACTIVE_STREAMS.fetch_add(1, Ordering::Relaxed) >= MAX_STREAMS {
+        ACTIVE_STREAMS.fetch_sub(1, Ordering::Relaxed);
+        return reply_status(request, 503, "Too many terminal streams are open.");
+    }
+    let _slot = Slot;
+
+    let id = query_param(url, "id").unwrap_or_default();
+    let cols = query_param(url, "cols").and_then(|s| s.parse().ok()).unwrap_or(80u16);
+    let rows = query_param(url, "rows").and_then(|s| s.parse().ok()).unwrap_or(24u16);
+
+    let (att, rx) = match skill_term::attach(&id, cols, rows) {
+        Ok(pair) => pair,
+        Err(e) => return reply_status(request, 400, &e),
+    };
+
+    let mut w = request.into_writer();
+    let head = concat!(
+        "HTTP/1.1 200 OK\r\n",
+        "Content-Type: text/event-stream\r\n",
+        "Cache-Control: no-store\r\n",
+        "Transfer-Encoding: chunked\r\n",
+        "Access-Control-Allow-Origin: *\r\n",
+        "X-Accel-Buffering: no\r\n",
+        "\r\n",
+    );
+    if w.write_all(head.as_bytes()).is_err() || w.flush().is_err() {
+        return; // drops `att` → detaches
+    }
+
+    use std::sync::mpsc::RecvTimeoutError;
+    loop {
+        // The 15s keepalive comment doubles as a disconnect probe: the write
+        // fails once the client is gone, so we stop and detach.
+        let frame = match rx.recv_timeout(std::time::Duration::from_secs(15)) {
+            Ok(bytes) => format!("data: {}\n\n", skill_term::b64_encode(&bytes)),
+            Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_string(),
+            Err(RecvTimeoutError::Disconnected) => break, // PTY closed
+        };
+        if write_chunk(w.as_mut(), frame.as_bytes()).is_err() {
+            break; // client gone
+        }
+    }
+    let _ = write_chunk(w.as_mut(), b""); // terminating 0-length chunk
+    drop(att); // detach (the tmux session keeps running)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut host = "127.0.0.1".to_string();
@@ -239,6 +364,8 @@ fn main() {
         }
     };
     println!("skill-server listening on http://{addr}  (dist: {})", dist.display());
+    // Reap any terminal sessions orphaned by a previous backend that died hard.
+    skill_term::sweep_orphans();
     if !dist.join("index.html").is_file() {
         println!("  note: {} has no index.html — run `npm run build` to serve the UI.", dist.display());
     }
@@ -251,6 +378,12 @@ fn main() {
             for mut request in server.incoming_requests() {
                 let method = request.method().clone();
                 let url = request.url().to_string();
+                // Terminal output streams (SSE) block for the session's lifetime —
+                // run them on a dedicated thread so they never starve this worker.
+                if method == Method::Get && url.split('?').next() == Some("/api/terminal/attach") {
+                    thread::spawn(move || stream_terminal(request, &url));
+                    continue;
+                }
                 let mut body = String::new();
                 if method == Method::Post {
                     let _ = request.as_reader().read_to_string(&mut body);

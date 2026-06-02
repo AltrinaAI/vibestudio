@@ -2,7 +2,7 @@
 //   • Desktop (Tauri): in-process `invoke`.
 //   • Browser (served by skill-server, e.g. backend in WSL2): `fetch('/api/...')`.
 // Auto-detected at runtime. YAML parse/validate stays here in TS (lib/skill).
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import {
   parseSkillMd,
   serializeSkillMd,
@@ -347,3 +347,126 @@ export const secretDelete = (key: string) =>
   isTauri ? invoke<void>("secret_delete", { key }) : http<void>("POST", "secret-delete", { key });
 export const secretsSetup = () =>
   isTauri ? invoke<SetupResult>("secrets_setup") : http<SetupResult>("POST", "secrets-setup");
+
+// --- app-managed agent terminals (tmux-backed; survive UI disconnect) ---
+
+/** A launchable agent in the "New terminal" picker. The same agent can appear as
+ *  its PATH CLI *and* the build bundled inside a VS Code / Cursor extension. */
+export interface AgentOption {
+  /** Stable id passed back to terminalCreate (e.g. "claude:cli", "codex:ext:vs-code", "shell"). */
+  id: string;
+  /** Family: "claude" | "codex" | "shell". */
+  agent: string;
+  label: string;
+  /** "cli" | "extension" | "shell". */
+  flavor: string;
+  /** Human flavor, e.g. "CLI" or "VS Code extension". */
+  flavorLabel: string;
+  bin: string;
+  version: string | null;
+  /** Whether this agent supports `--ide` (attach to a running editor extension). */
+  supportsIde: boolean;
+}
+
+/** One live tmux-backed terminal session. */
+export interface TermSession {
+  id: string;
+  label: string;
+  agent: string;
+  cwd: string;
+  created: string;
+}
+
+export interface CreateTermArgs {
+  /** An AgentOption.id. */
+  agent: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  ide: boolean;
+  skipPermissions: boolean;
+  extraArgs: string[];
+}
+
+export const terminalAgents = () =>
+  isTauri ? invoke<AgentOption[]>("terminal_agents") : http<AgentOption[]>("GET", "terminal/agents");
+export const terminalList = () =>
+  isTauri ? invoke<TermSession[]>("terminal_list") : http<TermSession[]>("GET", "terminal/list");
+export const terminalCreate = (a: CreateTermArgs) =>
+  isTauri
+    ? invoke<TermSession>("terminal_create", { ...a })
+    : http<TermSession>("POST", "terminal/create", { ...a });
+export const terminalKill = (id: string) =>
+  isTauri ? invoke<void>("terminal_kill", { id }) : http<{ ok: boolean }>("POST", "terminal/kill", { id }).then(() => {});
+
+// base64 ↔ bytes for the text-only transports (SSE data: frames / JSON input).
+function bytesToB64(bytes: Uint8Array): string {
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+const strToB64 = (s: string) => bytesToB64(new TextEncoder().encode(s));
+
+/** A bidirectional attachment to a live terminal; detaching keeps the session alive. */
+export interface TerminalHandle {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  detach(): void;
+}
+
+/**
+ * Attach to a session and stream its output. Desktop uses a Tauri Channel +
+ * commands; browser uses SSE for output (auto-reconnecting) + POST for input.
+ */
+export function attachTerminal(
+  id: string,
+  opts: {
+    cols: number;
+    rows: number;
+    onData: (bytes: Uint8Array) => void;
+    /** Fired when the stream ends fatally (e.g. the session is gone). */
+    onClose?: () => void;
+  },
+): TerminalHandle {
+  if (isTauri) {
+    const channel = new Channel<string>();
+    channel.onmessage = (b64) => opts.onData(b64ToBytes(b64));
+    void invoke("terminal_attach", { id, cols: opts.cols, rows: opts.rows, onEvent: channel });
+    return {
+      write: (data) => void invoke("terminal_write", { id, data: strToB64(data) }),
+      resize: (cols, rows) => void invoke("terminal_resize", { id, cols, rows }),
+      detach: () => void invoke("terminal_detach", { id }),
+    };
+  }
+  const q = new URLSearchParams({ id, cols: String(opts.cols), rows: String(opts.rows) });
+  const es = new EventSource(`${API_BASE}/api/terminal/attach?${q.toString()}`);
+  let closed = false;
+  es.onmessage = (e) => {
+    if (e.data) opts.onData(b64ToBytes(e.data));
+  };
+  es.onerror = () => {
+    // CLOSED ⇒ the browser gave up (e.g. a 4xx because the session is gone) and
+    // won't reconnect; surface it once. CONNECTING ⇒ a transient blip, let it retry.
+    if (es.readyState === EventSource.CLOSED && !closed) {
+      closed = true;
+      opts.onClose?.();
+    }
+  };
+  return {
+    write: (data) => void http("POST", "terminal/input", { id, data: strToB64(data) }),
+    resize: (cols, rows) => void http("POST", "terminal/resize", { id, cols, rows }),
+    detach: () => {
+      closed = true;
+      es.close();
+    },
+  };
+}

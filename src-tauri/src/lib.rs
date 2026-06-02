@@ -1,7 +1,19 @@
-// Tauri desktop app: thin #[tauri::command] wrappers over skill-core.
+// Tauri desktop app: thin #[tauri::command] wrappers over skill-core / skill-term.
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use skill_core::{discover, gitops, secrets, skill, sync};
-use tauri::Manager;
+use tauri::ipc::Channel;
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
+
+/// Live PTY attachments, keyed by session id. Holding the `Arc` keeps the
+/// tmux-attach client alive until the UI detaches (the tmux session itself
+/// outlives any attachment — see `skill_term`).
+#[derive(Default)]
+struct TermState {
+    atts: Mutex<HashMap<String, Arc<skill_term::Attachment>>>,
+}
 
 #[tauri::command]
 async fn read_skill(app: tauri::AppHandle, path: String) -> Result<skill::RawSkill, String> {
@@ -153,10 +165,89 @@ async fn secrets_setup(app: tauri::AppHandle) -> Result<secrets::SetupResult, St
     secrets::secrets_setup(src.as_deref())
 }
 
+// ───────────────────────── app-managed agent terminals ─────────────────────────
+
+#[tauri::command]
+fn terminal_agents() -> Vec<skill_term::AgentOption> {
+    skill_term::detect_agents()
+}
+
+#[tauri::command]
+fn terminal_list() -> Result<Vec<skill_term::SessionInfo>, String> {
+    skill_term::list_sessions()
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn terminal_create(
+    agent: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+    ide: bool,
+    skip_permissions: bool,
+    extra_args: Vec<String>,
+) -> Result<skill_term::SessionInfo, String> {
+    skill_term::create_session(&agent, &cwd, cols, rows, ide, skip_permissions, &extra_args)
+}
+
+#[tauri::command]
+fn terminal_kill(id: String) -> Result<(), String> {
+    skill_term::kill_session(&id)
+}
+
+/// Attach to a session: stream raw PTY output as base64 chunks over `on_event`,
+/// and stash the keep-alive handle so write/resize/detach can reach it by id.
+#[tauri::command]
+fn terminal_attach(
+    state: State<'_, TermState>,
+    id: String,
+    cols: u16,
+    rows: u16,
+    on_event: Channel<String>,
+) -> Result<(), String> {
+    let (att, rx) = skill_term::attach(&id, cols, rows)?;
+    state
+        .atts
+        .lock()
+        .map_err(|_| "terminal state is unavailable".to_string())?
+        .insert(id.clone(), att);
+    std::thread::spawn(move || {
+        while let Ok(bytes) = rx.recv() {
+            if on_event.send(skill_term::b64_encode(&bytes)).is_err() {
+                break;
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn terminal_write(id: String, data: String) -> Result<(), String> {
+    skill_term::write(&id, &skill_term::b64_decode(&data))
+}
+
+#[tauri::command]
+fn terminal_resize(id: String, cols: u16, rows: u16) -> Result<(), String> {
+    skill_term::resize(&id, cols, rows)
+}
+
+/// Detach the UI from a session (drops the attach client; the session lives on).
+#[tauri::command]
+fn terminal_detach(state: State<'_, TermState>, id: String) -> Result<(), String> {
+    state
+        .atts
+        .lock()
+        .map_err(|_| "terminal state is unavailable".to_string())?
+        .remove(&id);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(TermState::default())
         .invoke_handler(tauri::generate_handler![
             read_skill,
             read_file,
@@ -183,7 +274,26 @@ pub fn run() {
             secret_set,
             secret_delete,
             secrets_setup,
+            terminal_agents,
+            terminal_list,
+            terminal_create,
+            terminal_kill,
+            terminal_attach,
+            terminal_write,
+            terminal_resize,
+            terminal_detach,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // Reap terminals orphaned by a previous (hard-killed) app process.
+        .setup(|_app| {
+            skill_term::sweep_orphans();
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // Closing the desktop app reaps the agents it owns (no zombies).
+            if let tauri::RunEvent::Exit = event {
+                skill_term::cleanup_owned();
+            }
+        });
 }

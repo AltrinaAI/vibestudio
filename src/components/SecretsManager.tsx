@@ -13,9 +13,10 @@ const btnGhost =
 
 const mask = (v: string) => "•".repeat(Math.min(12, Math.max(4, v.length)));
 
-/** Global secret store UI. `declared` highlights the keys the current skill
- *  asks for (from its SKILL.md `metadata.required-env`) so missing ones stand
- *  out. `onDetect` scans the skill's files to populate that declaration. */
+/** Global secret store UI. `declared` are the env vars the current skill asks
+ *  for (from its SKILL.md `metadata.required-env`); only those the secret store
+ *  actually holds are surfaced. `onDetect` scans the skill's files to (re)populate
+ *  that declaration with the stored secrets it references. */
 export default function SecretsManager({
   declared = [],
   onDetect,
@@ -122,7 +123,9 @@ export default function SecretsManager({
   }
 
   const have = new Set(secrets.map((s) => s.key));
-  const missing = declared.filter((k) => !have.has(k));
+  // Only surface declared vars the secret store actually holds — a skill's
+  // required-env can list prose or never-stored names we don't manage.
+  const referenced = declared.filter((k) => have.has(k));
   const installedAny = status.agents.some((a) => a.hasSkill);
 
   return (
@@ -136,29 +139,14 @@ export default function SecretsManager({
       {onDetect && (
         <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-panel px-3 py-2">
           <p className="text-[0.7rem] text-muted">
-            {declared.length
-              ? `Auto-declared ${declared.length} required var${declared.length === 1 ? "" : "s"} from this skill's files.`
-              : "No referenced secrets detected in this skill's files."}{" "}
+            {referenced.length
+              ? `This skill references ${referenced.length} stored secret${referenced.length === 1 ? "" : "s"}.`
+              : "No stored secrets are referenced in this skill's files."}{" "}
             Re-scan after adding new secrets to the store.
           </p>
           <button type="button" onClick={() => void runDetect()} disabled={detecting || busy} className={btnGhost}>
             {detecting ? "Scanning…" : "Re-scan"}
           </button>
-        </div>
-      )}
-
-      {missing.length > 0 && (
-        <div className="rounded-lg border border-border bg-panel px-3 py-2 text-xs text-warn">
-          This skill expects{" "}
-          {missing.map((k, i) => (
-            <span key={k}>
-              <button type="button" onClick={() => setNewKey(k)} className="font-mono underline hover:text-fg">
-                {k}
-              </button>
-              {i < missing.length - 1 ? ", " : ""}
-            </span>
-          ))}{" "}
-          — {missing.length === 1 ? "add it" : "add them"} below.
         </div>
       )}
 

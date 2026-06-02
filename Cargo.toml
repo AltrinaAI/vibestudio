@@ -1,7 +1,7 @@
 # Cargo workspace: the Tauri desktop app, the shared (GUI-free) core, and the
 # headless HTTP server (for the WSL2 / remote-backend mode).
 [workspace]
-members = ["src-tauri", "crates/skill-core", "crates/skill-server"]
+members = ["src-tauri", "crates/skill-core", "crates/skill-server", "crates/skill-term"]
 resolver = "2"
 
 [profile.release]

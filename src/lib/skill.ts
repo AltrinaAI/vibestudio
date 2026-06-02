@@ -165,11 +165,18 @@ export function parseAllowedTools(value: unknown): string[] {
  */
 export const REQUIRED_ENV_KEY = "required-env";
 
-/** Env var names the skill declares it needs (from `metadata.required-env`). */
+/** A valid environment-variable name: leading letter/underscore, then word chars.
+ *  Mirrors the backend `valid_key` check in `secrets.rs`. */
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Env var names the skill declares it needs (from `metadata.required-env`).
+ *  Tokens that aren't valid env-var names are dropped, so a noisy declaration
+ *  (e.g. prose lifted from the skill body) can't surface junk like `(or`,
+ *  `claude/codex/gemini`, or `|` as if they were secrets. */
 export function requiredEnv(fm: SkillFrontmatter): string[] {
   const raw = fm.metadata?.[REQUIRED_ENV_KEY];
   if (typeof raw !== "string") return [];
-  return raw.trim().split(/\s+/).filter(Boolean);
+  return raw.trim().split(/\s+/).filter((t) => ENV_NAME_RE.test(t));
 }
 
 /** A frontmatter with `metadata.required-env` set to `names` (cleared if empty). */

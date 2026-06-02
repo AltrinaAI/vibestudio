@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Spinner, ThemeToggle } from "./ui";
 import NavBar from "./NavBar";
 import { FolderIcon } from "./FileIcon";
@@ -44,6 +44,24 @@ function KeyIcon() {
       <circle cx="7.5" cy="15.5" r="5.5" />
       <path d="m21 2-9.6 9.6" />
       <path d="m15.5 7.5 3 3L22 7l-3-3" />
+    </svg>
+  );
+}
+function RefreshIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M3 21v-5h5" />
+    </svg>
+  );
+}
+function TerminalIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="m7 9 3 3-3 3M13 15h4" />
     </svg>
   );
 }
@@ -163,11 +181,13 @@ export default function Home({
   loading,
   error,
   toggleTheme,
+  onOpenTerminals,
 }: {
   onOpen: (path: string) => void;
   loading: boolean;
   error: string | null;
   toggleTheme: () => void;
+  onOpenTerminals: () => void;
 }) {
   const recents = useRecents();
   const [path, setPath] = useState("");
@@ -184,16 +204,19 @@ export default function Home({
 
   const [discovered, setDiscovered] = useState<AgentSkills[]>([]);
   const [discovering, setDiscovering] = useState(true);
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .discoverSkills()
-      .then((d) => !cancelled && (setDiscovered(d), setDiscovering(false)))
-      .catch(() => !cancelled && setDiscovering(false));
-    return () => {
-      cancelled = true;
-    };
+  const runDiscovery = useCallback(async () => {
+    setDiscovering(true);
+    try {
+      setDiscovered(await api.discoverSkills());
+    } catch {
+      // Keep whatever was already found if a rescan fails.
+    } finally {
+      setDiscovering(false);
+    }
   }, []);
+  useEffect(() => {
+    void runDiscovery();
+  }, [runDiscovery]);
 
   const [showPicker, setShowPicker] = useState(false);
   const browse = async () => {
@@ -227,6 +250,15 @@ export default function Home({
         >
           <ImportIcon />
           <span className="hidden text-xs sm:inline">Import</span>
+        </button>
+        <button
+          type="button"
+          onClick={onOpenTerminals}
+          title="Open the terminals workspace"
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
+        >
+          <TerminalIcon />
+          <span className="hidden text-xs sm:inline">Terminals</span>
         </button>
         <button
           type="button"
@@ -322,10 +354,22 @@ export default function Home({
         )}
 
         <section className="mt-12">
-          <h2 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
-            Discovered
-            {discovering ? <Spinner className="h-3 w-3" /> : <span className="text-faint">· {totalFound}</span>}
-          </h2>
+          <div className="mb-4 flex items-center gap-2">
+            <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
+              Discovered
+              {discovering ? <Spinner className="h-3 w-3" /> : <span className="text-faint">· {totalFound}</span>}
+            </h2>
+            <button
+              type="button"
+              onClick={() => void runDiscovery()}
+              disabled={discovering}
+              title="Rescan your machine for installed skills"
+              aria-label="Refresh discovered skills"
+              className="rounded-md p-1 text-muted hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RefreshIcon className={discovering ? "animate-spin" : ""} />
+            </button>
+          </div>
           {!discovering && totalFound === 0 ? (
             <p className="max-w-2xl text-sm text-muted">
               No installed skills found. Skills live under <code className="font-mono text-[0.8em]">~/.agents/skills</code>,{" "}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import TopBar from "./TopBar";
 import Sidebar from "./Sidebar";
 import Home from "./Home";
+import TerminalsWorkspace from "./TerminalsWorkspace";
 import SkillDocument from "./SkillDocument";
 import FilePane from "./FilePane";
 import ManagePanel from "./ManagePanel";
@@ -39,6 +40,7 @@ export default function SkillApp({
   const [fileError, setFileError] = useState<string | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [terminalsOpen, setTerminalsOpen] = useState(false);
   // Bumped when we replace `data` for the *same* root (e.g. after a re-scan
   // rewrites SKILL.md) so the mount-initialized editor remounts with it.
   const [docVersion, setDocVersion] = useState(0);
@@ -187,7 +189,18 @@ export default function SkillApp({
   );
 
   if (!data) {
-    return <Home onOpen={loadSkill} loading={loading} error={loadError} toggleTheme={toggleTheme} />;
+    if (terminalsOpen) {
+      return <TerminalsWorkspace onClose={() => setTerminalsOpen(false)} toggleTheme={toggleTheme} />;
+    }
+    return (
+      <Home
+        onOpen={loadSkill}
+        loading={loading}
+        error={loadError}
+        toggleTheme={toggleTheme}
+        onOpenTerminals={() => setTerminalsOpen(true)}
+      />
+    );
   }
 
   return (

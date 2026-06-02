@@ -172,11 +172,14 @@ fn push_to_agent(g: &mut Groups, agent: &str, skill: DiscoveredSkill) {
 // where <marker> is an agent's project dotdir. We walk the home tree, pruning the
 // usual build/dependency dirs (and every non-marker dotdir), to find them.
 
-const PROJECT_MARKERS: [(&str, &str); 4] = [
+const PROJECT_MARKERS: [(&str, &str); 5] = [
     (".claude", "Claude Code"),
     (".cursor", "Cursor"),
     (".codex", "Codex"),
-    (".agents", "Codex"), // cross-agent convention; surfaced under Codex
+    // Cross-agent shared standard — surfaced under "Agent Skills" to match the
+    // home-level `~/.agents`/`~/.agent` scan, not under any single agent.
+    (".agents", "Agent Skills"),
+    (".agent", "Agent Skills"), // singular variant (e.g. Antigravity)
 ];
 
 // Non-hidden heavyweight dirs to never descend into (hidden dirs are pruned
@@ -381,15 +384,21 @@ mod tests {
         );
         assert_eq!(
             project_attribution(&p("/home/u/repo/.agents/skills/x")),
-            Some(("Codex", "repo".to_string()))
+            Some(("Agent Skills", "repo".to_string()))
+        );
+        assert_eq!(
+            project_attribution(&p("/home/u/altrina/Tesseract/.agent/skills/skill-miner")),
+            Some(("Agent Skills", "Tesseract".to_string()))
         );
         assert_eq!(project_attribution(&p("/home/u/repo/src/skills/x")), None);
         // home-level dotdirs are pruned from the project walk
         let home = p("/home/u");
         assert!(prune_project_dir(&p("/home/u/.claude"), &home));
+        assert!(prune_project_dir(&p("/home/u/.agent"), &home));
         assert!(prune_project_dir(&p("/home/u/proj/node_modules"), &home));
         assert!(prune_project_dir(&p("/home/u/proj/.git"), &home));
         assert!(!prune_project_dir(&p("/home/u/proj/.claude"), &home));
+        assert!(!prune_project_dir(&p("/home/u/proj/.agent"), &home));
         assert!(!prune_project_dir(&p("/home/u/proj/src"), &home));
     }
 
