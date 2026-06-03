@@ -530,6 +530,33 @@ body {
   border-color: color-mix(in srgb, var(--error) 55%, var(--border));
 }
 
+/* Change bars — a thin green/yellow/red bar in the LEFT margin per changed chunk
+   (VS Code "dirty diff"), live as you edit, beyond the text column (no shift).
+   The button is wider than the visible 3px bar (border-left) for an easier click
+   target; clicking opens the review view. */
+.diff-change-bar {
+  position: absolute;
+  z-index: 5;
+  width: 10px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-left: 3px solid color-mix(in srgb, var(--ok) 75%, transparent);
+  border-radius: 1px;
+  background: transparent;
+  cursor: pointer;
+}
+.diff-change-bar.is-mod {
+  border-left-color: color-mix(in srgb, var(--warning) 85%, transparent);
+}
+.diff-change-bar.is-del {
+  border-left-color: color-mix(in srgb, var(--error) 75%, transparent);
+}
+.diff-change-bar:hover {
+  border-left-width: 5px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
 /* Change overview ruler — a React overlay on the SCROLL PANE's right edge (atop
    the native scrollbar, which still shows your position). The track is
    click-through so the scrollbar stays draggable; marks (green = change,
@@ -556,6 +583,9 @@ body {
   pointer-events: auto;
   background: color-mix(in srgb, var(--ok) 70%, transparent);
   transition: background 0.1s ease;
+}
+.diff-ruler-mark.is-mod {
+  background: color-mix(in srgb, var(--warning) 82%, transparent);
 }
 .diff-ruler-mark.is-del {
   background: color-mix(in srgb, var(--error) 70%, transparent);

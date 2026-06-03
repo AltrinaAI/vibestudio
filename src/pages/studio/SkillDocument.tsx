@@ -2,7 +2,7 @@
 
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useManualSave } from "./useManualSave";
+import { useAutosave } from "./useAutosave";
 import { useStudio } from "./StudioContext";
 import { agentColor, agentForPath, skillKind } from "@/lib/agents";
 import * as api from "@/lib/api";
@@ -199,7 +199,7 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
   const save = useCallback(async () => {
     await api.saveSkillMd(data.root, frontmatter, body);
   }, [data.root, frontmatter, body]);
-  useManualSave(serialized, save, true, onSaved);
+  useAutosave(serialized, save, true, onSaved);
 
   // --- Review mode: diff the BODY against its HEAD version. The on-disk file
   // carries the frontmatter too, so we parse HEAD's SKILL.md and diff body-only
@@ -208,25 +208,30 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
   const { gitVersion } = useStudio();
   const [searchParams] = useSearchParams();
   const reviewRequested = searchParams.get("diff") === "worktree";
+  // The HEAD body is fetched for every tracked skill (not just review) so the
+  // editor shows live change indicators (ruler + bars) against it; review mode
+  // layers the inline overlay on top. undefined = not tracked / not loaded.
   const [headBody, setHeadBody] = useState<string | undefined>(undefined);
   const reqRef = useRef(0);
   useEffect(() => {
-    const myReq = ++reqRef.current; // bump first so exit invalidates an in-flight fetch
-    if (!reviewRequested) {
-      setHeadBody(undefined);
-      return;
-    }
+    const myReq = ++reqRef.current; // bump first so switching invalidates an in-flight fetch
     api
-      .gitFileAt(data.root, "HEAD", "SKILL.md")
-      .then((raw) => {
-        if (myReq !== reqRef.current) return;
-        // Empty (never committed) → "" so the whole body reads as new.
-        setHeadBody(raw ? parseSkillMd(raw).body : "");
+      .gitInfo(data.root)
+      .then((info) => {
+        if (myReq !== reqRef.current) return undefined;
+        if (!info.isRepo) {
+          setHeadBody(undefined);
+          return undefined;
+        }
+        return api.gitFileAt(data.root, "HEAD", "SKILL.md").then((raw) => {
+          // Empty (never committed) → "" so the whole body reads as new.
+          if (myReq === reqRef.current) setHeadBody(raw ? parseSkillMd(raw).body : "");
+        });
       })
       .catch(() => {
         if (myReq === reqRef.current) setHeadBody(undefined);
       });
-  }, [reviewRequested, data.root, gitVersion]);
+  }, [data.root, gitVersion]);
 
   const dupKeys = useMemo(() => {
     const trimmed = meta.map((r) => r.key.trim());
@@ -239,10 +244,10 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
       {reviewRequested && headBody !== undefined && (
         <div className="mb-5 rounded-md border border-accent/30 bg-accent-soft px-3 py-2 text-xs text-muted">
           {body === headBody ? (
-            <>Reviewing changes — the instructions are unchanged since the last commit (only the properties below differ).</>
+            <>Reviewing changes — the instructions are unchanged since the last saved version (only the properties below differ).</>
           ) : (
             <>
-              Reviewing changes since the last commit. Hover a change for{" "}
+              Reviewing changes since the last saved version. Hover a change for{" "}
               <span className="font-medium text-fg">Revert</span>; <kbd className="font-sans">F7</kbd> jumps to the next.
             </>
           )}
@@ -345,7 +350,8 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
           value={body}
           onChange={setBody}
           placeholder="Write the skill instructions in Markdown…"
-          diffOriginal={reviewRequested ? headBody : undefined}
+          baseline={headBody}
+          review={reviewRequested}
         />
       </Suspense>
     </div>

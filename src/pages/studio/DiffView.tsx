@@ -120,12 +120,24 @@ export default function DiffView({
   diff,
   truncated,
   emptyLabel = "No changes.",
+  only,
 }: {
   diff: string;
   truncated?: boolean;
   emptyLabel?: string;
+  /** When set, show only the file at this repo-relative path (used for the
+   *  per-file read-only diff of non-markdown files). */
+  only?: string;
 }) {
-  const files = useMemo(() => parseDiff(diff), [diff]);
+  const files = useMemo(() => {
+    const all = parseDiff(diff);
+    if (!only) return all;
+    return all.filter((f) => {
+      const to = f.to && f.to !== "/dev/null" ? f.to : undefined;
+      const from = f.from && f.from !== "/dev/null" ? f.from : undefined;
+      return to === only || from === only;
+    });
+  }, [diff, only]);
 
   if (files.length === 0) {
     return <p className="px-1 py-6 text-center text-sm text-muted">{emptyLabel}</p>;

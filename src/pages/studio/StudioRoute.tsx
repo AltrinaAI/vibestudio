@@ -11,6 +11,10 @@ import { isEditorDirty } from "@/lib/editorState";
 import { StudioProvider, skillName } from "./StudioContext";
 import StudioLayout from "./StudioLayout";
 
+/** Idle delay before the post-save pipeline (reconcile) runs, so a burst of
+ *  autosaves coalesces into one reconcile instead of one per keystroke pause. */
+const HOOK_DELAY = 2000;
+
 /**
  * Route element for `/studio/:root`. Owns the loaded skill: it loads (and
  * reconciles required-env) on every `:root` change, holds the post-save pipeline,
@@ -49,15 +53,20 @@ export function Component() {
     })();
     return () => {
       cancelled = true;
+      if (hookTimer.current) clearTimeout(hookTimer.current); // drop a pending reconcile for the old skill
     };
   }, [root]);
 
-  // Post-save pipeline: swap in reloaded data when a hook rewrote the skill (same
-  // root only) and remount the editor (docVersion bump) only when it isn't
-  // mid-edit, so keystrokes typed in the window after a save aren't dropped.
-  // `saveSeq` drops a stale reconcile if a newer save started before it resolved.
+  // Post-save pipeline. Autosave fires often, so we DEBOUNCE the (relatively
+  // heavy) reconcile — it scans the skill's files and may rewrite SKILL.md — to
+  // run once edits settle rather than on every keystroke pause. When a hook
+  // rewrote the skill (same root only) we swap the reloaded data in and remount
+  // the editor (docVersion bump) only when it isn't mid-edit, so keystrokes typed
+  // after the save aren't dropped. `saveSeq` drops a stale reconcile if a newer
+  // one started before it resolved.
   const saveSeq = useRef(0);
-  const afterSave = useCallback(async (rel: string | null) => {
+  const hookTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runPipeline = useCallback(async (rel: string | null) => {
     const cur = dataRef.current;
     if (!cur) return;
     const seq = ++saveSeq.current;
@@ -71,6 +80,15 @@ export function Component() {
       if (!isEditorDirty()) setDocVersion((v) => v + 1);
     }
   }, []);
+  const afterSave = useCallback(
+    (rel: string | null) => {
+      if (hookTimer.current) clearTimeout(hookTimer.current);
+      hookTimer.current = setTimeout(() => void runPipeline(rel), HOOK_DELAY);
+    },
+    [runPipeline],
+  );
+
+  const bumpGit = useCallback(() => setGitVersion((v) => v + 1), []);
 
   // Git changed on disk from within the app (commit / discard). Bump gitVersion
   // so open diff overlays refetch their HEAD baseline; re-read the skill so the
@@ -96,7 +114,7 @@ export function Component() {
   if (error) return <SkillErrorShell root={root} message={error} />;
   if (!data) return <SkillLoadingShell />;
   return (
-    <StudioProvider value={{ data, docVersion, gitVersion, afterSave, reload }}>
+    <StudioProvider value={{ data, docVersion, gitVersion, bumpGit, afterSave, reload }}>
       <StudioLayout />
     </StudioProvider>
   );

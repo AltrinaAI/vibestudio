@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView, Decoration, WidgetType, keymap, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { StateField, StateEffect, type Extension, type Range, type EditorState } from "@codemirror/state";
-import { unifiedMergeView, goToNextChunk, goToPreviousChunk, getChunks, rejectChunk } from "@codemirror/merge";
+import { StateField, StateEffect, Text, type Extension, type Range, type EditorState } from "@codemirror/state";
+import { unifiedMergeView, goToNextChunk, goToPreviousChunk, getChunks, rejectChunk, Chunk } from "@codemirror/merge";
 import { publishDiffGeometry, type DiffMark } from "@/lib/diffGeometry";
 import {
   HighlightStyle,
@@ -1000,66 +1000,73 @@ const mergeNavKeymap = keymap.of([
   { key: "Shift-F7", run: goToPreviousChunk },
 ]);
 
-// ---------------------------------------------------------------------------
-// Change-geometry reporter — publishes each changed chunk's pixel position (from
-// CodeMirror's height map, so off-screen + wrapped lines + table widgets are all
-// handled), plus a revert(pos) callback, to a store. The overview ruler and the
-// revert buttons (both mounted on the SCROLL PANE, OUTSIDE this centered editor
-// column) read it. The editor only reports; it renders no diff chrome itself.
-// ---------------------------------------------------------------------------
-const diffGeometryReporter = ViewPlugin.fromClass(
-  class {
-    view: EditorView;
-    lastChunks: readonly unknown[] | null = null;
+// Map merge chunks to overview marks via CodeMirror's height map (handles
+// off-screen, wrapped, and widget-displaced lines). Used by the change tracker.
+function chunkMarks(view: EditorView, chunks: readonly Chunk[]): DiffMark[] {
+  const pad = view.documentPadding;
+  const docLen = view.state.doc.length;
+  const out: DiffMark[] = [];
+  for (const c of chunks) {
+    const fromB = Math.min(c.fromB, docLen);
+    const endB = Math.min(c.endB, docLen);
+    // empty B ⇒ lines removed (del); empty A (nothing in baseline) ⇒ pure
+    // addition (add); content on both sides ⇒ modification (mod).
+    const emptyB = fromB === endB;
+    const kind = emptyB ? "del" : c.fromA === c.endA ? "add" : "mod";
+    const topBlk = view.lineBlockAt(fromB);
+    // endB is the start of the line AFTER the change; step back one line.
+    const botBlk = view.lineBlockAt(emptyB ? fromB : Math.max(fromB, endB - 1));
+    out.push({ top: pad.top + topBlk.top, height: Math.max(botBlk.bottom - topBlk.top, 2), kind, pos: fromB });
+  }
+  return out;
+}
 
-    constructor(view: EditorView) {
-      this.view = view;
-      this.schedule();
-    }
-
-    update(u: ViewUpdate) {
-      const chunks = getChunks(u.state)?.chunks ?? null;
-      if (u.docChanged || u.geometryChanged || chunks !== this.lastChunks) {
-        this.lastChunks = chunks;
+// ---------------------------------------------------------------------------
+// Change tracker — used in NORMAL editing (no merge overlay): diffs the live
+// buffer against the HEAD baseline on every edit and publishes the changed
+// chunks' geometry, so the same overview ruler + left change bars that review
+// mode shows also appear while editing (VS Code "dirty diff" style). A fresh
+// field/plugin per baseline keeps it config-driven (reconfigure on baseline
+// change only — never on a keystroke).
+// ---------------------------------------------------------------------------
+function changeTracker(baseline: string): Extension[] {
+  const baseText = Text.of(baseline.length ? baseline.split("\n") : [""]);
+  const chunkField = StateField.define<readonly Chunk[]>({
+    create: (state) => Chunk.build(baseText, state.doc),
+    update: (chunks, tr) => (tr.docChanged ? Chunk.build(baseText, tr.state.doc) : chunks),
+  });
+  const reporter = ViewPlugin.fromClass(
+    class {
+      view: EditorView;
+      lastSig = "";
+      constructor(view: EditorView) {
+        this.view = view;
         this.schedule();
       }
-    }
-
-    // Layout reads must run in the measure phase, never synchronously in update().
-    schedule() {
-      this.view.requestMeasure<DiffMark[] | null>({
-        read: () => this.compute(),
-        write: (marks) =>
-          publishDiffGeometry(
-            marks ? { el: this.view.dom, marks, revert: (pos) => rejectChunk(this.view, pos) } : null,
-          ),
-      });
-    }
-
-    compute(): DiffMark[] | null {
-      const view = this.view;
-      const info = getChunks(view.state);
-      if (!info) return null;
-      const pad = view.documentPadding;
-      const docLen = view.state.doc.length;
-      const out: DiffMark[] = [];
-      for (const c of info.chunks) {
-        const fromB = Math.min(c.fromB, docLen);
-        const endB = Math.min(c.endB, docLen);
-        const del = fromB === endB; // empty B-range ⇒ pure deletion
-        const topBlk = view.lineBlockAt(fromB);
-        // endB is the start of the line AFTER the change; step back one line.
-        const botBlk = view.lineBlockAt(del ? fromB : Math.max(fromB, endB - 1));
-        out.push({ top: pad.top + topBlk.top, height: Math.max(botBlk.bottom - topBlk.top, 2), del, pos: fromB });
+      update(u: ViewUpdate) {
+        if (u.docChanged || u.geometryChanged || u.startState.field(chunkField) !== u.state.field(chunkField)) {
+          this.schedule();
+        }
       }
-      return out;
-    }
-
-    destroy() {
-      publishDiffGeometry(null); // diffing stopped → clear the overlays
-    }
-  },
-);
+      schedule() {
+        this.view.requestMeasure<DiffMark[]>({
+          read: () => chunkMarks(this.view, this.view.state.field(chunkField)),
+          write: (marks) => {
+            // Skip republishing (and the React re-render) when nothing moved.
+            const sig = marks.map((m) => `${Math.round(m.top)}:${Math.round(m.height)}:${m.kind}`).join("|");
+            if (sig === this.lastSig) return;
+            this.lastSig = sig;
+            publishDiffGeometry({ el: this.view.dom, marks, revert: (pos) => rejectChunk(this.view, pos) });
+          },
+        });
+      }
+      destroy() {
+        publishDiffGeometry(null);
+      }
+    },
+  );
+  return [chunkField, reporter];
+}
 
 
 /** Find a CodeMirror language for a file by my language id or its filename. */
@@ -1082,7 +1089,8 @@ export default function LiveEditor({
   language,
   filename,
   placeholder,
-  diffOriginal,
+  baseline,
+  review,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -1090,11 +1098,14 @@ export default function LiveEditor({
   language?: string;
   filename?: string;
   placeholder?: string;
-  /** When defined, the editor enters DIFF mode: the buffer is shown diffed
-   *  against this baseline (the file's HEAD content; "" for a new file) via an
-   *  inline overlay with per-hunk Revert. WYSIWYG is suspended while diffing.
-   *  undefined = normal editing. */
-  diffOriginal?: string;
+  /** The file's HEAD content. When defined (a tracked file), live change
+   *  indicators (overview ruler + left red/green bars) track edits against it.
+   *  "" = a new/untracked file (whole buffer reads as added). undefined = not
+   *  tracked → no indicators. */
+  baseline?: string;
+  /** Markdown only: also render the inline review overlay (deletions shown above
+   *  changed lines, changed lines revealed as raw). Needs `baseline`. */
+  review?: boolean;
 }) {
   // Lazily load the right language support for code files (covers ~140 langs).
   const [codeLang, setCodeLang] = useState<Extension[]>([]);
@@ -1112,39 +1123,41 @@ export default function LiveEditor({
     };
   }, [kind, language, filename]);
 
-  const diffActive = diffOriginal !== undefined;
   // Memoized so editing (which changes `value`, NOT these deps) never rebuilds
-  // the extension array — only entering/leaving diff mode or a baseline reload
-  // triggers @uiw's StateEffect.reconfigure, which preserves the document.
-  // REQUIRES @codemirror/state >= 6.5.2, or reconfiguring `original` no-ops.
+  // the extension array — only a baseline reload or entering review reconfigures
+  // (rare events), which @uiw applies via StateEffect.reconfigure, preserving the
+  // document. REQUIRES @codemirror/state >= 6.5.2.
   const extensions = useMemo<Extension[]>(() => {
-    // The base is the SAME as normal editing in both modes — for markdown that's
-    // the full WYSIWYG (markdownBlocks is diff-aware: it renders unchanged lines
-    // and reveals raw source only inside changed chunks), so untouched content
-    // looks identical to normal viewing.
+    // The base is identical to normal editing — for markdown the full WYSIWYG
+    // (markdownBlocks reveals raw source only inside changed chunks while review
+    // is on; untouched content always looks like normal viewing).
     const base =
       kind === "markdown"
         ? markdownExtensions
         : [...codeLang, EditorView.lineWrapping, syntaxHighlighting(codeHighlight), baseTheme];
-    if (!diffActive) return base;
-    return [
-      ...base,
-      mergeNavKeymap,
-      diffGeometryReporter,
-      ...unifiedMergeView({
-        original: diffOriginal ?? "",
-        gutter: false, // no in-editor gutter — revert lives in the left margin overlay
-        highlightChanges: true,
-        syntaxHighlightDeletions: true,
-        // Full-line deletions (not inline): an inline <del> renders at base size
-        // and clashes with heading-sized text; a full deleted line is syntax-
-        // highlighted to match the new line. (No collapsing of unchanged lines —
-        // the overview ruler shows where the changes are instead.)
-        allowInlineDiffs: false,
-        mergeControls: false, // revert lives in the gutter, not over the text
-      }),
-    ];
-  }, [diffActive, kind, codeLang, diffOriginal]);
+    if (baseline === undefined) return base; // not tracked → plain editor
+    // Live change indicators (ruler + left bars) for every tracked file.
+    const exts: Extension[] = [...base, ...changeTracker(baseline)];
+    // The inline review overlay is markdown-only (code reviews via a read-only
+    // diff in the file pane).
+    if (review && kind === "markdown") {
+      exts.push(
+        mergeNavKeymap,
+        ...unifiedMergeView({
+          original: baseline,
+          gutter: false, // indicators live in the margins, not an in-editor gutter
+          highlightChanges: true,
+          syntaxHighlightDeletions: true,
+          // Full-line (not inline) deletions: an inline <del> renders at base size
+          // and clashes with heading-sized text; a full deleted line is syntax-
+          // highlighted to match its replacement.
+          allowInlineDiffs: false,
+          mergeControls: false, // revert lives in the left margin overlay
+        }),
+      );
+    }
+    return exts;
+  }, [kind, codeLang, baseline, review]);
 
   return (
     <CodeMirror

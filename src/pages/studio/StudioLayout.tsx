@@ -17,7 +17,8 @@ import { studioFilePath, studioPath } from "@/lib/routes";
 /**
  * The skill workbench chrome: top bar + file sidebar + the routed file pane
  * (Outlet), plus the Manage / Export overlays. Navigation drives which file is
- * shown; the unsaved-changes guard (in AppShell) covers leaving a dirty editor.
+ * shown; edits autosave (so navigating away just persists them), and the guard in
+ * AppShell only intervenes if an autosave actually failed.
  */
 export default function StudioLayout() {
   const { data } = useStudio();
@@ -75,7 +76,9 @@ export default function StudioLayout() {
     <div className="flex h-screen flex-col bg-app text-fg">
       <TopBar
         onHome={() => navigate("/")}
+        root={data.root}
         skillName={skillName(data)}
+        dirName={data.dirName}
         selected={selected}
         reviewMode={reviewMode}
         showReview={showReview}
@@ -86,15 +89,18 @@ export default function StudioLayout() {
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar data={data} selected={selected} onSelect={onSelect} />
-        {/* The scroll pane (main) + diff overlays (ruler on the right, revert
-            buttons in the left margin) — mounted OUTSIDE the centered editor
-            column. `main` is position:relative so the portaled revert buttons
-            position against the scroll content and scroll with it. */}
+        {/* The scroll pane (main) + diff overlays (overview ruler on the right,
+            change bars + revert buttons in the left margin) — mounted OUTSIDE the
+            centered editor column. Rendered for every file (it self-hides when
+            there are no changes); the editor publishes live change geometry while
+            you edit. `main` is position:relative so the portaled bars/buttons
+            position against the scroll content and scroll with it. Revert buttons
+            show only in review mode. */}
         <div className="relative flex min-w-0 flex-1">
           <main ref={setScrollEl} className="relative min-w-0 flex-1 overflow-auto">
             <Outlet />
           </main>
-          {reviewMode && <DiffOverlays scrollEl={scrollEl} />}
+          <DiffOverlays scrollEl={scrollEl} showRevert={reviewMode} onToggleReview={toggleReview} />
         </div>
       </div>
       {manageOpen && (

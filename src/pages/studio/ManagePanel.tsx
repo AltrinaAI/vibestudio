@@ -6,6 +6,7 @@ import SecretsManager from "@/components/SecretsManager";
 import { agentColor, KIND_TAG, type SkillKind } from "@/lib/agents";
 import * as api from "@/lib/api";
 import type { GitInfo, GitCommit, SyncTarget } from "@/lib/api";
+import { useStudio } from "./StudioContext";
 
 const btnPrimary =
   "rounded-md bg-fg px-3 py-1.5 text-sm font-medium text-app transition-opacity hover:opacity-90 disabled:opacity-40";
@@ -34,6 +35,7 @@ function PreviewBadge() {
 
 // ---- Version (git) ----------------------------------------------------------
 function VersionSection({ root, dirName, kind }: { root: string; dirName: string; kind: SkillKind }) {
+  const { gitVersion, bumpGit } = useStudio();
   const [info, setInfo] = useState<GitInfo | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [log, setLog] = useState<GitCommit[]>([]);
@@ -54,9 +56,10 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
       setLoaded(true);
     }
   }, [root]);
+  // Reload on open and whenever git changed elsewhere (e.g. the top-bar Save).
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, gitVersion]);
 
   const startTracking = async () => {
     setBusy(true);
@@ -72,7 +75,7 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
   };
 
   const openCommit = () => {
-    setMessage(log.length === 0 ? "Initial commit" : `Update ${dirName}`);
+    setMessage(log.length === 0 ? "Initial version" : `Update ${dirName}`);
     setErr(null);
     setCommitOpen(true);
   };
@@ -83,8 +86,9 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
       await api.gitCommit(root, message);
       setCommitOpen(false);
       await refresh();
+      bumpGit(); // refresh open diff baselines so live change indicators clear
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Commit failed");
+      setErr(e instanceof Error ? e.message : "Couldn’t save this version");
     } finally {
       setBusy(false);
     }
@@ -140,23 +144,23 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
           <div className="flex items-center justify-between gap-3">
             <span className="flex items-center gap-2 text-sm">
               <span className={`h-1.5 w-1.5 rounded-full ${info.dirty ? "bg-warn" : "bg-ok"}`} aria-hidden />
-              <span className="text-fg">{info.dirty ? "Uncommitted changes" : "Up to date"}</span>
+              <span className="text-fg">{info.dirty ? "Changes since last version" : "Up to date"}</span>
               {info.branch && <span className="font-mono text-xs text-faint">{info.branch}</span>}
             </span>
             <button
               type="button"
               onClick={openCommit}
               disabled={busy || !info.dirty || !info.hasIdentity}
-              title={!info.hasIdentity ? "Set a git identity first" : !info.dirty ? "No changes to commit" : "Commit a version"}
+              title={!info.hasIdentity ? "Set a git identity first" : !info.dirty ? "No changes since your last version" : "Save a version"}
               className={btnPrimary}
             >
-              Commit…
+              Save a version
             </button>
           </div>
 
           {!info.hasIdentity && (
             <p className="rounded-md bg-panel px-2.5 py-2 text-xs text-warn">
-              Set a git identity to commit:{" "}
+              Set a git identity to save versions:{" "}
               <code className="font-mono">git config --global user.email "you@example.com"</code> (and{" "}
               <code className="font-mono">user.name</code>).
             </p>
@@ -169,7 +173,7 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
                 onChange={(e) => setMessage(e.target.value)}
                 rows={2}
                 autoFocus
-                placeholder="Describe this version…"
+                placeholder="Describe what changed…"
                 className="w-full resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent"
               />
               <div className="mt-2 flex justify-end gap-2">
@@ -177,7 +181,7 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
                   Cancel
                 </button>
                 <button type="button" onClick={doCommit} disabled={busy || !message.trim()} className={btnPrimary}>
-                  {busy ? "Committing…" : "Commit"}
+                  {busy ? "Saving…" : "Save version"}
                 </button>
               </div>
             </div>

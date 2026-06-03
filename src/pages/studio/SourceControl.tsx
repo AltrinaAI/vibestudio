@@ -32,7 +32,7 @@ export default function SourceControl({ root }: { root: string }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [, setSearchParams] = useSearchParams();
-  const { reload } = useStudio();
+  const { reload, gitVersion } = useStudio();
   const kind = skillKind(root).kind;
 
   // What's currently being viewed, so its row stays highlighted: a commit (the
@@ -84,8 +84,14 @@ export default function SourceControl({ root }: { root: string }) {
     void refresh();
   }, [refresh]);
 
-  // Refresh the change list once a save completes (saving true → false), so the
-  // panel reflects edits made in the editor without a manual refresh.
+  // Refresh silently (no loading flash) when git changed elsewhere — a checkpoint
+  // from the top-bar Save, or a discard — so the change list + history stay live.
+  useEffect(() => {
+    void refresh();
+  }, [gitVersion, refresh]);
+
+  // Refresh the change list once an autosave completes (saving true → false), so
+  // the panel reflects edits made in the editor without a manual refresh.
   const editor = useEditorStatus();
   const wasSaving = useRef(false);
   useEffect(() => {
@@ -146,7 +152,7 @@ export default function SourceControl({ root }: { root: string }) {
 
   const discardAll = async () => {
     if (busy) return;
-    if (!window.confirm("Discard ALL uncommitted changes back to the last commit? This can’t be undone.")) return;
+    if (!window.confirm("Discard ALL changes back to your last saved version? This can’t be undone.")) return;
     setBusy(true);
     setActionErr(null);
     try {

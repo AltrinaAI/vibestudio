@@ -1,8 +1,10 @@
 "use client";
 
-// A tiny external store the mounted editor publishes its save state into, so the
-// chrome (top bar) can show one global Save button + ⌘S, and navigation can warn
-// before discarding unsaved edits. Only one editor pane is mounted at a time.
+// A tiny external store the mounted editor publishes its autosave state into, so
+// the chrome can surface a save *failure* and other panels can react when a write
+// lands on disk. Saving itself is automatic (debounced) — there's no Save button
+// and no "you have unsaved changes" prompt in the normal case. Only one editor
+// pane is mounted at a time.
 
 import { useSyncExternalStore } from "react";
 
@@ -57,15 +59,24 @@ export function clearEditorStatus() {
   }
 }
 
-/** Trigger a save on the active editor (no-op if nothing is mounted/dirty). */
+/** Retry the active editor's autosave (used by the failure indicator). No-op if
+ *  nothing is mounted or there's nothing to save. */
 export function requestSave() {
   saveFn?.();
 }
 
-/** Guard for navigation that would unmount the editor and drop unsaved edits. */
-export function confirmDiscardIfDirty(): boolean {
-  if (!status.dirty) return true;
-  return window.confirm("You have unsaved changes that will be lost. Continue without saving?");
+/** True when the active editor's last autosave FAILED — its buffer isn't on disk.
+ *  Normal (clean / mid-debounce) edits aren't "unsaved"; autosave persists them. */
+export function hasSaveError(): boolean {
+  return status.present && status.error != null;
+}
+
+/** Guard for navigation away from an editor whose last autosave failed (so the
+ *  un-persisted edit would be lost). Clean/saving edits never prompt — autosave
+ *  flushes them on unmount. */
+export function confirmLeaveUnsaved(): boolean {
+  if (!hasSaveError()) return true;
+  return window.confirm("Your last change couldn’t be saved and will be lost. Leave anyway?");
 }
 
 /** Imperative read of whether the active editor has unsaved edits right now —

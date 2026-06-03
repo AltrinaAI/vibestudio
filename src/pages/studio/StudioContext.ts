@@ -10,8 +10,12 @@ export interface StudioContextValue {
   /** Bumped whenever git state changes from within the app (commit / discard) so
    *  open diff overlays refetch their HEAD baseline. */
   gitVersion: number;
+  /** Bump gitVersion only — refresh diff baselines + git-derived panels after a
+   *  checkpoint, WITHOUT re-reading the skill (content is unchanged by a commit,
+   *  so this avoids a needless editor remount). */
+  bumpGit: () => void;
   /** Run the post-save pipeline for the file just saved (rel=null => SKILL.md). */
-  afterSave: (rel: string | null) => Promise<void>;
+  afterSave: (rel: string | null) => void;
   /** Re-read the skill from disk after an external content change (e.g. a discard
    *  reverted a file): refreshes `data`, bumps gitVersion, and remounts the editor
    *  (docVersion) unless it's mid-edit. */

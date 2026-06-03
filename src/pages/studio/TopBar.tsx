@@ -1,46 +1,79 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ThemeToggle } from "@/components/ui";
 import NavBar from "@/components/NavBar";
 import { requestSave, useEditorStatus } from "@/lib/editorState";
+import { useCheckpoint } from "./useCheckpoint";
+import SaveVersionDialog from "./SaveVersionDialog";
 
-function SaveButton() {
-  const { present, dirty, saving, error } = useEditorStatus();
-  if (!present) return null;
-
-  const label = error ? "Retry save" : saving ? "Saving…" : dirty ? "Save" : "Saved";
-  const canSave = dirty && !saving;
-
+/** Wordless autosave: nothing to see while it's working. Surfaces ONLY a failure,
+ *  so a dropped write is never silent — clicking retries it. */
+function AutosaveIndicator() {
+  const { present, error } = useEditorStatus();
+  if (!present || !error) return null;
   return (
     <button
       type="button"
       onClick={requestSave}
-      disabled={!canSave}
-      title={error ?? (canSave ? "Save changes (⌘S)" : "All changes saved")}
-      aria-live="polite"
-      className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-        error
-          ? "text-danger hover:bg-panel"
-          : canSave
-            ? "bg-accent text-white hover:opacity-90"
-            : "text-muted"
-      }`}
+      title={`${error} — click to retry`}
+      className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-danger transition-colors hover:bg-panel"
     >
-      <span
-        aria-hidden
-        className={`h-1.5 w-1.5 rounded-full ${
-          error ? "bg-danger" : dirty ? "bg-current" : "bg-ok"
-        }`}
-      />
-      {label}
-      {canSave && <kbd className="ml-0.5 font-sans text-[0.65rem] opacity-70">⌘S</kbd>}
+      <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-danger" />
+      Couldn’t save — retry
     </button>
+  );
+}
+
+/** The deliberate "Save" — records a named version (a git commit). Autosave keeps
+ *  edits on disk; this is the snapshot you can return to. Shown only for skills
+ *  that can be versioned. ⌘S opens it. */
+function SaveVersionButton({ root, dirName }: { root: string; dirName: string }) {
+  const checkpoint = useCheckpoint(root);
+  const [open, setOpen] = useState(false);
+  const { possible, hasChanges } = checkpoint;
+  const canSave = possible && hasChanges;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+        e.preventDefault(); // never let the browser's Save-page dialog through
+        if (canSave) setOpen((o) => o || true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canSave]);
+
+  if (!possible) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        disabled={!hasChanges}
+        title={hasChanges ? "Save a version (⌘S) — a snapshot you can return to" : "No changes since your last version"}
+        className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+          hasChanges ? "bg-accent text-white hover:opacity-90" : "text-muted"
+        }`}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        </svg>
+        Save
+        {hasChanges && <kbd className="ml-0.5 font-sans text-[0.65rem] opacity-70">⌘S</kbd>}
+      </button>
+      {open && <SaveVersionDialog checkpoint={checkpoint} dirName={dirName} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
 export default function TopBar({
   onHome,
+  root,
   skillName,
+  dirName,
   selected,
   reviewMode,
   showReview,
@@ -50,7 +83,9 @@ export default function TopBar({
   toggleTheme,
 }: {
   onHome: () => void;
+  root: string;
   skillName: string;
+  dirName: string;
   selected: string | null;
   /** The diff overlay is currently on for the open file. */
   reviewMode: boolean;
@@ -81,13 +116,14 @@ export default function TopBar({
         </>
       }
     >
-      <SaveButton />
+      <AutosaveIndicator />
+      <SaveVersionButton root={root} dirName={dirName} />
       {showReview && (
         <button
           type="button"
           onClick={onToggleReview}
           aria-pressed={reviewMode}
-          title="Review change mode — show changes since the last commit"
+          title="Review change mode — show changes since the last saved version"
           className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
             reviewMode ? "bg-accent text-white hover:opacity-90" : "text-muted hover:bg-panel hover:text-fg"
           }`}

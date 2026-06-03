@@ -2,8 +2,9 @@
 
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useManualSave } from "./useManualSave";
+import { useAutosave } from "./useAutosave";
 import { useStudio } from "./StudioContext";
+import DiffView from "./DiffView";
 import { humanSize } from "@/lib/fileTypes";
 import * as api from "@/lib/api";
 import type { FileData } from "@/lib/types";
@@ -14,6 +15,9 @@ const EditorFallback = () => <div className="px-8 py-6 text-sm text-muted">Loadi
 export default function FilePane({ root, file, onSaved }: { root: string; file: FileData; onSaved?: () => void }) {
   const { gitVersion } = useStudio();
   const editable = file.content != null && !file.tooLarge && !file.isBinary && file.category !== "image";
+  // The in-editor WYSIWYG diff overlay is prose-only; other file types (code,
+  // etc.) review via a plain read-only unified diff instead.
+  const isMarkdown = file.category === "markdown";
   const [content, setContent] = useState(file.content ?? "");
   const baseName = file.rel.split("/").pop() ?? file.rel;
 
@@ -31,43 +35,65 @@ export default function FilePane({ root, file, onSaved }: { root: string; file: 
     };
   }, [root, file.rel, file.category]);
 
-  // --- Diff/review mode. The "Review changes" toggle lives in the nav bar; this
-  // reacts to its ?diff=worktree query and feeds the HEAD baseline to the editor
-  // overlay. The baseline is fetched BEFORE diffOriginal is set, so the unchanged
-  // buffer and the new extension set reconfigure together (no cursor reset). ---
+  // --- Change tracking + review mode.
+  // The HEAD baseline is fetched for EVERY tracked file (not just review) so the
+  // editor can show live change indicators (overview ruler + left bars). Markdown
+  // additionally gets the inline review overlay when ?diff=worktree is set; code
+  // files review via a plain read-only diff (no editor) instead. ---
   const [searchParams] = useSearchParams();
   const reviewRequested = searchParams.get("diff") === "worktree";
-  // undefined = not in diff mode (or baseline not loaded yet); a string ("" for a
-  // new file) = baseline loaded → the editor renders the inline diff overlay.
-  const [diffOriginal, setDiffOriginal] = useState<string | undefined>(undefined);
+  const codeReview = reviewRequested && editable && !isMarkdown; // read-only code diff (no editor)
+  // The file's HEAD content (indicators baseline). undefined = not tracked / not
+  // loaded; "" = a new/untracked file (whole buffer reads as added).
+  const [baseline, setBaseline] = useState<string | undefined>(undefined);
+  // For code review: the file's read-only worktree diff (git-computed).
+  const [codeDiff, setCodeDiff] = useState<{ diff: string; truncated: boolean } | null>(null);
 
   const reqRef = useRef(0);
   useEffect(() => {
-    // Bump the counter first so exiting review (or a baseline change) invalidates
-    // any in-flight fetch — its late resolve can't re-enter the overlay.
+    // Bump first so exiting or switching invalidates any in-flight fetch.
     const myReq = ++reqRef.current;
-    if (!reviewRequested || !editable) {
-      setDiffOriginal(undefined);
+    if (!editable) {
+      setBaseline(undefined);
+      setCodeDiff(null);
       return;
     }
+    if (codeReview) {
+      // Read-only code diff — no editor, so no baseline needed.
+      setBaseline(undefined);
+      api
+        .gitWorktreeDiff(root)
+        .then((wt) => myReq === reqRef.current && setCodeDiff({ diff: wt.diff, truncated: wt.truncated }))
+        .catch(() => myReq === reqRef.current && setCodeDiff({ diff: "", truncated: false }));
+      return;
+    }
+    // Normal editing (code or markdown) or markdown review → live indicators need
+    // the HEAD baseline. Only for files git actually tracks (else "" would render
+    // a non-repo file as all-added).
+    setCodeDiff(null);
     api
-      .gitFileAt(root, "HEAD", file.rel)
-      .then((orig) => {
-        if (myReq === reqRef.current) setDiffOriginal(orig);
+      .gitInfo(root)
+      .then((info) => {
+        if (myReq !== reqRef.current) return;
+        if (!info.isRepo) {
+          setBaseline(undefined);
+          return undefined;
+        }
+        return api.gitFileAt(root, "HEAD", file.rel).then((b) => {
+          if (myReq === reqRef.current) setBaseline(b);
+        });
       })
-      .catch(() => {
-        if (myReq === reqRef.current) setDiffOriginal(undefined);
-      });
-  }, [reviewRequested, editable, root, file.rel, gitVersion]);
+      .catch(() => myReq === reqRef.current && setBaseline(undefined));
+  }, [codeReview, editable, root, file.rel, gitVersion]);
 
   const save = useCallback(async () => {
     await api.writeFile(root, file.rel, content);
   }, [root, file.rel, content]);
 
-  useManualSave(content, save, editable, onSaved);
+  useAutosave(content, save, editable, onSaved);
 
-  const inDiff = reviewRequested && diffOriginal !== undefined;
-  const isNewFile = inDiff && diffOriginal === "";
+  const inDiff = reviewRequested && isMarkdown && baseline !== undefined; // markdown overlay active
+  const isNewFile = inDiff && baseline === "";
 
   return (
     <div className="mx-auto max-w-208 px-6 py-8 sm:px-10">
@@ -81,6 +107,11 @@ export default function FilePane({ root, file, onSaved }: { root: string; file: 
               <span className="font-medium text-fg">Revert</span>; <kbd className="font-sans">F7</kbd> jumps to the next.
             </>
           )}
+        </div>
+      )}
+      {codeReview && (
+        <div className="mb-5 rounded-md border border-accent/30 bg-accent-soft px-3 py-2 text-xs text-muted">
+          Changes since the last commit (read-only). Save edits first to see them here.
         </div>
       )}
       <div className="mb-5 flex items-center gap-3 text-xs text-muted">
@@ -105,15 +136,22 @@ export default function FilePane({ root, file, onSaved }: { root: string; file: 
         <p className="py-6 text-sm text-muted">File is too large to display ({humanSize(file.size)}).</p>
       ) : file.isBinary ? (
         <p className="py-6 text-sm text-muted">Binary file ({humanSize(file.size)}) — preview not available.</p>
+      ) : codeReview ? (
+        codeDiff ? (
+          <DiffView diff={codeDiff.diff} truncated={codeDiff.truncated} only={file.rel} emptyLabel="No changes since the last commit." />
+        ) : (
+          <p className="py-6 text-sm text-muted">Loading diff…</p>
+        )
       ) : (
         <Suspense fallback={<EditorFallback />}>
           <LiveEditor
-            kind={file.category === "markdown" ? "markdown" : "code"}
+            kind={isMarkdown ? "markdown" : "code"}
             language={file.language}
             filename={baseName}
             value={content}
             onChange={setContent}
-            diffOriginal={inDiff ? diffOriginal : undefined}
+            baseline={baseline}
+            review={reviewRequested && isMarkdown}
           />
         </Suspense>
       )}

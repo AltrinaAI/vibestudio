@@ -13,8 +13,8 @@ export interface DiffMark {
   top: number;
   /** Pixel height of the changed block. */
   height: number;
-  /** A pure deletion (no lines in the new doc) vs an add/change. */
-  del: boolean;
+  /** add = only new lines, mod = existing lines changed, del = lines removed. */
+  kind: "add" | "mod" | "del";
   /** A position inside the chunk (to scroll/jump to). */
   pos: number;
 }
