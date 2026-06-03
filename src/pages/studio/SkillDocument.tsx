@@ -17,6 +17,7 @@ import {
   type ValidationIssue,
 } from "@/lib/skill";
 import type { SkillData } from "@/lib/types";
+import { wordDiff } from "@/lib/wordDiff";
 
 const LiveEditor = lazy(() => import("./LiveEditor"));
 const EditorFallback = () => <div className="py-4 text-sm text-muted">Loading editor…</div>;
@@ -74,6 +75,31 @@ function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) 
     resize();
   }, [props.value, resize]);
   return <textarea ref={ref} rows={1} {...props} />;
+}
+
+/** Read-only inline word diff of a short field (name / description) against its
+ *  last-saved value — shown in review mode when the field changed. Removed words
+ *  are struck through (red), added words highlighted (green); unchanged text
+ *  keeps the field's normal styling via `className`. */
+function InlineDiff({ before, after, className }: { before: string; after: string; className?: string }) {
+  const segs = useMemo(() => wordDiff(before, after), [before, after]);
+  return (
+    <div className={className} aria-label="Changes since the last version">
+      {segs.map((s, i) =>
+        s.type === "same" ? (
+          <span key={i}>{s.text}</span>
+        ) : s.type === "del" ? (
+          <del key={i} className="text-danger/80 line-through decoration-danger/40">
+            {s.text}
+          </del>
+        ) : (
+          <ins key={i} className="rounded-[3px] bg-ok/20 text-fg no-underline">
+            {s.text}
+          </ins>
+        ),
+      )}
+    </div>
+  );
 }
 
 function ValidationPill({ issues }: { issues: ValidationIssue[] }) {
@@ -208,28 +234,39 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
   const { gitVersion } = useStudio();
   const [searchParams] = useSearchParams();
   const reviewRequested = searchParams.get("diff") === "worktree";
-  // The HEAD body is fetched for every tracked skill (not just review) so the
-  // editor shows live change indicators (ruler + bars) against it; review mode
-  // layers the inline overlay on top. undefined = not tracked / not loaded.
+  // The HEAD SKILL.md is fetched for every tracked skill (not just review): the
+  // body feeds the editor's change indicators, and the name/description feed an
+  // inline word diff shown in review mode when they changed. undefined = not
+  // tracked / not loaded; "" = never committed (so everything reads as new).
   const [headBody, setHeadBody] = useState<string | undefined>(undefined);
+  const [headName, setHeadName] = useState<string | undefined>(undefined);
+  const [headDescription, setHeadDescription] = useState<string | undefined>(undefined);
   const reqRef = useRef(0);
   useEffect(() => {
     const myReq = ++reqRef.current; // bump first so switching invalidates an in-flight fetch
+    const clear = () => {
+      setHeadBody(undefined);
+      setHeadName(undefined);
+      setHeadDescription(undefined);
+    };
     api
       .gitInfo(data.root)
       .then((info) => {
         if (myReq !== reqRef.current) return undefined;
         if (!info.isRepo) {
-          setHeadBody(undefined);
+          clear();
           return undefined;
         }
         return api.gitFileAt(data.root, "HEAD", "SKILL.md").then((raw) => {
-          // Empty (never committed) → "" so the whole body reads as new.
-          if (myReq === reqRef.current) setHeadBody(raw ? parseSkillMd(raw).body : "");
+          if (myReq !== reqRef.current) return;
+          const head = raw ? parseSkillMd(raw) : null;
+          setHeadBody(head ? head.body : "");
+          setHeadName(head ? asString(head.frontmatter.name) : "");
+          setHeadDescription(head ? asString(head.frontmatter.description) : "");
         });
       })
       .catch(() => {
-        if (myReq === reqRef.current) setHeadBody(undefined);
+        if (myReq === reqRef.current) clear();
       });
   }, [data.root, gitVersion]);
 
@@ -239,42 +276,50 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
   }, [meta]);
   const emptyWithValue = meta.some((r) => !r.key.trim() && r.value.trim());
 
+  // In review mode, show changed header fields as a read-only word diff vs HEAD.
+  const nameChanged = reviewRequested && headName !== undefined && name !== headName;
+  const descChanged = reviewRequested && headDescription !== undefined && description !== headDescription;
+
   return (
     <div className="mx-auto max-w-184 px-6 py-10 sm:px-10">
-      {reviewRequested && headBody !== undefined && (
-        <div className="mb-5 rounded-md border border-accent/30 bg-accent-soft px-3 py-2 text-xs text-muted">
-          {body === headBody ? (
-            <>Reviewing changes — the instructions are unchanged since the last saved version (only the properties below differ).</>
-          ) : (
-            <>
-              Reviewing changes since the last saved version. Hover a change for{" "}
-              <span className="font-medium text-fg">Revert</span>; <kbd className="font-sans">F7</kbd> jumps to the next.
-            </>
-          )}
-        </div>
-      )}
       <div className="mb-7 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
         <ValidationPill issues={issues} />
         <SkillMeta root={data.root} />
       </div>
 
-      <input
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="skill-name"
-        spellCheck={false}
-        aria-label="Skill name"
-        className="w-full bg-transparent text-3xl font-bold leading-snug tracking-tight text-fg outline-none placeholder:text-faint"
-      />
+      {nameChanged ? (
+        <InlineDiff
+          before={headName ?? ""}
+          after={name}
+          className="w-full text-3xl font-bold leading-snug tracking-tight text-fg"
+        />
+      ) : (
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="skill-name"
+          spellCheck={false}
+          aria-label="Skill name"
+          className="w-full bg-transparent text-3xl font-bold leading-snug tracking-tight text-fg outline-none placeholder:text-faint"
+        />
+      )}
       {nameError && <p className="mt-1.5 text-xs text-danger">{nameError.message}</p>}
 
-      <AutoTextarea
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        placeholder="Describe what this skill does and when to use it…"
-        aria-label="Skill description"
-        className="mt-3 w-full resize-none overflow-hidden bg-transparent text-[1.05rem] leading-relaxed text-muted outline-none placeholder:text-faint"
-      />
+      {descChanged ? (
+        <InlineDiff
+          before={headDescription ?? ""}
+          after={description}
+          className="mt-3 w-full whitespace-pre-wrap text-[1.05rem] leading-relaxed text-muted"
+        />
+      ) : (
+        <AutoTextarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Describe what this skill does and when to use it…"
+          aria-label="Skill description"
+          className="mt-3 w-full resize-none overflow-hidden bg-transparent text-[1.05rem] leading-relaxed text-muted outline-none placeholder:text-faint"
+        />
+      )}
 
       <div className="mt-5">
         <button

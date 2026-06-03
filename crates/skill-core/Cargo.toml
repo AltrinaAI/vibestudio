@@ -12,3 +12,7 @@ walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 dirs = "5"
 base64 = "0.22"
+# On-device commit-message generation: blocking HTTP (talk to a llama-server
+# child + download the GGUF model) and integrity-checking the download.
+ureq = "2"
+sha2 = "0.10"

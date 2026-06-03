@@ -316,6 +316,8 @@ export interface GitCommit {
   /** ISO-8601 author date (for an absolute-date tooltip). */
   isoDate: string;
   relativeDate: string;
+  /** 1-based version number (position in linear history; first commit = 1). */
+  number: number;
 }
 /** One uncommitted change in the working tree (a `git status` entry). */
 export interface GitFileChange {
@@ -350,6 +352,8 @@ export interface GitCommitDetail {
   relativeDate: string;
   diff: string;
   truncated: boolean;
+  /** 1-based version number (this commit's position in linear history). */
+  number: number;
 }
 export const gitInfo = (root: string) =>
   isTauri ? invoke<GitInfo>("git_info", { root }) : http<GitInfo>("POST", "git-info", { root });
@@ -361,6 +365,30 @@ export const gitCommit = (root: string, message: string) =>
     : http<{ sha: string; summary: string }>("POST", "git-commit", { root, message });
 export const gitLog = (root: string, limit = 20) =>
   isTauri ? invoke<GitCommit[]>("git_log", { root, limit }) : http<GitCommit[]>("POST", "git-log", { root, limit });
+
+// --- on-device commit-message generation (local llama.cpp engine) ---
+/** Whether the on-device model is downloaded yet, so the UI can warn about the
+ *  one-time first-run download before the user clicks Generate. */
+export interface CommitModelStatus {
+  /** Active model id (e.g. "qwen3.5-2b"). */
+  model: string;
+  /** The GGUF is present on disk (generation won't trigger a download). */
+  downloaded: boolean;
+  /** On-disk size in MB, when present. */
+  sizeMb?: number;
+  /** Where the GGUF lives / will be cached. */
+  path: string;
+}
+/** Draft a Conventional-Commits message from the skill's uncommitted diff,
+ *  fully on-device. The first call may download the model + warm the engine. */
+export const generateCommitMessage = (root: string) =>
+  isTauri
+    ? invoke<string>("generate_commit_message", { root })
+    : http<string>("POST", "generate-commit-message", { root });
+export const commitModelStatus = () =>
+  isTauri
+    ? invoke<CommitModelStatus>("commit_model_status")
+    : http<CommitModelStatus>("GET", "commit-model-status");
 export const gitStatus = (root: string) =>
   isTauri ? invoke<GitFileChange[]>("git_status", { root }) : http<GitFileChange[]>("POST", "git-status", { root });
 export const gitWorktreeDiff = (root: string) =>
@@ -377,6 +405,10 @@ export const gitFileAt = (root: string, rev: string, path: string) =>
   isTauri
     ? invoke<string>("git_file_at", { root, rev, path })
     : http<string>("POST", "git-file-at", { root, rev, path });
+/** The tracked file paths at a revision (a SHA or "HEAD") — for browsing a past
+ *  version's files. */
+export const gitFilesAt = (root: string, rev: string) =>
+  isTauri ? invoke<string[]>("git_files_at", { root, rev }) : http<string[]>("POST", "git-files-at", { root, rev });
 /** Discard one path's working-tree changes back to HEAD (tracked → restore,
  *  untracked → delete). Destructive — confirm before calling. */
 export const gitDiscard = (root: string, path: string) =>

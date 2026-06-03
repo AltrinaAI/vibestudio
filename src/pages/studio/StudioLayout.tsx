@@ -76,9 +76,7 @@ export default function StudioLayout() {
     <div className="flex h-screen flex-col bg-app text-fg">
       <TopBar
         onHome={() => navigate("/")}
-        root={data.root}
         skillName={skillName(data)}
-        dirName={data.dirName}
         selected={selected}
         reviewMode={reviewMode}
         showReview={showReview}

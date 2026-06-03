@@ -6,6 +6,7 @@ import { Spinner } from "@/components/ui";
 import { skillKind, KIND_TAG } from "@/lib/agents";
 import { useEditorStatus } from "@/lib/editorState";
 import { useStudio } from "./StudioContext";
+import SaveVersionDialog from "./SaveVersionDialog";
 import { studioPath, studioFilePath, studioCommitPath } from "@/lib/routes";
 import * as api from "@/lib/api";
 import type { GitInfo, GitCommit, GitFileChange } from "@/lib/api";
@@ -28,11 +29,11 @@ function Notice({ children }: { children: React.ReactNode }) {
 /** VS Code-style Source Control panel: working-tree changes + commit history,
  *  living in the left sidebar. Clicking a changed file opens it with the inline
  *  diff overlay; clicking a commit opens its read-only diff in the main pane. */
-export default function SourceControl({ root }: { root: string }) {
+export default function SourceControl({ root, dirName }: { root: string; dirName: string }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [, setSearchParams] = useSearchParams();
-  const { reload, gitVersion } = useStudio();
+  const { reload, gitVersion, bumpGit } = useStudio();
   const kind = skillKind(root).kind;
 
   // What's currently being viewed, so its row stays highlighted: a commit (the
@@ -50,6 +51,12 @@ export default function SourceControl({ root }: { root: string }) {
 
   const [busy, setBusy] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
+
+  // "Save a version" (the deliberate checkpoint, a git commit) — moved here from
+  // the top bar since it's a version action, not a file-level save.
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [commitErr, setCommitErr] = useState<string | null>(null);
 
   const refreshReq = useRef(0);
   const refresh = useCallback(async () => {
@@ -166,6 +173,40 @@ export default function SourceControl({ root }: { root: string }) {
     }
   };
 
+  const doCommit = useCallback(
+    async (message: string) => {
+      setCommitting(true);
+      setCommitErr(null);
+      try {
+        await api.gitCommit(root, message);
+        await refresh();
+        bumpGit(); // refresh open diff baselines so live change indicators clear
+        return true;
+      } catch (e) {
+        setCommitErr(e instanceof Error ? e.message : "Couldn’t save this version");
+        return false;
+      } finally {
+        setCommitting(false);
+      }
+    },
+    [root, refresh, bumpGit],
+  );
+
+  // There's a version to save when this is your own tracked repo with uncommitted
+  // changes. ⌘S opens the dialog (a missing git identity is surfaced there).
+  const canSaveVersion =
+    !!info && info.available && info.isRepo && info.dirty && kind === "personal" && !info.inParentRepo;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+        e.preventDefault(); // never let the browser's Save-page dialog through
+        if (canSaveVersion) setSaveOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canSaveVersion]);
+
   // ---- guard states -------------------------------------------------------
   if (!loaded) {
     return (
@@ -259,8 +300,24 @@ export default function SourceControl({ root }: { root: string }) {
         </>
       )}
 
-      {/* Commit history (the skill's saved versions) */}
-      <div className="px-3 pb-1 pt-4 text-[0.68rem] font-semibold uppercase tracking-wider text-muted">Versions</div>
+      {/* Saved versions (commit history) + the Save action. */}
+      <div className="flex items-center gap-2 px-3 pb-1 pt-4">
+        <span className="text-[0.68rem] font-semibold uppercase tracking-wider text-muted">Versions</span>
+        {info.dirty && (
+          <button
+            type="button"
+            onClick={() => setSaveOpen(true)}
+            disabled={busy}
+            title={info.hasIdentity ? "Save a version (⌘S)" : "Set a git identity first"}
+            className="ml-auto flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-[0.7rem] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+            Save
+          </button>
+        )}
+      </div>
       {log.length === 0 ? (
         <p className="px-3 pb-3 text-xs text-faint">No versions yet.</p>
       ) : (
@@ -280,7 +337,9 @@ export default function SourceControl({ root }: { root: string }) {
                   {c.message}
                 </span>
                 <span className="flex items-center gap-1.5 text-[0.66rem] text-faint">
-                  <code className="font-mono">{c.short}</code>
+                  <span className="font-medium text-muted" title={c.short}>
+                    Version {c.number}
+                  </span>
                   <span className="truncate">· {c.author}</span>
                   <span className="ml-auto shrink-0" title={c.isoDate}>
                     {c.relativeDate}
@@ -291,6 +350,22 @@ export default function SourceControl({ root }: { root: string }) {
             );
           })}
         </ul>
+      )}
+
+      {saveOpen && (
+        <SaveVersionDialog
+          root={root}
+          dirName={dirName}
+          tracked={info.isRepo}
+          hasIdentity={info.hasIdentity}
+          saving={committing}
+          error={commitErr}
+          onCommit={doCommit}
+          onClose={() => {
+            setSaveOpen(false);
+            setCommitErr(null);
+          }}
+        />
       )}
     </div>
   );

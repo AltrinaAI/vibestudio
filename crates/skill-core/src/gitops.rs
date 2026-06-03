@@ -37,6 +37,10 @@ pub struct Commit {
     /// ISO-8601 author date (for an absolute-date tooltip).
     iso_date: String,
     relative_date: String,
+    /// 1-based version number: the commit's position in linear history (first
+    /// commit = 1, newest = total). Monotonic for the single-user, no-merge repos
+    /// the studio creates.
+    number: usize,
 }
 
 /// One entry in the working tree's change set (a `git status` line).
@@ -83,6 +87,8 @@ pub struct CommitDetail {
     relative_date: String,
     diff: String,
     truncated: bool,
+    /// 1-based version number (this commit's position in linear history).
+    number: usize,
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
@@ -201,9 +207,15 @@ pub fn git_log(root: &str, limit: usize) -> Result<Vec<Commit>, String> {
     if !out.status.success() {
         return Ok(vec![]); // not a repo yet / no commits
     }
+    // Total commits reachable from HEAD → the newest commit's version number.
+    // Each line (newest first) is one history position, so line i has number
+    // total - i, correct even when the log is capped below the total.
+    let total: usize = git_ok(&root_path, &["rev-list", "--count", "HEAD"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     let text = String::from_utf8_lossy(&out.stdout);
     let mut commits = Vec::new();
-    for line in text.lines() {
+    for (i, line) in text.lines().enumerate() {
         let parts: Vec<&str> = line.split('\u{1f}').collect();
         if parts.len() == 6 {
             commits.push(Commit {
@@ -213,6 +225,7 @@ pub fn git_log(root: &str, limit: usize) -> Result<Vec<Commit>, String> {
                 author: parts[3].to_string(),
                 iso_date: parts[4].to_string(),
                 relative_date: parts[5].to_string(),
+                number: total.saturating_sub(i),
             });
         }
     }
@@ -366,6 +379,22 @@ pub fn git_worktree_diff(root: &str) -> Result<WorktreeDiff, String> {
     Ok(WorktreeDiff { files, diff, truncated })
 }
 
+/// The worktree's unified diff text only — the input for on-device commit-message
+/// generation (same content as `git_worktree_diff().diff`). Lives here so it can
+/// read the otherwise-private field; `commitmsg` consumes it.
+pub fn worktree_diff_text(root: &str) -> Result<String, String> {
+    Ok(git_worktree_diff(root)?.diff)
+}
+
+/// The subjects of the most recent `n` commits (newest first), for seeding the
+/// generator with the repo's existing commit style. Empty when there's no
+/// history yet or git is unavailable.
+pub fn recent_subjects(root: &str, n: usize) -> Vec<String> {
+    git_log(root, n)
+        .map(|commits| commits.into_iter().map(|c| c.message).collect())
+        .unwrap_or_default()
+}
+
 pub fn git_commit_diff(root: &str, sha: &str) -> Result<CommitDetail, String> {
     if !git_available() {
         return Err("Git isn't installed.".into());
@@ -398,6 +427,11 @@ pub fn git_commit_diff(root: &str, sha: &str) -> Result<CommitDetail, String> {
     let mut diff = String::new();
     let truncated = push_capped(&mut diff, String::from_utf8_lossy(&patch.stdout).trim_start_matches('\n'), MAX_DIFF_BYTES);
 
+    // Version number = commits reachable from this sha (its position in history).
+    let number: usize = git_ok(&root_path, &["rev-list", "--count", sha])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
     Ok(CommitDetail {
         sha: p[0].to_string(),
         short: p[1].to_string(),
@@ -409,6 +443,7 @@ pub fn git_commit_diff(root: &str, sha: &str) -> Result<CommitDetail, String> {
         relative_date: p[7].to_string(),
         diff,
         truncated,
+        number,
     })
 }
 
@@ -431,6 +466,23 @@ pub fn git_file_at(root: &str, rev: &str, path: &str) -> Result<String, String> 
         return Ok(String::new()); // absent at that rev → treat as empty (added)
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The tracked file paths at revision `rev` (a commit SHA or "HEAD"), for browsing
+/// a past version's files. `-z` keeps unicode/space paths literal (no quoting).
+pub fn git_files_at(root: &str, rev: &str) -> Result<Vec<String>, String> {
+    if !git_available() {
+        return Err("Git isn't installed.".into());
+    }
+    if rev != "HEAD" && !is_hex_rev(rev) {
+        return Err("Invalid revision.".into());
+    }
+    let out = git(&PathBuf::from(root), &["ls-tree", "-r", "--name-only", "-z", rev])?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(text.split('\0').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect())
 }
 
 /// Discard one path's working-tree changes back to HEAD: a tracked file is

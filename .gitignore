@@ -26,6 +26,9 @@
 /src-tauri/target
 **/target
 
+# vendored on-device LLM engine (fetched by scripts/fetch-engine.sh; not committed)
+/src-tauri/binaries
+
 # misc
 .DS_Store
 *.pem

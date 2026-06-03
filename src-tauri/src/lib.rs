@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use skill_core::{discover, gitops, secrets, skill, sync};
+use skill_core::{commitmsg, discover, engine, gitops, secrets, skill, sync};
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -135,6 +135,20 @@ async fn git_log(root: String, limit: usize) -> Result<Vec<gitops::Commit>, Stri
     gitops::git_log(&root, limit)
 }
 
+/// Draft a commit message from the skill's uncommitted diff, on-device. The
+/// first call may download the model and warm up the local engine.
+#[tauri::command]
+async fn generate_commit_message(root: String) -> Result<String, String> {
+    commitmsg::generate(&root)
+}
+
+/// Whether the on-device model is downloaded yet (so the UI can warn about the
+/// one-time first-run download before the user clicks Generate).
+#[tauri::command]
+async fn commit_model_status() -> Result<engine::ModelStatus, String> {
+    Ok(engine::model_status())
+}
+
 #[tauri::command]
 async fn git_status(root: String) -> Result<Vec<gitops::FileChange>, String> {
     gitops::git_status(&root)
@@ -153,6 +167,11 @@ async fn git_commit_diff(root: String, sha: String) -> Result<gitops::CommitDeta
 #[tauri::command]
 async fn git_file_at(root: String, rev: String, path: String) -> Result<String, String> {
     gitops::git_file_at(&root, &rev, &path)
+}
+
+#[tauri::command]
+async fn git_files_at(root: String, rev: String) -> Result<Vec<String>, String> {
+    gitops::git_files_at(&root, &rev)
 }
 
 #[tauri::command]
@@ -274,6 +293,38 @@ fn terminal_detach(state: State<'_, TermState>, id: String) -> Result<(), String
     Ok(())
 }
 
+/// Locate the bundled `llama-server` so the on-device commit-message generator
+/// runs with zero setup. Checks the production bundle (resource dir) then the
+/// dev-vendored tree (`src-tauri/binaries/<triple>/`, populated by
+/// `scripts/fetch-engine.sh`). Returns the first match.
+fn find_bundled_engine(app: &tauri::App) -> Option<std::path::PathBuf> {
+    let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+    let look = |base: std::path::PathBuf| -> Option<std::path::PathBuf> {
+        // base/<triple>/<exe> (one platform subdir), or base/<exe> directly.
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for e in entries.flatten() {
+                let c = e.path().join(exe);
+                if c.is_file() {
+                    return Some(c);
+                }
+            }
+        }
+        let direct = base.join(exe);
+        direct.is_file().then_some(direct)
+    };
+    let resource = app.path().resource_dir().ok().map(|r| r.join("binaries"));
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
+    // Release: the bundled resource copy. Dev: the repo SOURCE first — Tauri re-copies
+    // `binaries` into the target resource dir on rebuilds, and running the warm engine
+    // from the source (not the copy) keeps that copy free to overwrite (else ETXTBSY).
+    let order: Vec<std::path::PathBuf> = if cfg!(debug_assertions) {
+        std::iter::once(source).chain(resource).collect()
+    } else {
+        resource.into_iter().chain(std::iter::once(source)).collect()
+    };
+    order.into_iter().find_map(look)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -300,10 +351,13 @@ pub fn run() {
             git_init,
             git_commit,
             git_log,
+            generate_commit_message,
+            commit_model_status,
             git_status,
             git_worktree_diff,
             git_commit_diff,
             git_file_at,
+            git_files_at,
             git_discard,
             git_discard_all,
             secrets_status,
@@ -321,8 +375,16 @@ pub fn run() {
             terminal_detach,
         ])
         // Reap terminals orphaned by a previous (hard-killed) app process.
-        .setup(|_app| {
+        .setup(|app| {
             skill_term::sweep_orphans();
+            // Point the on-device generator at the bundled/vendored llama-server so
+            // it works with no config; an explicit env override still wins.
+            if std::env::var_os("SKILL_STUDIO_LLAMA_SERVER").is_none() {
+                if let Some(p) = find_bundled_engine(app) {
+                    std::env::set_var("SKILL_STUDIO_LLAMA_SERVER", p);
+                }
+            }
+            engine::reap_orphans(); // kill any engine orphaned by a previous hard-kill
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -331,6 +393,7 @@ pub fn run() {
             // Closing the desktop app reaps the agents it owns (no zombies).
             if let tauri::RunEvent::Exit = event {
                 skill_term::cleanup_owned();
+                engine::shutdown(); // reap the inference engine child too
             }
         });
 }

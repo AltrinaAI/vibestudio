@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::thread;
 
 use serde_json::{json, Value};
-use skill_core::{discover, gitops, secrets, skill, sync};
+use skill_core::{commitmsg, discover, engine, gitops, secrets, skill, sync};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 struct Reply {
@@ -206,6 +206,8 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
         (Method::Post, "/api/git-info") => json_reply(gitops::git_info(&s("root"))),
         (Method::Post, "/api/git-init") => json_reply(gitops::git_init(&s("root"))),
         (Method::Post, "/api/git-commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
+        (Method::Post, "/api/generate-commit-message") => json_reply(commitmsg::generate(&s("root"))),
+        (Method::Get, "/api/commit-model-status") => json_reply(Ok(engine::model_status())),
         (Method::Post, "/api/git-log") => {
             let limit = v.get("limit").and_then(|x| x.as_u64()).unwrap_or(20) as usize;
             json_reply(gitops::git_log(&s("root"), limit))
@@ -214,6 +216,7 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
         (Method::Post, "/api/git-worktree-diff") => json_reply(gitops::git_worktree_diff(&s("root"))),
         (Method::Post, "/api/git-commit-diff") => json_reply(gitops::git_commit_diff(&s("root"), &s("sha"))),
         (Method::Post, "/api/git-file-at") => json_reply(gitops::git_file_at(&s("root"), &s("rev"), &s("path"))),
+        (Method::Post, "/api/git-files-at") => json_reply(gitops::git_files_at(&s("root"), &s("rev"))),
         (Method::Post, "/api/git-discard") => {
             json_reply(gitops::git_discard(&s("root"), &s("path")).map(|_| json!({ "ok": true })))
         }
@@ -375,8 +378,10 @@ fn main() {
         }
     };
     println!("skill-server listening on http://{addr}  (dist: {})", dist.display());
-    // Reap any terminal sessions orphaned by a previous backend that died hard.
+    // Reap any terminal sessions / inference engines orphaned by a previous
+    // backend that died hard.
     skill_term::sweep_orphans();
+    engine::reap_orphans();
     if !dist.join("index.html").is_file() {
         println!("  note: {} has no index.html — run `npm run build` to serve the UI.", dist.display());
     }

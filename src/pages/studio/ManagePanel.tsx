@@ -43,6 +43,8 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
   const [err, setErr] = useState<string | null>(null);
   const [commitOpen, setCommitOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [modelStatus, setModelStatus] = useState<api.CommitModelStatus | null>(null);
 
   const refresh = useCallback(async () => {
     setErr(null);
@@ -78,6 +80,24 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
     setMessage(log.length === 0 ? "Initial version" : `Update ${dirName}`);
     setErr(null);
     setCommitOpen(true);
+    // So we can warn about the one-time model download before the user clicks Generate.
+    api.commitModelStatus().then(setModelStatus).catch(() => setModelStatus(null));
+  };
+  const generate = async () => {
+    if (generating || busy) return;
+    setGenerating(true);
+    setErr(null);
+    try {
+      const msg = await api.generateCommitMessage(root);
+      setMessage(msg);
+      // The model is now present; clear any "will download" hint.
+      setModelStatus((s) => (s ? { ...s, downloaded: true } : s));
+    } catch (e) {
+      // Tauri rejects with a plain string (the Rust Err), not an Error — surface it.
+      setErr(e instanceof Error ? e.message : typeof e === "string" ? e : "Couldn’t generate a message");
+    } finally {
+      setGenerating(false);
+    }
   };
   const doCommit = async () => {
     setBusy(true);
@@ -176,14 +196,30 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
                 placeholder="Describe what changed…"
                 className="w-full resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent"
               />
-              <div className="mt-2 flex justify-end gap-2">
-                <button type="button" onClick={() => setCommitOpen(false)} className={btnGhost}>
-                  Cancel
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={generate}
+                  disabled={busy || generating}
+                  title="Draft a message from your changes with on-device AI"
+                  className={btnGhost}
+                >
+                  {generating ? "Generating…" : "✨ Generate"}
                 </button>
-                <button type="button" onClick={doCommit} disabled={busy || !message.trim()} className={btnPrimary}>
-                  {busy ? "Saving…" : "Save version"}
-                </button>
+                <div className="ml-auto flex gap-2">
+                  <button type="button" onClick={() => setCommitOpen(false)} className={btnGhost}>
+                    Cancel
+                  </button>
+                  <button type="button" onClick={doCommit} disabled={busy || generating || !message.trim()} className={btnPrimary}>
+                    {busy ? "Saving…" : "Save version"}
+                  </button>
+                </div>
               </div>
+              {modelStatus && !modelStatus.downloaded && (
+                <p className="mt-2 text-[0.7rem] text-faint">
+                  First use downloads the local AI model (~1–1.5 GB), one time. Generation runs fully on your machine.
+                </p>
+              )}
             </div>
           )}
 

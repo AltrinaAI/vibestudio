@@ -13,6 +13,15 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    // The browser dev UI talks to the backend (skill-server) purely over HTTP —
+    // identical to the remote/separated deployment. Point VITE_API_TARGET at a
+    // backend on another machine for the VS Code-remote-style split.
+    proxy: {
+      "/api": {
+        target: process.env.VITE_API_TARGET ?? "http://127.0.0.1:8765",
+        changeOrigin: true,
+      },
+    },
     watch: {
       // Don't watch the Rust crate from Vite.
       ignored: ["**/src-tauri/**"],

@@ -68,7 +68,7 @@ export default function Sidebar({
 
       {/* Versions (git) — its own "New Changes" / "Versions" section headers. */}
       <div className="flex shrink-0 flex-col overflow-hidden" style={{ height: versionsH }}>
-        <SourceControl root={data.root} />
+        <SourceControl root={data.root} dirName={data.dirName} />
       </div>
     </aside>
   );
