@@ -207,6 +207,7 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
         (Method::Post, "/api/git-init") => json_reply(gitops::git_init(&s("root"))),
         (Method::Post, "/api/git-commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
         (Method::Post, "/api/generate-commit-message") => json_reply(commitmsg::generate(&s("root"))),
+        (Method::Post, "/api/peek-commit-message") => json_reply(commitmsg::peek(&s("root"))),
         (Method::Get, "/api/commit-model-status") => json_reply(Ok(engine::model_status())),
         (Method::Post, "/api/git-log") => {
             let limit = v.get("limit").and_then(|x| x.as_u64()).unwrap_or(20) as usize;
@@ -382,6 +383,7 @@ fn main() {
     // backend that died hard.
     skill_term::sweep_orphans();
     engine::reap_orphans();
+    engine::prefetch_model(); // download the model now so the first draft is fast
     if !dist.join("index.html").is_file() {
         println!("  note: {} has no index.html — run `npm run build` to serve the UI.", dist.display());
     }

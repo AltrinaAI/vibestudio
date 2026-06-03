@@ -1,0 +1,633 @@
+diff --git a/crates/skill-core/src/commitmsg.rs b/crates/skill-core/src/commitmsg.rs
+index 708b61a..6d38fd2 100644
+--- a/crates/skill-core/src/commitmsg.rs
++++ b/crates/skill-core/src/commitmsg.rs
+@@ -2,25 +2,42 @@
+ //! using the on-device `engine`. Transport-agnostic: both the Tauri command and
+ //! the headless server route call `generate`.
+ 
++use std::collections::HashMap;
++use std::sync::{Mutex, OnceLock};
++
+ use crate::engine::{self, ChatMessage};
+ use crate::gitops;
+ 
+ /// Diff bytes we put into the prompt. The worktree diff is capped at 2 MB
+-/// (gitops) — far more than a small model's context — so we further trim to a
+-/// few thousand tokens' worth here. Code tokenizes densely (~2–3 chars/token),
+-/// so ~12 KB leaves comfortable room for the system prompt + a short reply
+-/// within an 8K context.
+-const MAX_PROMPT_DIFF_BYTES: usize = 12_000;
++/// (gitops) — far more than a small model's context — so we further trim here.
++/// Code tokenizes densely (~2–3 chars/token); ~16 KB is roughly 6–7K tokens,
++/// which still leaves room for the system prompt + a short reply within an 8K
++/// context. We feed the real diff up to this cutoff (truncated, never reduced to
++/// a bare filename) plus a small per-file summary.
++const MAX_PROMPT_DIFF_BYTES: usize = 16_000;
+ 
+ /// Draft a commit message for the skill at `root`. Returns a ready-to-edit
+ /// message (the user still reviews it before committing).
++///
++/// Cached per `root` by a hash of the working-tree diff: a draft prepared eagerly
++/// in the background (once edits settle) is reused instantly when the Save dialog
++/// opens, and re-running on an unchanged diff is free. The model is deterministic
++/// for a given diff (fixed seed), so a cached message equals a regenerated one.
+ pub fn generate(root: &str) -> Result<String, String> {
+     let diff = gitops::worktree_diff_text(root)?;
+     if diff.trim().is_empty() {
+         return Err("No changes to describe — make some edits first.".into());
+     }
++    let hash = diff_hash(&diff);
++    if let Some(msg) = cached_for(root, hash) {
++        return Ok(msg); // diff is byte-for-byte unchanged → reuse, no model run
++    }
+     let prepared = prepare_diff(&diff, MAX_PROMPT_DIFF_BYTES);
+-    let subjects = gitops::recent_subjects(root, 5);
++    // Only feed real Conventional-Commits subjects as the style hint. Generic
++    // auto-generated history ("Initial commit", "Update <skill>" — including our
++    // own default Save message) otherwise biases the model toward equally generic,
++    // off-target output. When none qualify, the style hint is omitted entirely.
++    let subjects = conventional_subjects(gitops::recent_subjects(root, 8));
+     let messages = build_messages(&prepared, &subjects);
+ 
+     let raw = engine::chat(&messages, 256, 0.2)?;
+@@ -29,20 +46,66 @@ pub fn generate(root: &str) -> Result<String, String> {
+     if msg.is_empty() {
+         return Err("The AI didn't produce a usable message — try again.".into());
+     }
++    store_cached(root, hash, &msg);
+     Ok(msg)
+ }
+ 
+-/// Append the exact prompt + raw model output + final message to a log file, so
+-/// the inputs/outputs are inspectable. Off unless `SKILL_STUDIO_COMMIT_DEBUG` is
+-/// set; writes to `<data-dir>/skill-studio/commitmsg-debug.log`.
+-fn debug_log(root: &str, messages: &[ChatMessage], raw: &str, final_msg: &str) {
+-    if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_none() {
+-        return;
++/// Return the cached draft for `root` IF the working-tree diff is unchanged since
++/// it was generated — instant, and never runs the model or downloads anything (it
++/// only computes the cheap diff + a hash). `Ok(None)` means nothing is ready for
++/// the current diff, so the caller keeps its default. Used to pre-fill the Save
++/// dialog the moment it opens, so the eagerly-drafted message shows with no wait.
++pub fn peek(root: &str) -> Result<Option<String>, String> {
++    let diff = gitops::worktree_diff_text(root)?;
++    if diff.trim().is_empty() {
++        return Ok(None);
+     }
++    Ok(cached_for(root, diff_hash(&diff)))
++}
++
++// ─────────────────────────────── draft cache ───────────────────────────────
++
++/// The last generated message for a skill, tagged with the diff it describes.
++struct Cached {
++    diff_hash: u64,
++    message: String,
++}
++
++fn cache() -> &'static Mutex<HashMap<String, Cached>> {
++    static CACHE: OnceLock<Mutex<HashMap<String, Cached>>> = OnceLock::new();
++    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
++}
++
++fn diff_hash(diff: &str) -> u64 {
++    use std::hash::{Hash, Hasher};
++    let mut h = std::collections::hash_map::DefaultHasher::new();
++    diff.hash(&mut h);
++    h.finish()
++}
++
++/// The cached message for `root` only when it was drafted from this exact diff.
++fn cached_for(root: &str, hash: u64) -> Option<String> {
++    let guard = cache().lock().ok()?;
++    guard.get(root).filter(|c| c.diff_hash == hash).map(|c| c.message.clone())
++}
++
++/// Replace the cached entry for `root` (a new diff hash supersedes the old draft).
++fn store_cached(root: &str, hash: u64, message: &str) {
++    if let Ok(mut guard) = cache().lock() {
++        guard.insert(root.to_string(), Cached { diff_hash: hash, message: message.to_string() });
++    }
++}
++
++/// Record the exact prompt + raw model output + final message, so "why did it say
++/// that?" is always answerable. The latest generation is ALWAYS written (overwrite)
++/// to `<data-dir>/skill-studio/commitmsg-last.log`. Set `SKILL_STUDIO_COMMIT_DEBUG=1`
++/// to ALSO keep an appended history in `commitmsg-debug.log` (and to unsilence the
++/// llama-server logs).
++fn debug_log(root: &str, messages: &[ChatMessage], raw: &str, final_msg: &str) {
+     let Some(base) = dirs::data_dir() else { return };
+-    let path = base.join("skill-studio").join("commitmsg-debug.log");
+-    if let Some(parent) = path.parent() {
+-        let _ = std::fs::create_dir_all(parent);
++    let dir = base.join("skill-studio");
++    if std::fs::create_dir_all(&dir).is_err() {
++        return;
+     }
+     let mut entry = String::from("\n========== generate_commit_message ==========\n");
+     entry.push_str(&format!("root: {root}\n"));
+@@ -51,19 +114,48 @@ fn debug_log(root: &str, messages: &[ChatMessage], raw: &str, final_msg: &str) {
+     }
+     entry.push_str(&format!("\n----- raw model output -----\n{raw}\n"));
+     entry.push_str(&format!("\n----- final message -----\n{final_msg}\n"));
+-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+-        use std::io::Write;
+-        let _ = f.write_all(entry.as_bytes());
++
++    // Always available: the most recent generation, overwritten each call.
++    let _ = std::fs::write(dir.join("commitmsg-last.log"), &entry);
++    // Opt-in: the full appended history.
++    if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_some() {
++        if let Ok(mut f) =
++            std::fs::OpenOptions::new().create(true).append(true).open(dir.join("commitmsg-debug.log"))
++        {
++            use std::io::Write;
++            let _ = f.write_all(entry.as_bytes());
++        }
+     }
+ }
+ 
++/// The Conventional-Commits types we recognize as a "real" subject (vs generic
++/// auto-generated history like "Initial commit" or "Update <skill>").
++const COMMIT_TYPES: &[&str] = &[
++    "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert",
++];
++
++/// Keep only subjects already in `<type>(scope): …` form, so the style hint is
++/// seeded with genuine examples (or nothing) rather than placeholder messages.
++fn conventional_subjects(subjects: Vec<String>) -> Vec<String> {
++    subjects
++        .into_iter()
++        .filter(|s| {
++            let Some((head, _)) = s.split_once(':') else { return false };
++            let ty = head.split('(').next().unwrap_or("").trim();
++            COMMIT_TYPES.contains(&ty)
++        })
++        .collect()
++}
++
+ // ─────────────────────────────── prompt ───────────────────────────────
+ 
+ const SYSTEM_PROMPT: &str = "\
+ You write git commit messages in the Conventional Commits format. Rules:
++- Read the diff carefully: lines starting with + were ADDED, lines starting with - were REMOVED. Lines with no +/- prefix are unchanged context — NEVER describe them as changes. If a line was only edited, describe what the edit did, not what the surrounding context says.
++- Weigh the change by the per-file +/- summary: if a file is mostly removals, the change is a deletion/removal — say so (e.g. \"remove …\"), and don't call it an update. Describe the DOMINANT change, not a minor edit that happens to sit at the top of the diff.
+ - Format: <type>(<optional-scope>): <subject>
+ - type is one of: feat, fix, docs, style, refactor, perf, test, build, ci, chore
+-- subject: imperative present tense, lowercase first word, no trailing period, at most 60 characters
++- subject: imperative present tense, lowercase first word, no trailing period, at most 60 characters; name the specific thing that changed
+ - Optionally add a body after one blank line: 1-4 short bullet points explaining what changed and why, wrapped at 72 characters
+ - Output ONLY the commit message. No preamble, no explanation, no quotes, no markdown fences.";
+ 
+@@ -101,51 +193,82 @@ fn build_messages(prepared_diff: &str, subjects: &[String]) -> Vec<ChatMessage>
+ 
+ // ───────────────────────────── diff prep ─────────────────────────────
+ 
+-/// Trim the worktree diff to fit the model: split into per-file sections, drop
+-/// generated/lock/binary files, and include whole files until the byte budget is
+-/// hit (breadth over depth). Notes what was left out so the model knows the
+-/// change set is broader than what it sees.
++/// Build the model's view of the change: a short per-file SUMMARY (added/removed
++/// line counts) so the magnitude and DIRECTION of the change — e.g. a change that
++/// is overwhelmingly deletions — is unmissable, followed by the actual unified
++/// diff with lockfiles/binaries dropped. The diff is truncated at `budget` on a
++/// line boundary; we always emit real diff lines up to the cutoff (a partial hunk
++/// beats a bare filename), so the model never has to guess from metadata alone.
+ fn prepare_diff(diff: &str, budget: usize) -> String {
+     let sections = split_sections(diff);
+     if sections.is_empty() {
+         return truncate_on_boundary(diff, budget).to_string();
+     }
+ 
+-    let mut body = String::new();
++    // Per-file +/- counts for the summary, and the diff text we'll actually show.
++    let mut summary: Vec<String> = Vec::new();
++    let mut kept: Vec<(String, String)> = Vec::new();
+     let mut skipped: Vec<String> = Vec::new();
+-    let mut omitted: Vec<String> = Vec::new();
+     for (path, text) in sections {
++        let (added, removed) = count_changes(&text);
++        summary.push(format!("- {path}: +{added} -{removed}"));
+         if should_skip_path(&path) {
+             skipped.push(path);
+-            continue;
+-        }
+-        if body.len() + text.len() > budget {
+-            omitted.push(path);
+-            continue;
++        } else {
++            kept.push((path, text));
+         }
+-        body.push_str(&text);
+     }
+ 
+-    if body.is_empty() {
+-        // Everything was skipped or too large — give the model a file list to
+-        // summarize rather than nothing.
+-        let all: Vec<String> = skipped.into_iter().chain(omitted).collect();
+-        return format!("Changed files (no textual diff shown):\n{}", all.join("\n"));
+-    }
+-
+-    let mut notes: Vec<String> = Vec::new();
++    let mut out = String::from("Summary of changed files (added/removed lines):\n");
++    out.push_str(&summary.join("\n"));
+     if !skipped.is_empty() {
+-        notes.push(format!("Skipped generated/lock/binary files: {}", skipped.join(", ")));
++        out.push_str(&format!(
++            "\n(generated/lock/binary files excluded from the diff below: {})",
++            skipped.join(", ")
++        ));
++    }
++    out.push_str("\n\nDiff:\n");
++
++    // Append each kept file's diff, truncating once we'd exceed the budget — but
++    // always emitting real diff lines rather than dropping a file to its name.
++    let mut truncated = false;
++    for (path, text) in kept {
++        if out.len() >= budget {
++            truncated = true;
++            break;
++        }
++        let room = budget - out.len();
++        if text.len() <= room {
++            out.push_str(&text);
++        } else {
++            out.push_str(truncate_on_boundary(&text, room));
++            out.push_str(&format!("\n… [diff for {path} truncated to fit]\n"));
++            truncated = true;
++            break;
++        }
+     }
+-    if !omitted.is_empty() {
+-        notes.push(format!("Other changed files not shown (diff too large): {}", omitted.join(", ")));
++    if truncated {
++        out.push_str("\n# The diff was truncated to fit the budget — use the summary above for the full set of changes.\n");
+     }
+-    if !notes.is_empty() {
+-        body.push_str("\n# ");
+-        body.push_str(&notes.join("\n# "));
+-        body.push('\n');
++    out
++}
++
++/// Count added (`+`) and removed (`-`) content lines in one file's diff section,
++/// ignoring the `+++`/`---` file headers.
++fn count_changes(section: &str) -> (usize, usize) {
++    let mut added = 0;
++    let mut removed = 0;
++    for line in section.lines() {
++        if line.starts_with("+++") || line.starts_with("---") {
++            continue;
++        }
++        match line.as_bytes().first() {
++            Some(b'+') => added += 1,
++            Some(b'-') => removed += 1,
++            _ => {}
++        }
+     }
+-    body
++    (added, removed)
+ }
+ 
+ /// Split a unified diff into `(path, section_text)` pairs, one per file (each
+@@ -312,6 +435,31 @@ diff --git a/Cargo.lock b/Cargo.lock
+         assert_eq!(parse_diff_path("diff --git a/old.rs b/new.rs"), "new.rs");
+     }
+ 
++    #[test]
++    fn conventional_subjects_drops_generic_history() {
++        let got = conventional_subjects(vec![
++            "Update tesseract-debug".into(), // our default Save message — drop
++            "Initial commit".into(),         // git default — drop
++            "feat(api): add weather client".into(),
++            "fix: handle empty diff".into(),
++            "refactor stuff".into(), // no colon → drop
++            "wip: poking".into(),    // unknown type → drop
++        ]);
++        assert_eq!(got, vec!["feat(api): add weather client", "fix: handle empty diff"]);
++    }
++
++    #[test]
++    fn cache_roundtrip_is_diff_scoped() {
++        // Unique root so this never collides with another test sharing the static.
++        let root = "/tmp/skill-commitmsg-cache-test";
++        let h = diff_hash("diff --git a/x b/x\n+hello\n");
++        assert_eq!(cached_for(root, h), None, "empty cache is a miss");
++        store_cached(root, h, "feat: add hello");
++        assert_eq!(cached_for(root, h).as_deref(), Some("feat: add hello"));
++        // A different diff (different hash) must NOT return the stale draft.
++        assert_eq!(cached_for(root, diff_hash("other diff")), None);
++    }
++
+     #[test]
+     fn post_process_strips_think_fences_and_quotes() {
+         assert_eq!(post_process("<think>let me reason</think>\nfeat: add thing"), "feat: add thing");
+diff --git a/crates/skill-core/src/engine.rs b/crates/skill-core/src/engine.rs
+index cb38c70..1ec8d94 100644
+--- a/crates/skill-core/src/engine.rs
++++ b/crates/skill-core/src/engine.rs
+@@ -131,10 +131,40 @@ fn ensure_model() -> Result<PathBuf, String> {
+     if path.exists() {
+         return Ok(path);
+     }
++    // Serialize downloads: a startup prefetch and an on-demand generate can reach
++    // here at the same time — without this lock they'd both fetch the same ~1.4 GB
++    // file. Whoever loses the race re-checks and finds it already in place.
++    static DOWNLOAD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
++    let _dl = DOWNLOAD_LOCK
++        .get_or_init(|| Mutex::new(()))
++        .lock()
++        .map_err(|_| "Model download is unavailable (lock poisoned).".to_string())?;
++    if path.exists() {
++        return Ok(path); // another thread finished the download while we waited
++    }
+     download_model(spec, &path)?;
+     Ok(path)
+ }
+ 
++/// Kick off the model download in the background if it isn't present yet, so the
++/// first generation doesn't stall on a ~1.4 GB fetch. Fire-and-forget and
++/// idempotent (downloads are serialized in `ensure_model`) — call once at startup.
++/// Only downloads; the server is still spawned lazily on first `chat`, so this
++/// never loads the model into memory until it's actually used.
++pub fn prefetch_model() {
++    if model_status().downloaded {
++        return; // already cached (or a local override is in use)
++    }
++    std::thread::spawn(|| {
++        if let Err(e) = ensure_model() {
++            // Don't fail startup; the on-demand path surfaces the error in the UI.
++            if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_some() {
++                eprintln!("skill-studio: model prefetch failed: {e}");
++            }
++        }
++    });
++}
++
+ /// Stream the GGUF to a `.part` file, verify SHA-256 (when pinned), then
+ /// atomically rename into place so a partial download is never used.
+ fn download_model(spec: &ModelSpec, dest: &PathBuf) -> Result<(), String> {
+@@ -218,8 +248,15 @@ fn engine() -> &'static Mutex<Option<Engine>> {
+     ENGINE.get_or_init(|| Mutex::new(None))
+ }
+ 
+-/// Resolve the `llama-server` executable: env override, then next to our own
+-/// binary (where a Tauri externalBin sidecar lands), then `PATH`.
++/// Resolve the `llama-server` executable, in priority order:
++///   1. `SKILL_STUDIO_LLAMA_SERVER` (explicit override; the Tauri app also sets
++///      this to the bundled resource path on the user's machine).
++///   2. Next to our own binary (where a Tauri sidecar would land).
++///   3. The repo's vendored tree `<repo>/src-tauri/binaries/<triple>/` — covers
++///      every dev invocation (skill-server, `tauri dev`, `cargo test`) with no
++///      env var. In a shipped build this baked-in path doesn't exist, so it's
++///      skipped and (1) carries it.
++///   4. `PATH`.
+ fn engine_binary() -> PathBuf {
+     if let Ok(p) = std::env::var("SKILL_STUDIO_LLAMA_SERVER") {
+         if !p.is_empty() {
+@@ -235,9 +272,45 @@ fn engine_binary() -> PathBuf {
+             }
+         }
+     }
++    // skill-core's manifest is crates/skill-core, so the repo root is two up.
++    let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/binaries");
++    if let Some(p) = find_in_dir(&vendored, exe_name) {
++        return p;
++    }
+     PathBuf::from(exe_name) // fall back to PATH lookup
+ }
+ 
++/// Ensure the engine binary is executable — bundling it as an app resource can
++/// strip the exec bit on unix, which would make the spawn fail with EACCES.
++fn ensure_executable(bin: &std::path::Path) {
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::PermissionsExt;
++        if let Ok(meta) = std::fs::metadata(bin) {
++            let mode = meta.permissions().mode();
++            if mode & 0o111 == 0 {
++                let _ = std::fs::set_permissions(bin, std::fs::Permissions::from_mode(mode | 0o755));
++            }
++        }
++    }
++    #[cfg(not(unix))]
++    let _ = bin;
++}
++
++/// Find `<base>/<subdir>/<exe>` (one platform subdir) or `<base>/<exe>`.
++fn find_in_dir(base: &std::path::Path, exe: &str) -> Option<PathBuf> {
++    if let Ok(entries) = std::fs::read_dir(base) {
++        for e in entries.flatten() {
++            let cand = e.path().join(exe);
++            if cand.is_file() {
++                return Some(cand);
++            }
++        }
++    }
++    let direct = base.join(exe);
++    direct.is_file().then_some(direct)
++}
++
+ /// Prepend the engine binary's directory to the platform's dynamic-library search
+ /// path for the spawned child, so llama.cpp's sibling shared libs always load.
+ fn add_lib_path(cmd: &mut Command, dir: &std::path::Path) {
+@@ -269,6 +342,7 @@ fn free_port() -> Result<u16, String> {
+ fn spawn_one(model: &PathBuf, ctx: u32, ngl: u32) -> Result<Engine, String> {
+     let port = free_port()?;
+     let bin = engine_binary();
++    ensure_executable(&bin); // bundling as a resource can drop the exec bit on unix
+     let mut cmd = Command::new(&bin);
+     cmd.args([
+         "-m",
+diff --git a/crates/skill-server/src/main.rs b/crates/skill-server/src/main.rs
+index 967a917..06ed365 100644
+--- a/crates/skill-server/src/main.rs
++++ b/crates/skill-server/src/main.rs
+@@ -207,6 +207,7 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
+         (Method::Post, "/api/git-init") => json_reply(gitops::git_init(&s("root"))),
+         (Method::Post, "/api/git-commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
+         (Method::Post, "/api/generate-commit-message") => json_reply(commitmsg::generate(&s("root"))),
++        (Method::Post, "/api/peek-commit-message") => json_reply(commitmsg::peek(&s("root"))),
+         (Method::Get, "/api/commit-model-status") => json_reply(Ok(engine::model_status())),
+         (Method::Post, "/api/git-log") => {
+             let limit = v.get("limit").and_then(|x| x.as_u64()).unwrap_or(20) as usize;
+@@ -382,6 +383,7 @@ fn main() {
+     // backend that died hard.
+     skill_term::sweep_orphans();
+     engine::reap_orphans();
++    engine::prefetch_model(); // download the model now so the first draft is fast
+     if !dist.join("index.html").is_file() {
+         println!("  note: {} has no index.html — run `npm run build` to serve the UI.", dist.display());
+     }
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index cdd24a4..05a7019 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -149,6 +149,14 @@ async fn commit_model_status() -> Result<engine::ModelStatus, String> {
+     Ok(engine::model_status())
+ }
+ 
++/// A draft prepared in the background for this skill's current diff, or null when
++/// none is ready — never runs the model. Lets the Save dialog open with the
++/// eagerly-generated message already in place.
++#[tauri::command]
++async fn peek_commit_message(root: String) -> Result<Option<String>, String> {
++    commitmsg::peek(&root)
++}
++
+ #[tauri::command]
+ async fn git_status(root: String) -> Result<Vec<gitops::FileChange>, String> {
+     gitops::git_status(&root)
+@@ -353,6 +361,7 @@ pub fn run() {
+             git_log,
+             generate_commit_message,
+             commit_model_status,
++            peek_commit_message,
+             git_status,
+             git_worktree_diff,
+             git_commit_diff,
+@@ -385,6 +394,7 @@ pub fn run() {
+                 }
+             }
+             engine::reap_orphans(); // kill any engine orphaned by a previous hard-kill
++            engine::prefetch_model(); // start the one-time model download now, not on first Generate
+             Ok(())
+         })
+         .build(tauri::generate_context!())
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+index 9982e55..b837d19 100644
+--- a/src/lib/api.ts
++++ b/src/lib/api.ts
+@@ -389,6 +389,13 @@ export const commitModelStatus = () =>
+   isTauri
+     ? invoke<CommitModelStatus>("commit_model_status")
+     : http<CommitModelStatus>("GET", "commit-model-status");
++/** A draft already prepared in the background for `root`'s current diff, or null
++ *  when none is ready. Instant — never runs the model. Used to pre-fill the Save
++ *  dialog from the eagerly-generated message. */
++export const peekCommitMessage = (root: string) =>
++  isTauri
++    ? invoke<string | null>("peek_commit_message", { root })
++    : http<string | null>("POST", "peek-commit-message", { root });
+ export const gitStatus = (root: string) =>
+   isTauri ? invoke<GitFileChange[]>("git_status", { root }) : http<GitFileChange[]>("POST", "git-status", { root });
+ export const gitWorktreeDiff = (root: string) =>
+diff --git a/src/pages/studio/SaveVersionDialog.tsx b/src/pages/studio/SaveVersionDialog.tsx
+index eec3a3f..369cafb 100644
+--- a/src/pages/studio/SaveVersionDialog.tsx
++++ b/src/pages/studio/SaveVersionDialog.tsx
+@@ -41,35 +41,67 @@ export default function SaveVersionDialog({
+   // it's unknown, so don't block the FIRST version on it — let the commit run and
+   // surface the backend's identity error if one's truly missing.
+   const knownNoIdentity = tracked && !hasIdentity;
+-  const [message, setMessage] = useState(tracked ? `Update ${dirName}` : "Initial version");
++  const defaultMessage = tracked ? `Update ${dirName}` : "Initial version";
++  const [message, setMessage] = useState(defaultMessage);
+   const taRef = useRef<HTMLTextAreaElement>(null);
++  // Set once the user types, so a slow background draft never clobbers their text.
++  const userEdited = useRef(false);
+ 
+   // On-device "draft a message from the diff".
+   const [generating, setGenerating] = useState(false);
+   const [genErr, setGenErr] = useState<string | null>(null);
+   const [modelStatus, setModelStatus] = useState<api.CommitModelStatus | null>(null);
+ 
+-  useEffect(() => {
+-    taRef.current?.select();
+-    // So we can warn about the one-time model download before the user clicks Generate.
+-    api.commitModelStatus().then(setModelStatus).catch(() => setModelStatus(null));
+-  }, []);
+-
+-  const generate = async () => {
++  // Draft (or re-draft) a message from the diff with the on-device model. The
++  // backend reuses an eagerly-prepared draft when the diff is unchanged, so this
++  // is usually instant. `auto` is the silent open-the-dialog path: it won't
++  // overwrite text the user already started typing, and stays quiet on failure
++  // (e.g. nothing to describe) — the explicit button surfaces errors.
++  const generate = async (auto = false) => {
+     if (generating || saving) return;
+     setGenerating(true);
+     setGenErr(null);
+     try {
+       const msg = await api.generateCommitMessage(root);
+-      setMessage(msg); // replace the default message with the AI draft
++      if (!auto || !userEdited.current) {
++        setMessage(msg);
++        requestAnimationFrame(() => taRef.current?.select());
++      }
+       setModelStatus((s) => (s ? { ...s, downloaded: true } : s));
+     } catch (e) {
+       // Tauri rejects with a plain string (the Rust Err), not an Error — surface it.
+-      setGenErr(e instanceof Error ? e.message : typeof e === "string" ? e : "Couldn’t generate a message");
++      if (!auto) setGenErr(e instanceof Error ? e.message : typeof e === "string" ? e : "Couldn’t generate a message");
+     } finally {
+       setGenerating(false);
+     }
+   };
++
++  useEffect(() => {
++    taRef.current?.select();
++    // So we can warn about the one-time model download before generation runs.
++    api.commitModelStatus().then(setModelStatus).catch(() => setModelStatus(null));
++    // Auto-populate with the AI message. Prefer the eagerly-prepared draft (peek
++    // is instant and never runs the model); if none is ready for the current diff,
++    // draft one now so the box fills itself instead of showing the placeholder.
++    let cancelled = false;
++    (async () => {
++      try {
++        const draft = await api.peekCommitMessage(root);
++        if (cancelled) return;
++        if (draft) {
++          setMessage((cur) => (cur === defaultMessage && !userEdited.current ? draft : cur));
++          requestAnimationFrame(() => taRef.current?.select());
++          return;
++        }
++      } catch {
++        /* no draft ready → fall through to generating one */
++      }
++      if (!cancelled) void generate(true);
++    })();
++    return () => {
++      cancelled = true;
++    };
++  }, []);
+   useEffect(() => {
+     const onKey = (e: KeyboardEvent) => e.key === "Escape" && !saving && onClose();
+     window.addEventListener("keydown", onKey);
+@@ -100,7 +132,10 @@ export default function SaveVersionDialog({
+           <textarea
+             ref={taRef}
+             value={message}
+-            onChange={(e) => setMessage(e.target.value)}
++            onChange={(e) => {
++              userEdited.current = true;
++              setMessage(e.target.value);
++            }}
+             onKeyDown={(e) => {
+               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                 e.preventDefault();
+diff --git a/src/pages/studio/StudioRoute.tsx b/src/pages/studio/StudioRoute.tsx
+index 9d04fba..75fc656 100644
+--- a/src/pages/studio/StudioRoute.tsx
++++ b/src/pages/studio/StudioRoute.tsx
+@@ -9,6 +9,7 @@ import type { SkillData } from "@/lib/types";
+ import { reconcileRequiredEnv, runSaveHooks } from "./saveHooks";
+ import { isEditorDirty } from "@/lib/editorState";
+ import { StudioProvider, skillName } from "./StudioContext";
++import { useEagerCommitDraft } from "./useEagerCommitDraft";
+ import StudioLayout from "./StudioLayout";
+ 
+ /** Idle delay before the post-save pipeline (reconcile) runs, so a burst of
+@@ -90,6 +91,11 @@ export function Component() {
+ 
+   const bumpGit = useCallback(() => setGitVersion((v) => v + 1), []);
+ 
++  // Eagerly draft a commit message in the background once edits settle, so the
++  // Save dialog opens with it ready (no ~10s wait). Keyed off the routed root,
++  // which is always present — so this hook runs above the loading/error returns.
++  useEagerCommitDraft(root);
++
+   // Git changed on disk from within the app (commit / discard). Bump gitVersion
+   // so open diff overlays refetch their HEAD baseline; re-read the skill so the
+   // editor reflects reverted content, remounting it (docVersion) only when it's

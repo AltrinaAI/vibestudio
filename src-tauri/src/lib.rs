@@ -149,6 +149,14 @@ async fn commit_model_status() -> Result<engine::ModelStatus, String> {
     Ok(engine::model_status())
 }
 
+/// A draft prepared in the background for this skill's current diff, or null when
+/// none is ready — never runs the model. Lets the Save dialog open with the
+/// eagerly-generated message already in place.
+#[tauri::command]
+async fn peek_commit_message(root: String) -> Result<Option<String>, String> {
+    commitmsg::peek(&root)
+}
+
 #[tauri::command]
 async fn git_status(root: String) -> Result<Vec<gitops::FileChange>, String> {
     gitops::git_status(&root)
@@ -353,6 +361,7 @@ pub fn run() {
             git_log,
             generate_commit_message,
             commit_model_status,
+            peek_commit_message,
             git_status,
             git_worktree_diff,
             git_commit_diff,
@@ -385,6 +394,7 @@ pub fn run() {
                 }
             }
             engine::reap_orphans(); // kill any engine orphaned by a previous hard-kill
+            engine::prefetch_model(); // start the one-time model download now, not on first Generate
             Ok(())
         })
         .build(tauri::generate_context!())

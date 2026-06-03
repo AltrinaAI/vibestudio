@@ -131,8 +131,38 @@ fn ensure_model() -> Result<PathBuf, String> {
     if path.exists() {
         return Ok(path);
     }
+    // Serialize downloads: a startup prefetch and an on-demand generate can reach
+    // here at the same time — without this lock they'd both fetch the same ~1.4 GB
+    // file. Whoever loses the race re-checks and finds it already in place.
+    static DOWNLOAD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _dl = DOWNLOAD_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Model download is unavailable (lock poisoned).".to_string())?;
+    if path.exists() {
+        return Ok(path); // another thread finished the download while we waited
+    }
     download_model(spec, &path)?;
     Ok(path)
+}
+
+/// Kick off the model download in the background if it isn't present yet, so the
+/// first generation doesn't stall on a ~1.4 GB fetch. Fire-and-forget and
+/// idempotent (downloads are serialized in `ensure_model`) — call once at startup.
+/// Only downloads; the server is still spawned lazily on first `chat`, so this
+/// never loads the model into memory until it's actually used.
+pub fn prefetch_model() {
+    if model_status().downloaded {
+        return; // already cached (or a local override is in use)
+    }
+    std::thread::spawn(|| {
+        if let Err(e) = ensure_model() {
+            // Don't fail startup; the on-demand path surfaces the error in the UI.
+            if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_some() {
+                eprintln!("skill-studio: model prefetch failed: {e}");
+            }
+        }
+    });
 }
 
 /// Stream the GGUF to a `.part` file, verify SHA-256 (when pinned), then
@@ -218,8 +248,15 @@ fn engine() -> &'static Mutex<Option<Engine>> {
     ENGINE.get_or_init(|| Mutex::new(None))
 }
 
-/// Resolve the `llama-server` executable: env override, then next to our own
-/// binary (where a Tauri externalBin sidecar lands), then `PATH`.
+/// Resolve the `llama-server` executable, in priority order:
+///   1. `SKILL_STUDIO_LLAMA_SERVER` (explicit override; the Tauri app also sets
+///      this to the bundled resource path on the user's machine).
+///   2. Next to our own binary (where a Tauri sidecar would land).
+///   3. The repo's vendored tree `<repo>/src-tauri/binaries/<triple>/` — covers
+///      every dev invocation (skill-server, `tauri dev`, `cargo test`) with no
+///      env var. In a shipped build this baked-in path doesn't exist, so it's
+///      skipped and (1) carries it.
+///   4. `PATH`.
 fn engine_binary() -> PathBuf {
     if let Ok(p) = std::env::var("SKILL_STUDIO_LLAMA_SERVER") {
         if !p.is_empty() {
@@ -235,7 +272,43 @@ fn engine_binary() -> PathBuf {
             }
         }
     }
+    // skill-core's manifest is crates/skill-core, so the repo root is two up.
+    let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/binaries");
+    if let Some(p) = find_in_dir(&vendored, exe_name) {
+        return p;
+    }
     PathBuf::from(exe_name) // fall back to PATH lookup
+}
+
+/// Ensure the engine binary is executable — bundling it as an app resource can
+/// strip the exec bit on unix, which would make the spawn fail with EACCES.
+fn ensure_executable(bin: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(bin) {
+            let mode = meta.permissions().mode();
+            if mode & 0o111 == 0 {
+                let _ = std::fs::set_permissions(bin, std::fs::Permissions::from_mode(mode | 0o755));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = bin;
+}
+
+/// Find `<base>/<subdir>/<exe>` (one platform subdir) or `<base>/<exe>`.
+fn find_in_dir(base: &std::path::Path, exe: &str) -> Option<PathBuf> {
+    if let Ok(entries) = std::fs::read_dir(base) {
+        for e in entries.flatten() {
+            let cand = e.path().join(exe);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    let direct = base.join(exe);
+    direct.is_file().then_some(direct)
 }
 
 /// Prepend the engine binary's directory to the platform's dynamic-library search
@@ -269,6 +342,7 @@ fn free_port() -> Result<u16, String> {
 fn spawn_one(model: &PathBuf, ctx: u32, ngl: u32) -> Result<Engine, String> {
     let port = free_port()?;
     let bin = engine_binary();
+    ensure_executable(&bin); // bundling as a resource can drop the exec bit on unix
     let mut cmd = Command::new(&bin);
     cmd.args([
         "-m",
@@ -364,7 +438,16 @@ impl ChatMessage {
 /// Send a chat completion to the (lazily started, warm-kept) engine and return
 /// the assistant's text. Serialized through a global lock — one generation at a
 /// time, which is all a single-user desktop needs.
-pub fn chat(messages: &[ChatMessage], max_tokens: u32, temperature: f32) -> Result<String, String> {
+/// `response_format`, when set, is forwarded verbatim (e.g. an OpenAI-style
+/// `{"type":"json_schema","json_schema":{…}}`). llama-server compiles the schema
+/// into a GBNF grammar and constrains the output to valid JSON — we use this to
+/// make the model produce an `analysis` field before the `commit_message`.
+pub fn chat(
+    messages: &[ChatMessage],
+    max_tokens: u32,
+    temperature: f32,
+    response_format: Option<serde_json::Value>,
+) -> Result<String, String> {
     let model = ensure_model()?;
     let ctx = active_spec().ctx;
 
@@ -388,6 +471,9 @@ pub fn chat(messages: &[ChatMessage], max_tokens: u32, temperature: f32) -> Resu
         /// empty — fatal for terse commit messages. Disabling it yields the message
         /// directly. Harmless for non-thinking models (the kwarg is just unused).
         chat_template_kwargs: serde_json::Value,
+        /// JSON-schema / grammar constraint (omitted when None).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        response_format: Option<serde_json::Value>,
     }
     let body = serde_json::to_string(&ChatRequest {
         messages,
@@ -396,6 +482,7 @@ pub fn chat(messages: &[ChatMessage], max_tokens: u32, temperature: f32) -> Resu
         seed: 42,
         stream: false,
         chat_template_kwargs: serde_json::json!({ "enable_thinking": false }),
+        response_format,
     })
     .map_err(|e| format!("Couldn't build the AI request: {e}"))?;
 

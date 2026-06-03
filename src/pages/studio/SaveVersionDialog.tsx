@@ -41,35 +41,67 @@ export default function SaveVersionDialog({
   // it's unknown, so don't block the FIRST version on it — let the commit run and
   // surface the backend's identity error if one's truly missing.
   const knownNoIdentity = tracked && !hasIdentity;
-  const [message, setMessage] = useState(tracked ? `Update ${dirName}` : "Initial version");
+  const defaultMessage = tracked ? `Update ${dirName}` : "Initial version";
+  const [message, setMessage] = useState(defaultMessage);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // Set once the user types, so a slow background draft never clobbers their text.
+  const userEdited = useRef(false);
 
   // On-device "draft a message from the diff".
   const [generating, setGenerating] = useState(false);
   const [genErr, setGenErr] = useState<string | null>(null);
   const [modelStatus, setModelStatus] = useState<api.CommitModelStatus | null>(null);
 
-  useEffect(() => {
-    taRef.current?.select();
-    // So we can warn about the one-time model download before the user clicks Generate.
-    api.commitModelStatus().then(setModelStatus).catch(() => setModelStatus(null));
-  }, []);
-
-  const generate = async () => {
+  // Draft (or re-draft) a message from the diff with the on-device model. The
+  // backend reuses an eagerly-prepared draft when the diff is unchanged, so this
+  // is usually instant. `auto` is the silent open-the-dialog path: it won't
+  // overwrite text the user already started typing, and stays quiet on failure
+  // (e.g. nothing to describe) — the explicit button surfaces errors.
+  const generate = async (auto = false) => {
     if (generating || saving) return;
     setGenerating(true);
     setGenErr(null);
     try {
       const msg = await api.generateCommitMessage(root);
-      setMessage(msg); // replace the default message with the AI draft
+      if (!auto || !userEdited.current) {
+        setMessage(msg);
+        requestAnimationFrame(() => taRef.current?.select());
+      }
       setModelStatus((s) => (s ? { ...s, downloaded: true } : s));
     } catch (e) {
       // Tauri rejects with a plain string (the Rust Err), not an Error — surface it.
-      setGenErr(e instanceof Error ? e.message : typeof e === "string" ? e : "Couldn’t generate a message");
+      if (!auto) setGenErr(e instanceof Error ? e.message : typeof e === "string" ? e : "Couldn’t generate a message");
     } finally {
       setGenerating(false);
     }
   };
+
+  useEffect(() => {
+    taRef.current?.select();
+    // So we can warn about the one-time model download before generation runs.
+    api.commitModelStatus().then(setModelStatus).catch(() => setModelStatus(null));
+    // Auto-populate with the AI message. Prefer the eagerly-prepared draft (peek
+    // is instant and never runs the model); if none is ready for the current diff,
+    // draft one now so the box fills itself instead of showing the placeholder.
+    let cancelled = false;
+    (async () => {
+      try {
+        const draft = await api.peekCommitMessage(root);
+        if (cancelled) return;
+        if (draft) {
+          setMessage((cur) => (cur === defaultMessage && !userEdited.current ? draft : cur));
+          requestAnimationFrame(() => taRef.current?.select());
+          return;
+        }
+      } catch {
+        /* no draft ready → fall through to generating one */
+      }
+      if (!cancelled) void generate(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && !saving && onClose();
     window.addEventListener("keydown", onKey);
@@ -100,7 +132,10 @@ export default function SaveVersionDialog({
           <textarea
             ref={taRef}
             value={message}
-            onChange={(e) => setMessage(e.target.value)}
+            onChange={(e) => {
+              userEdited.current = true;
+              setMessage(e.target.value);
+            }}
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                 e.preventDefault();

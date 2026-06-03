@@ -9,6 +9,7 @@ import type { SkillData } from "@/lib/types";
 import { reconcileRequiredEnv, runSaveHooks } from "./saveHooks";
 import { isEditorDirty } from "@/lib/editorState";
 import { StudioProvider, skillName } from "./StudioContext";
+import { useEagerCommitDraft } from "./useEagerCommitDraft";
 import StudioLayout from "./StudioLayout";
 
 /** Idle delay before the post-save pipeline (reconcile) runs, so a burst of
@@ -89,6 +90,11 @@ export function Component() {
   );
 
   const bumpGit = useCallback(() => setGitVersion((v) => v + 1), []);
+
+  // Eagerly draft a commit message in the background once edits settle, so the
+  // Save dialog opens with it ready (no ~10s wait). Keyed off the routed root,
+  // which is always present — so this hook runs above the loading/error returns.
+  useEagerCommitDraft(root);
 
   // Git changed on disk from within the app (commit / discard). Bump gitVersion
   // so open diff overlays refetch their HEAD baseline; re-read the skill so the

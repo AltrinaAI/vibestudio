@@ -2,47 +2,149 @@
 //! using the on-device `engine`. Transport-agnostic: both the Tauri command and
 //! the headless server route call `generate`.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use crate::engine::{self, ChatMessage};
 use crate::gitops;
 
 /// Diff bytes we put into the prompt. The worktree diff is capped at 2 MB
-/// (gitops) — far more than a small model's context — so we further trim to a
-/// few thousand tokens' worth here. Code tokenizes densely (~2–3 chars/token),
-/// so ~12 KB leaves comfortable room for the system prompt + a short reply
-/// within an 8K context.
-const MAX_PROMPT_DIFF_BYTES: usize = 12_000;
+/// (gitops) — far more than a small model's context — so we further trim here.
+/// Code tokenizes densely (~2–3 chars/token); ~16 KB is roughly 6–7K tokens,
+/// which still leaves room for the system prompt + a short reply within an 8K
+/// context. We feed the real diff up to this cutoff (truncated, never reduced to
+/// a bare filename) plus a small per-file summary.
+const MAX_PROMPT_DIFF_BYTES: usize = 16_000;
 
 /// Draft a commit message for the skill at `root`. Returns a ready-to-edit
 /// message (the user still reviews it before committing).
+///
+/// Cached per `root` by a hash of the working-tree diff: a draft prepared eagerly
+/// in the background (once edits settle) is reused instantly when the Save dialog
+/// opens, and re-running on an unchanged diff is free. The model is deterministic
+/// for a given diff (fixed seed), so a cached message equals a regenerated one.
 pub fn generate(root: &str) -> Result<String, String> {
     let diff = gitops::worktree_diff_text(root)?;
     if diff.trim().is_empty() {
         return Err("No changes to describe — make some edits first.".into());
     }
-    let prepared = prepare_diff(&diff, MAX_PROMPT_DIFF_BYTES);
-    let subjects = gitops::recent_subjects(root, 5);
-    let messages = build_messages(&prepared, &subjects);
+    let hash = diff_hash(&diff);
+    if let Some(msg) = cached_for(root, hash) {
+        return Ok(msg); // diff is byte-for-byte unchanged → reuse, no model run
+    }
+    // Minimal prompt: analyse first, then commit. Structured output forces the
+    // model to reason in an `analysis` field BEFORE the `commit_message` (the
+    // schema's field order = generation order), which makes it actually read the
+    // diff instead of anchoring on the top — a big quality win for free.
+    //
+    // These are version notes for a skill author, NOT code commits: a plain
+    // one-line description of what changed, with no `feat:`/`fix:`/type prefix.
+    let prompt = format!(
+        "Analyze the following git diff in no more than 100 words, then write a commit message. \
+The message must be one short, plain-English sentence describing what changed — with no \
+\"feat:\"/\"fix:\"/type prefix and no filename prefix, just the description.\n\nDiff:\n{}",
+        truncate_on_boundary(&diff, MAX_PROMPT_DIFF_BYTES)
+    );
+    let messages = vec![ChatMessage::new("user", prompt)];
 
-    let raw = engine::chat(&messages, 256, 0.2)?;
-    let msg = post_process(&raw);
+    let raw = engine::chat(&messages, 400, 0.2, Some(commit_schema()))?;
+    let msg = post_process(&extract_commit_message(&raw));
     debug_log(root, &messages, &raw, &msg);
     if msg.is_empty() {
         return Err("The AI didn't produce a usable message — try again.".into());
     }
+    store_cached(root, hash, &msg);
     Ok(msg)
 }
 
-/// Append the exact prompt + raw model output + final message to a log file, so
-/// the inputs/outputs are inspectable. Off unless `SKILL_STUDIO_COMMIT_DEBUG` is
-/// set; writes to `<data-dir>/skill-studio/commitmsg-debug.log`.
-fn debug_log(root: &str, messages: &[ChatMessage], raw: &str, final_msg: &str) {
-    if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_none() {
-        return;
+/// Return the cached draft for `root` IF the working-tree diff is unchanged since
+/// it was generated — instant, and never runs the model or downloads anything (it
+/// only computes the cheap diff + a hash). `Ok(None)` means nothing is ready for
+/// the current diff, so the caller keeps its default. Used to pre-fill the Save
+/// dialog the moment it opens, so the eagerly-drafted message shows with no wait.
+pub fn peek(root: &str) -> Result<Option<String>, String> {
+    let diff = gitops::worktree_diff_text(root)?;
+    if diff.trim().is_empty() {
+        return Ok(None);
     }
+    Ok(cached_for(root, diff_hash(&diff)))
+}
+
+// ─────────────────────────────── draft cache ───────────────────────────────
+
+/// The last generated message for a skill, tagged with the diff it describes.
+struct Cached {
+    diff_hash: u64,
+    message: String,
+}
+
+fn cache() -> &'static Mutex<HashMap<String, Cached>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Cached>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn diff_hash(diff: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    diff.hash(&mut h);
+    h.finish()
+}
+
+/// The cached message for `root` only when it was drafted from this exact diff.
+fn cached_for(root: &str, hash: u64) -> Option<String> {
+    let guard = cache().lock().ok()?;
+    guard.get(root).filter(|c| c.diff_hash == hash).map(|c| c.message.clone())
+}
+
+/// Replace the cached entry for `root` (a new diff hash supersedes the old draft).
+fn store_cached(root: &str, hash: u64, message: &str) {
+    if let Ok(mut guard) = cache().lock() {
+        guard.insert(root.to_string(), Cached { diff_hash: hash, message: message.to_string() });
+    }
+}
+
+/// The JSON-schema `response_format` passed to the engine: an `analysis` (the
+/// model's reasoning, generated first because it's listed first) followed by the
+/// `commit_message`. Constraining to this schema is what guarantees the model
+/// thinks before it writes — and that we can parse the result.
+fn commit_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "json_schema",
+        "json_schema": {
+            "name": "commit",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "analysis": { "type": "string", "maxLength": 700 },
+                    "commit_message": { "type": "string" }
+                },
+                "required": ["analysis", "commit_message"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+/// Pull `commit_message` out of the model's structured JSON reply. Falls back to
+/// the raw text if it somehow isn't the expected JSON (grammar-constrained output
+/// makes that unlikely, but we never want to surface a raw JSON blob to the user).
+fn extract_commit_message(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get("commit_message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| raw.to_string())
+}
+
+/// Record the exact prompt + raw model output + final message, so "why did it say
+/// that?" is always answerable. The latest generation is ALWAYS written (overwrite)
+/// to `<data-dir>/skill-studio/commitmsg-last.log`. Set `SKILL_STUDIO_COMMIT_DEBUG=1`
+/// to ALSO keep an appended history in `commitmsg-debug.log` (and to unsilence the
+/// llama-server logs).
+fn debug_log(root: &str, messages: &[ChatMessage], raw: &str, final_msg: &str) {
     let Some(base) = dirs::data_dir() else { return };
-    let path = base.join("skill-studio").join("commitmsg-debug.log");
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let dir = base.join("skill-studio");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
     }
     let mut entry = String::from("\n========== generate_commit_message ==========\n");
     entry.push_str(&format!("root: {root}\n"));
@@ -51,154 +153,24 @@ fn debug_log(root: &str, messages: &[ChatMessage], raw: &str, final_msg: &str) {
     }
     entry.push_str(&format!("\n----- raw model output -----\n{raw}\n"));
     entry.push_str(&format!("\n----- final message -----\n{final_msg}\n"));
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        use std::io::Write;
-        let _ = f.write_all(entry.as_bytes());
-    }
-}
 
-// ─────────────────────────────── prompt ───────────────────────────────
-
-const SYSTEM_PROMPT: &str = "\
-You write git commit messages in the Conventional Commits format. Rules:
-- Format: <type>(<optional-scope>): <subject>
-- type is one of: feat, fix, docs, style, refactor, perf, test, build, ci, chore
-- subject: imperative present tense, lowercase first word, no trailing period, at most 60 characters
-- Optionally add a body after one blank line: 1-4 short bullet points explaining what changed and why, wrapped at 72 characters
-- Output ONLY the commit message. No preamble, no explanation, no quotes, no markdown fences.";
-
-const FEWSHOT_DIFF: &str = "\
-diff --git a/server.ts b/server.ts
---- a/server.ts
-+++ b/server.ts
-@@
--app.listen(3000)
-+const PORT = process.env.PORT || 3000
-+app.listen(PORT)";
-
-const FEWSHOT_ANSWER: &str = "refactor(server): read listen port from environment";
-
-fn build_messages(prepared_diff: &str, subjects: &[String]) -> Vec<ChatMessage> {
-    let mut user = String::from("Generate a Conventional Commits message for the following diff.");
-    if !subjects.is_empty() {
-        user.push_str("\nRecent commit subjects in this repo (match their style):\n");
-        for s in subjects {
-            user.push_str("- ");
-            user.push_str(s);
-            user.push('\n');
+    // Always available: the most recent generation, overwritten each call.
+    let _ = std::fs::write(dir.join("commitmsg-last.log"), &entry);
+    // Opt-in: the full appended history.
+    if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_some() {
+        if let Ok(mut f) =
+            std::fs::OpenOptions::new().create(true).append(true).open(dir.join("commitmsg-debug.log"))
+        {
+            use std::io::Write;
+            let _ = f.write_all(entry.as_bytes());
         }
     }
-    user.push_str("\nDiff:\n");
-    user.push_str(prepared_diff);
-
-    vec![
-        ChatMessage::new("system", SYSTEM_PROMPT),
-        ChatMessage::new("user", format!("Generate a Conventional Commits message for the following diff.\n\nDiff:\n{FEWSHOT_DIFF}")),
-        ChatMessage::new("assistant", FEWSHOT_ANSWER),
-        ChatMessage::new("user", user),
-    ]
 }
 
-// ───────────────────────────── diff prep ─────────────────────────────
-
-/// Trim the worktree diff to fit the model: split into per-file sections, drop
-/// generated/lock/binary files, and include whole files until the byte budget is
-/// hit (breadth over depth). Notes what was left out so the model knows the
-/// change set is broader than what it sees.
-fn prepare_diff(diff: &str, budget: usize) -> String {
-    let sections = split_sections(diff);
-    if sections.is_empty() {
-        return truncate_on_boundary(diff, budget).to_string();
-    }
-
-    let mut body = String::new();
-    let mut skipped: Vec<String> = Vec::new();
-    let mut omitted: Vec<String> = Vec::new();
-    for (path, text) in sections {
-        if should_skip_path(&path) {
-            skipped.push(path);
-            continue;
-        }
-        if body.len() + text.len() > budget {
-            omitted.push(path);
-            continue;
-        }
-        body.push_str(&text);
-    }
-
-    if body.is_empty() {
-        // Everything was skipped or too large — give the model a file list to
-        // summarize rather than nothing.
-        let all: Vec<String> = skipped.into_iter().chain(omitted).collect();
-        return format!("Changed files (no textual diff shown):\n{}", all.join("\n"));
-    }
-
-    let mut notes: Vec<String> = Vec::new();
-    if !skipped.is_empty() {
-        notes.push(format!("Skipped generated/lock/binary files: {}", skipped.join(", ")));
-    }
-    if !omitted.is_empty() {
-        notes.push(format!("Other changed files not shown (diff too large): {}", omitted.join(", ")));
-    }
-    if !notes.is_empty() {
-        body.push_str("\n# ");
-        body.push_str(&notes.join("\n# "));
-        body.push('\n');
-    }
-    body
-}
-
-/// Split a unified diff into `(path, section_text)` pairs, one per file (each
-/// file's hunk begins with a `diff --git ` line).
-fn split_sections(diff: &str) -> Vec<(String, String)> {
-    let mut sections = Vec::new();
-    let mut cur_path = String::new();
-    let mut cur = String::new();
-    for line in diff.lines() {
-        if line.starts_with("diff --git ") {
-            if !cur.is_empty() {
-                sections.push((std::mem::take(&mut cur_path), std::mem::take(&mut cur)));
-            }
-            cur_path = parse_diff_path(line);
-        }
-        cur.push_str(line);
-        cur.push('\n');
-    }
-    if !cur.is_empty() {
-        sections.push((cur_path, cur));
-    }
-    sections
-}
-
-/// The new-side path from a `diff --git a/<old> b/<new>` header.
-fn parse_diff_path(line: &str) -> String {
-    if let Some(idx) = line.rfind(" b/") {
-        return line[idx + 3..].trim().to_string();
-    }
-    line.trim_start_matches("diff --git ").trim().to_string()
-}
-
-/// Files whose textual diff adds noise without helping describe intent:
-/// lockfiles, build output, and binaries/assets.
-fn should_skip_path(path: &str) -> bool {
-    let p = path.to_ascii_lowercase();
-    if p.ends_with(".lock") || p.contains("-lock.") {
-        return true; // Cargo.lock, package-lock.json, pnpm-lock.yaml, yarn.lock, …
-    }
-    if p.starts_with("dist/")
-        || p.contains("/dist/")
-        || p.starts_with("target/")
-        || p.contains("/target/")
-        || p.contains("node_modules/")
-    {
-        return true;
-    }
-    const BIN_EXT: &[&str] = &[
-        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".svg", ".pdf", ".zip", ".gz", ".tar",
-        ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".mov", ".mp3", ".wasm", ".bin",
-    ];
-    BIN_EXT.iter().any(|e| p.ends_with(e))
-}
+// The prompt is deliberately minimal: a single user message of "Generate a commit
+// message for the following git diff:" + the raw worktree diff, truncated to
+// `MAX_PROMPT_DIFF_BYTES` on a line boundary. No system prompt, few-shot, recent
+// subjects, or per-file summary — see `generate`.
 
 fn truncate_on_boundary(s: &str, max: usize) -> &str {
     if s.len() <= max {
@@ -252,64 +224,24 @@ fn strip_wrapping_quotes(s: &str) -> String {
 mod tests {
     use super::*;
 
-    const SAMPLE_DIFF: &str = "\
-diff --git a/Cargo.lock b/Cargo.lock
-index 111..222 100644
---- a/Cargo.lock
-+++ b/Cargo.lock
-@@ -1,2 +1,2 @@
--old-locked-version
-+new-locked-version
-diff --git a/src/main.rs b/src/main.rs
-index aaa..bbb 100644
---- a/src/main.rs
-+++ b/src/main.rs
-@@ -1 +1 @@
--fn main() {}
-+fn main() { println!(\"hi\"); }
-";
-
     #[test]
-    fn prepare_diff_drops_lockfiles_keeps_code() {
-        let out = prepare_diff(SAMPLE_DIFF, MAX_PROMPT_DIFF_BYTES);
-        assert!(out.contains("src/main.rs"));
-        assert!(out.contains("println!"));
-        // The lockfile's content must not leak into the prompt.
-        assert!(!out.contains("new-locked-version"));
-        // …but the model is told it was skipped.
-        assert!(out.contains("Skipped generated/lock/binary files: Cargo.lock"));
+    fn cache_roundtrip_is_diff_scoped() {
+        // Unique root so this never collides with another test sharing the static.
+        let root = "/tmp/skill-commitmsg-cache-test";
+        let h = diff_hash("diff --git a/x b/x\n+hello\n");
+        assert_eq!(cached_for(root, h), None, "empty cache is a miss");
+        store_cached(root, h, "feat: add hello");
+        assert_eq!(cached_for(root, h).as_deref(), Some("feat: add hello"));
+        // A different diff (different hash) must NOT return the stale draft.
+        assert_eq!(cached_for(root, diff_hash("other diff")), None);
     }
 
     #[test]
-    fn prepare_diff_falls_back_to_file_list_when_all_skipped() {
-        let only_lock = "\
-diff --git a/Cargo.lock b/Cargo.lock
---- a/Cargo.lock
-+++ b/Cargo.lock
-@@ -1 +1 @@
--a
-+b
-";
-        let out = prepare_diff(only_lock, MAX_PROMPT_DIFF_BYTES);
-        assert!(out.contains("Changed files"));
-        assert!(out.contains("Cargo.lock"));
-        assert!(!out.contains("+b"));
-    }
-
-    #[test]
-    fn should_skip_path_matches_common_generated_files() {
-        for p in ["Cargo.lock", "package-lock.json", "pnpm-lock.yaml", "dist/app.js", "icons/logo.png", "node_modules/x/y.js"] {
-            assert!(should_skip_path(p), "expected to skip {p}");
-        }
-        for p in ["src/main.rs", "SKILL.md", "scripts/run.py"] {
-            assert!(!should_skip_path(p), "expected to keep {p}");
-        }
-    }
-
-    #[test]
-    fn parse_diff_path_reads_new_side() {
-        assert_eq!(parse_diff_path("diff --git a/src/main.rs b/src/main.rs"), "src/main.rs");
-        assert_eq!(parse_diff_path("diff --git a/old.rs b/new.rs"), "new.rs");
+    fn extract_commit_message_reads_structured_field() {
+        let raw = r#"{"analysis":"removed the body","commit_message":"docs: trim SKILL.md"}"#;
+        assert_eq!(extract_commit_message(raw), "docs: trim SKILL.md");
+        // Falls back to the raw text when it isn't the expected JSON object.
+        assert_eq!(extract_commit_message("docs: plain text"), "docs: plain text");
     }
 
     #[test]

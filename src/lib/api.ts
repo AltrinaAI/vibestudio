@@ -389,6 +389,13 @@ export const commitModelStatus = () =>
   isTauri
     ? invoke<CommitModelStatus>("commit_model_status")
     : http<CommitModelStatus>("GET", "commit-model-status");
+/** A draft already prepared in the background for `root`'s current diff, or null
+ *  when none is ready. Instant — never runs the model. Used to pre-fill the Save
+ *  dialog from the eagerly-generated message. */
+export const peekCommitMessage = (root: string) =>
+  isTauri
+    ? invoke<string | null>("peek_commit_message", { root })
+    : http<string | null>("POST", "peek-commit-message", { root });
 export const gitStatus = (root: string) =>
   isTauri ? invoke<GitFileChange[]>("git_status", { root }) : http<GitFileChange[]>("POST", "git-status", { root });
 export const gitWorktreeDiff = (root: string) =>
