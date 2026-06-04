@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Spinner, ThemeToggle } from "@/components/ui";
 import NavBar from "@/components/NavBar";
 import { FolderIcon } from "@/components/FileIcon";
@@ -71,13 +71,51 @@ function TerminalIcon() {
 const gridCls = "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4";
 const cardCls =
   "group flex flex-col gap-1.5 rounded-xl border border-border bg-surface p-3.5 text-left transition-colors hover:border-border-strong hover:bg-panel";
+// Proposed cards carry their own action buttons, so they're a static container
+// (not a button) and wear a faint info-tinted border to stand apart.
+const proposedCardCls =
+  "flex flex-col gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--info)_35%,transparent)] bg-surface p-3.5 text-left";
+const pillCls = "shrink-0 rounded-full px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wide";
+
+function CheckIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+/** Pill flagging a skill with uncommitted git changes in its own folder. */
+function ChangesTag() {
+  return (
+    <span
+      title="Uncommitted changes — open to review and save a version"
+      className={`inline-flex items-center gap-1 ${pillCls} bg-[color-mix(in_srgb,var(--warning)_16%,transparent)] text-warn`}
+    >
+      <span className="h-1 w-1 rounded-full bg-warn" aria-hidden />
+      Changes
+    </span>
+  );
+}
+
+/** Pill flagging a generated draft awaiting acceptance. */
+function ProposedTag() {
+  return (
+    <span
+      title="Proposed skill — accept to add it to your skills, or discard it"
+      className={`${pillCls} bg-[color-mix(in_srgb,var(--info)_16%,transparent)] text-info`}
+    >
+      Proposed
+    </span>
+  );
+}
 
 // Your own skills first, then official, then plugins; ties broken by name.
 const byKindThenName = (a: DiscoveredSkill, b: DiscoveredSkill) =>
   kindMeta(a.kind).rank - kindMeta(b.kind).rank ||
   (a.name ?? baseName(a.root)).localeCompare(b.name ?? baseName(b.root));
 
-function SkillCard({ skill, onOpen }: { skill: DiscoveredSkill; onOpen: (p: string) => void }) {
+function SkillCard({ skill, dirty, onOpen }: { skill: DiscoveredSkill; dirty?: boolean; onOpen: (p: string) => void }) {
   const name = skill.name ?? baseName(skill.root);
   const tag = KIND_TAG[kindMeta(skill.kind).kind];
   return (
@@ -85,7 +123,8 @@ function SkillCard({ skill, onOpen }: { skill: DiscoveredSkill; onOpen: (p: stri
       <div className="flex items-center gap-2">
         <FolderIcon open={false} name={name} />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{name}</span>
-        <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wide ${tag.cls}`}>
+        {dirty && <ChangesTag />}
+        <span className={`${pillCls} ${tag.cls}`}>
           {tag.label}
         </span>
       </div>
@@ -108,7 +147,7 @@ function SkillCard({ skill, onOpen }: { skill: DiscoveredSkill; onOpen: (p: stri
 // One section per agent (the skill's source). Only your own skills show as cards;
 // everything you didn't author — built-in/official skills and third-party plugins —
 // collapses together behind a single toggle (default collapsed).
-function AgentSection({ group, onOpen }: { group: AgentSkills; onOpen: (p: string) => void }) {
+function AgentSection({ group, dirtyRoots, onOpen }: { group: AgentSkills; dirtyRoots: Set<string>; onOpen: (p: string) => void }) {
   const [showBundled, setShowBundled] = useState(false);
   if (group.skills.length === 0) return null;
   const own = group.skills.filter((s) => kindMeta(s.kind).kind === "personal").sort(byKindThenName);
@@ -154,7 +193,7 @@ function AgentSection({ group, onOpen }: { group: AgentSkills; onOpen: (p: strin
       {own.length > 0 && (
         <div className={gridCls}>
           {own.map((s) => (
-            <SkillCard key={s.root} skill={s} onOpen={onOpen} />
+            <SkillCard key={s.root} skill={s} dirty={dirtyRoots.has(s.root)} onOpen={onOpen} />
           ))}
         </div>
       )}
@@ -174,12 +213,114 @@ function AgentSection({ group, onOpen }: { group: AgentSkills; onOpen: (p: strin
           {showBundled && (
             <div className={`mt-3 ${gridCls}`}>
               {bundled.map((s) => (
-                <SkillCard key={s.root} skill={s} onOpen={onOpen} />
+                <SkillCard key={s.root} skill={s} dirty={dirtyRoots.has(s.root)} onOpen={onOpen} />
               ))}
             </div>
           )}
         </div>
       )}
+    </section>
+  );
+}
+
+// A generated draft staged under `generated-skills/`. Unlike a SkillCard it isn't
+// a single button — it carries Open / Accept / Discard actions — so it's a static
+// container with its own controls.
+function ProposedCard({
+  skill,
+  busy,
+  onOpen,
+  onAccept,
+  onDiscard,
+}: {
+  skill: DiscoveredSkill;
+  busy: boolean;
+  onOpen: (p: string) => void;
+  onAccept: (root: string) => void;
+  onDiscard: (root: string, name: string) => void;
+}) {
+  const name = skill.name ?? baseName(skill.root);
+  return (
+    <div className={proposedCardCls}>
+      <div className="flex items-center gap-2">
+        <FolderIcon open={false} name={name} />
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{name}</span>
+        <ProposedTag />
+      </div>
+      {skill.description && <p className="line-clamp-2 text-xs leading-relaxed text-muted">{skill.description}</p>}
+      <span className="truncate pt-0.5 font-mono text-[0.7rem] text-faint" title={skill.root}>
+        {skill.root}
+      </span>
+      <div className="mt-1.5 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onOpen(skill.root)}
+          className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-fg hover:bg-panel"
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onAccept(skill.root)}
+          title="Move this skill out of generated-skills/ into your skills home"
+          className="inline-flex items-center gap-1 rounded-md bg-fg px-2.5 py-1 text-xs font-medium text-app hover:opacity-90 disabled:opacity-40"
+        >
+          {busy ? <Spinner className="h-3 w-3" /> : <CheckIcon />}
+          Accept
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onDiscard(skill.root, name)}
+          title="Delete this proposed skill"
+          className="ml-auto rounded-md px-2.5 py-1 text-xs font-medium text-faint hover:text-danger disabled:opacity-40"
+        >
+          Discard
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ProposedSection({
+  skills,
+  busyRoot,
+  error,
+  onOpen,
+  onAccept,
+  onDiscard,
+}: {
+  skills: DiscoveredSkill[];
+  busyRoot: string | null;
+  error: string | null;
+  onOpen: (p: string) => void;
+  onAccept: (root: string) => void;
+  onDiscard: (root: string, name: string) => void;
+}) {
+  return (
+    <section className="mt-12">
+      <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
+        Proposed skills <span className="text-faint">· {skills.length}</span>
+      </h2>
+      <p className="mb-4 mt-1.5 max-w-2xl text-sm text-muted">
+        Freshly generated drafts staged under{" "}
+        <code className="font-mono text-[0.8em]">generated-skills/</code> (e.g. by the skill-miner). Accept one to move
+        it into your skills home, or discard it.
+      </p>
+      {error && <p className="mb-3 text-sm text-danger">{error}</p>}
+      <div className={gridCls}>
+        {skills.map((s) => (
+          <ProposedCard
+            key={s.root}
+            skill={s}
+            busy={busyRoot === s.root}
+            onOpen={onOpen}
+            onAccept={onAccept}
+            onDiscard={onDiscard}
+          />
+        ))}
+      </div>
     </section>
   );
 }
@@ -203,19 +344,72 @@ export function Component() {
 
   const [discovered, setDiscovered] = useState<AgentSkills[]>([]);
   const [discovering, setDiscovering] = useState(true);
+  const [dirtyRoots, setDirtyRoots] = useState<Set<string>>(new Set());
+  const [busyRoot, setBusyRoot] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Bumped on every scan; a slower in-flight scan (or its background dirty fetch)
+  // checks this before committing state so it can't clobber a newer scan's results.
+  const discoveryEpoch = useRef(0);
   const runDiscovery = useCallback(async () => {
+    const epoch = ++discoveryEpoch.current;
     setDiscovering(true);
     try {
-      setDiscovered(await api.discoverSkills());
+      const groups = await api.discoverSkills();
+      if (epoch !== discoveryEpoch.current) return; // a newer scan superseded us
+      setDiscovered(groups);
+      // Flag which skills have uncommitted changes in the background — one batch
+      // call, so the list paints immediately and the badges fill in after. Skip
+      // proposed drafts: they sit in a staging dir that isn't a repo, so never dirty.
+      const roots = groups.flatMap((g) => g.skills.filter((s) => !s.proposed).map((s) => s.root));
+      void api
+        .gitDirtyMany(roots)
+        .then((states) => {
+          if (epoch === discoveryEpoch.current) {
+            setDirtyRoots(new Set(states.filter((d) => d.dirty).map((d) => d.root)));
+          }
+        })
+        .catch(() => {});
     } catch {
       // Keep whatever was already found if a rescan fails.
     } finally {
-      setDiscovering(false);
+      if (epoch === discoveryEpoch.current) setDiscovering(false);
     }
   }, []);
   useEffect(() => {
     void runDiscovery();
   }, [runDiscovery]);
+
+  const acceptProposed = useCallback(
+    async (root: string) => {
+      setBusyRoot(root);
+      setActionError(null);
+      try {
+        await api.promoteSkill(root);
+        await runDiscovery();
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusyRoot(null);
+      }
+    },
+    [runDiscovery],
+  );
+  const discardProposed = useCallback(
+    async (root: string, name: string) => {
+      if (!window.confirm(`Discard the proposed skill “${name}”?\n\nThis permanently deletes ${root}.`)) return;
+      setBusyRoot(root);
+      setActionError(null);
+      try {
+        await api.deleteSkill(root);
+        await runDiscovery();
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusyRoot(null);
+      }
+    },
+    [runDiscovery],
+  );
 
   const [showPicker, setShowPicker] = useState(false);
   const browse = async () => {
@@ -227,7 +421,11 @@ export function Component() {
     }
   };
 
-  const totalFound = discovered.reduce((n, g) => n + g.skills.length, 0);
+  // Proposed drafts surface in their own section; the per-agent "Discovered" list
+  // shows everything else.
+  const proposed = discovered.flatMap((g) => g.skills.filter((s) => s.proposed));
+  const groups = discovered.map((g) => ({ ...g, skills: g.skills.filter((s) => !s.proposed) }));
+  const totalFound = groups.reduce((n, g) => n + g.skills.length, 0);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -349,6 +547,17 @@ export function Component() {
           </section>
         )}
 
+        {proposed.length > 0 && (
+          <ProposedSection
+            skills={proposed}
+            busyRoot={busyRoot}
+            error={actionError}
+            onOpen={onOpen}
+            onAccept={acceptProposed}
+            onDiscard={discardProposed}
+          />
+        )}
+
         <section className="mt-12">
           <div className="mb-4 flex items-center gap-2">
             <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
@@ -376,8 +585,8 @@ export function Component() {
             </p>
           ) : (
             <div className="space-y-8">
-              {discovered.map((g) => (
-                <AgentSection key={g.agent} group={g} onOpen={onOpen} />
+              {groups.map((g) => (
+                <AgentSection key={g.agent} group={g} dirtyRoots={dirtyRoots} onOpen={onOpen} />
               ))}
             </div>
           )}

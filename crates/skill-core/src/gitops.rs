@@ -167,6 +167,33 @@ pub fn git_info(root: &str) -> Result<GitInfo, String> {
     Ok(info)
 }
 
+/// A skill root paired with whether its own folder has uncommitted changes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirtyState {
+    root: String,
+    dirty: bool,
+}
+
+/// Batch "has uncommitted changes?" for the home page — one cheap
+/// `git status --porcelain -- .` per skill root (scoped to the skill's own folder,
+/// so changes elsewhere in a parent repo don't count). Roots not under git (or
+/// when git is missing) report `dirty: false`. Far less chatter than a full
+/// `git_info` round-trip per card.
+pub fn git_dirty_many(roots: &[String]) -> Vec<DirtyState> {
+    let available = git_available();
+    roots
+        .iter()
+        .map(|r| {
+            let dirty = available
+                && git_ok(Path::new(r), &["status", "--porcelain", "--", "."])
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+            DirtyState { root: r.clone(), dirty }
+        })
+        .collect()
+}
+
 pub fn git_init(root: &str) -> Result<GitInfo, String> {
     if !git_available() {
         return Err("Git isn't installed.".into());

@@ -151,6 +151,7 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
             json_reply(sync::sync_skill(&s("root"), &s("target"), overwrite, link))
         }
         (Method::Post, "/api/delete-skill") => json_reply(sync::delete_skill(&s("root"))),
+        (Method::Post, "/api/promote-skill") => json_reply(sync::promote_skill(&s("root"))),
         (Method::Get, "/api/skill-homes") => json_reply(sync::skill_homes()),
         (Method::Post, "/api/create-skill") => {
             json_reply(sync::create_skill(&s("target"), &s("name"), &s("content")))
@@ -205,6 +206,14 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
         }
         (Method::Post, "/api/git-info") => json_reply(gitops::git_info(&s("root"))),
         (Method::Post, "/api/git-init") => json_reply(gitops::git_init(&s("root"))),
+        (Method::Post, "/api/git-dirty-many") => {
+            let roots: Vec<String> = v
+                .get("roots")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            json_reply(Ok(gitops::git_dirty_many(&roots)))
+        }
         (Method::Post, "/api/git-commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
         (Method::Post, "/api/generate-commit-message") => json_reply(commitmsg::generate(&s("root"))),
         (Method::Post, "/api/regenerate-commit-message") => json_reply(commitmsg::regenerate(&s("root"))),

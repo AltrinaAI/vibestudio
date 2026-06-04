@@ -22,6 +22,10 @@ pub struct DiscoveredSkill {
     /// None for global/home skills.
     #[serde(skip_serializing_if = "Option::is_none")]
     project: Option<String>,
+    /// A machine-generated draft staged in a `generated-skills/` folder (e.g. by
+    /// the skill-miner). Still `kind: "personal"`, but the UI surfaces it as a
+    /// proposal to accept (promote into the real skills home) or discard.
+    proposed: bool,
 }
 
 #[derive(Serialize)]
@@ -61,6 +65,18 @@ fn extract_frontmatter(raw: &str) -> Option<String> {
         block.push('\n');
     }
     None
+}
+
+/// True when the skill is staged under a `generated-skills/` folder — i.e. its
+/// immediate parent directory is named `generated-skills`. This is the convention
+/// the skill-miner writes new drafts to (`<skills-home>/generated-skills/<name>/`),
+/// and the level `promote_skill` moves a skill up out of when accepted.
+fn is_proposed(skill_dir: &Path) -> bool {
+    skill_dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("generated-skills")
 }
 
 fn read_meta(skill_md: &Path) -> (Option<String>, Option<String>) {
@@ -104,12 +120,14 @@ fn collect(
         }
         let (name, description) = read_meta(entry.path());
         let kind = classify(&skill_dir);
+        let proposed = is_proposed(&skill_dir);
         skills.push(DiscoveredSkill {
             name,
             description,
             root: skill_dir.to_string_lossy().into_owned(),
             kind: kind.to_string(),
             project: None,
+            proposed,
         });
     }
 }
@@ -270,6 +288,7 @@ fn scan_projects(root: &Path, home: &Path, g: &mut Groups, seen: &mut HashSet<Pa
             continue; // already found (e.g. as a global skill)
         }
         let (name, description) = read_meta(entry.path());
+        let proposed = is_proposed(skill_dir);
         push_to_agent(
             g,
             agent,
@@ -279,6 +298,7 @@ fn scan_projects(root: &Path, home: &Path, g: &mut Groups, seen: &mut HashSet<Pa
                 root: skill_dir.to_string_lossy().into_owned(),
                 kind: "personal".into(),
                 project: Some(project),
+                proposed,
             },
         );
     }
@@ -417,6 +437,35 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name.as_deref(), Some("my-skill"));
         assert_eq!(found[0].kind, "personal");
+        assert!(!found[0].proposed, "a skill not under generated-skills/ isn't a proposal");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn flags_generated_skills_as_proposed() {
+        let p = |s: &str| PathBuf::from(s);
+        // A draft staged under generated-skills/ is a proposal…
+        assert!(is_proposed(&p("/h/.agents/skills/generated-skills/my-draft")));
+        // …but the real skill it's promoted to (and ordinary skills) are not.
+        assert!(!is_proposed(&p("/h/.agents/skills/my-draft")));
+        assert!(!is_proposed(&p("/h/.agents/skills/generated-skills")));
+
+        // End-to-end: collect tags the staged skill proposed, the sibling not.
+        let base = std::env::temp_dir().join(format!("ass_proposed_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let staged = base.join("generated-skills").join("fresh");
+        let real = base.join("settled");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(staged.join("SKILL.md"), "---\nname: fresh\n---\nbody").unwrap();
+        std::fs::write(real.join("SKILL.md"), "---\nname: settled\n---\nbody").unwrap();
+
+        let mut found = Vec::new();
+        let mut seen = HashSet::new();
+        collect(&base, &|_: &Path| "personal", &mut found, &mut seen);
+        let by_name = |n: &str| found.iter().find(|s| s.name.as_deref() == Some(n)).unwrap();
+        assert!(by_name("fresh").proposed);
+        assert!(!by_name("settled").proposed);
         let _ = std::fs::remove_dir_all(&base);
     }
 

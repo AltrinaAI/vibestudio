@@ -24,44 +24,35 @@ use serde::Serialize;
 
 /// A downloadable GGUF model + the context window to run it with.
 struct ModelSpec {
-    /// Stable id (selectable via `SKILL_STUDIO_COMMIT_MODEL`).
+    /// Stable id, surfaced in `ModelStatus` for the UI.
     id: &'static str,
     /// Hugging Face repo (`<owner>/<name>`).
     repo: &'static str,
     /// GGUF filename within the repo.
     file: &'static str,
-    /// Expected SHA-256 of the file. `None` skips verification — MUST be pinned
-    /// to the real digest before shipping (see plan's "risk gate").
+    /// Expected SHA-256 of the file. `None` skips verification.
     sha256: Option<&'static str>,
     /// Context window to start the server with (tokens).
     ctx: u32,
 }
 
-/// Default: the user's pick. Qwen3.5 small models default thinking OFF, which is
-/// what we want for terse messages. It is new (Mar 2026) — keep the proven
-/// Qwen2.5-Coder-1.5B available as a fallback via `SKILL_STUDIO_COMMIT_MODEL`.
-const QWEN35_2B: ModelSpec = ModelSpec {
-    id: "qwen3.5-2b",
-    repo: "bartowski/Qwen_Qwen3.5-2B-GGUF",
-    file: "Qwen_Qwen3.5-2B-Q4_K_M.gguf",
-    sha256: Some("57a1085840f497d764a7fc5d346922dbde961efb54cc792ea81d694fd846a1d8"), // 1.40 GB
-    ctx: 8192,
-};
-
-/// Code-aware, plain-instruct (no thinking), universally supported by llama.cpp.
-const QWEN25_CODER_1_5B: ModelSpec = ModelSpec {
-    id: "qwen2.5-coder-1.5b",
-    repo: "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF",
-    file: "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
-    sha256: Some("cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046"), // 1.12 GB
+/// The on-device model: the official Qwen3-0.6B GGUF, Q8_0. Tiny (~610 MiB), so
+/// the first-run download stays light, and Q8_0 is near-lossless — the right quant
+/// for a model this small, where lower bit-widths cost more quality than the bytes
+/// they save. Qwen3 is a hybrid-thinking model that defaults thinking ON under
+/// `--jinja`; we disable it per request via `chat_template_kwargs {enable_thinking:
+/// false}` (the original Qwen3 template honors it) so the message lands in
+/// `content`, not a `<think>` block.
+const MODEL: ModelSpec = ModelSpec {
+    id: "qwen3-0.6b",
+    repo: "Qwen/Qwen3-0.6B-GGUF",
+    file: "Qwen3-0.6B-Q8_0.gguf",
+    sha256: Some("9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"), // 639,446,688 B (~610 MiB)
     ctx: 8192,
 };
 
 fn active_spec() -> &'static ModelSpec {
-    match std::env::var("SKILL_STUDIO_COMMIT_MODEL").as_deref() {
-        Ok("qwen2.5-coder-1.5b") => &QWEN25_CODER_1_5B,
-        _ => &QWEN35_2B,
-    }
+    &MODEL
 }
 
 /// Public view of model readiness, for the UI's first-run / download messaging.
@@ -355,7 +346,7 @@ fn spawn_one(model: &PathBuf, ctx: u32, ngl: u32) -> Result<Engine, String> {
         &ctx.to_string(),
         "-ngl",
         &ngl.to_string(),
-        "--jinja", // honor the model's chat template (Qwen3.5 defaults thinking off)
+        "--jinja", // use the model's embedded chat template (so enable_thinking is honored)
     ])
     .stdout(Stdio::null())
     // Surface llama-server's own logs when debugging; silent otherwise.
@@ -468,9 +459,9 @@ pub fn chat(
         /// fresh phrasing each click.
         seed: i64,
         stream: bool,
-        /// Forwarded to the model's chat template. Qwen3/Qwen3.5 default thinking
-        /// ON, which buries the answer in a <think> block and leaves `content`
-        /// empty — fatal for terse commit messages. Disabling it yields the message
+        /// Forwarded to the model's chat template. Qwen3 defaults thinking ON,
+        /// which buries the answer in a <think> block and leaves `content` empty —
+        /// fatal for terse commit messages. Disabling it yields the message
         /// directly. Harmless for non-thinking models (the kwarg is just unused).
         chat_template_kwargs: serde_json::Value,
         /// JSON-schema / grammar constraint (omitted when None).

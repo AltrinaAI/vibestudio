@@ -85,6 +85,14 @@ pub struct DeleteResult {
     was_link: bool,
 }
 
+/// Outcome of accepting a proposed skill: its new canonical root after being
+/// moved out of the `generated-skills/` staging folder into the real home.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromoteResult {
+    root: String,
+}
+
 /// A directory a brand-new skill can be created in (the same destinations sync
 /// targets — "all agents" vs "Claude Code"), with its absolute path resolved.
 #[derive(Serialize)]
@@ -459,6 +467,53 @@ pub fn delete_skill(root: &str) -> Result<DeleteResult, String> {
     Ok(DeleteResult { removed: path.to_string_lossy().into_owned(), was_link })
 }
 
+/// Accept a proposed skill: move it out of its `generated-skills/` staging folder
+/// up into the real skills home it sits under (`<home>/generated-skills/<name>` →
+/// `<home>/<name>`), so it becomes an ordinary discovered skill. Guarded: the
+/// folder must contain SKILL.md, sit directly inside a `generated-skills/` dir,
+/// and land in a recognized skills container — and it won't clobber an existing
+/// skill of the same name. Returns the new canonical root.
+pub fn promote_skill(root: &str) -> Result<PromoteResult, String> {
+    let path = PathBuf::from(root);
+    if !path.join("SKILL.md").exists() {
+        return Err("Not a skill directory (no SKILL.md).".into());
+    }
+    let staging = path.parent().ok_or_else(|| "Invalid skill path.".to_string())?;
+    if staging.file_name().and_then(|n| n.to_str()) != Some("generated-skills") {
+        return Err("Not a proposed skill (it isn't inside a generated-skills/ folder).".into());
+    }
+    let home = staging
+        .parent()
+        .ok_or_else(|| "Invalid generated-skills location.".to_string())?;
+    // The home it lands in must itself be a skills container, so accepting can't
+    // drop a folder somewhere unexpected.
+    if !matches!(home.file_name().and_then(|n| n.to_str()), Some("skills" | "skills-cursor")) {
+        return Err("Refusing to accept: the generated-skills folder isn't inside a skills directory.".into());
+    }
+    let name = skill_dir_name(&path).ok_or_else(|| "Invalid skill path.".to_string())?;
+    let dest = home.join(&name);
+    if dest.symlink_metadata().is_ok() {
+        return Err(format!("A skill named \"{name}\" already exists in {}.", home.display()));
+    }
+    // Same filesystem in practice (staging is a subdir of the home), so a rename is
+    // atomic; fall back to copy+remove if it ever crosses a device boundary. On any
+    // failure in the fallback, roll back the partial destination so the skill is
+    // never left in two places — it stays put under generated-skills/.
+    if std::fs::rename(&path, &dest).is_err() {
+        let mut total: u64 = 0;
+        if let Err(e) = copy_tree(&path, &dest, &mut total) {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(e);
+        }
+        if let Err(e) = std::fs::remove_dir_all(&path) {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(format!("Couldn't remove the staged copy after accepting: {e}"));
+        }
+    }
+    let canon = std::fs::canonicalize(&dest).unwrap_or(dest);
+    Ok(PromoteResult { root: canon.to_string_lossy().into_owned() })
+}
+
 /// True if some ancestor directory is a skills container (`skills` / `skills-cursor`).
 fn within_skills_container(path: &Path) -> bool {
     let mut cur = path.parent();
@@ -706,6 +761,36 @@ mod tests {
         let r = import_from_dir(&home, &skill_root, "claude-code", false).unwrap();
         assert_eq!(r.name, "zipped-skill");
         assert!(home.join(".claude/skills/zipped-skill/SKILL.md").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn promotes_proposed_skill_out_of_staging() {
+        let base = std::env::temp_dir().join(format!("ass_promote_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join(".agents/skills");
+        let staged = home.join("generated-skills/fresh-skill");
+        std::fs::create_dir_all(staged.join("scripts")).unwrap();
+        std::fs::write(staged.join("SKILL.md"), "---\nname: fresh-skill\n---\nbody").unwrap();
+        std::fs::write(staged.join("scripts/run.py"), "print(1)").unwrap();
+
+        let r = promote_skill(&staged.to_string_lossy()).unwrap();
+        let dest = home.join("fresh-skill");
+        assert_eq!(std::fs::canonicalize(&dest).unwrap().to_string_lossy(), r.root);
+        assert!(dest.join("SKILL.md").exists());
+        assert!(dest.join("scripts/run.py").exists(), "the whole folder moves, not just SKILL.md");
+        assert!(!staged.exists(), "the staged copy is gone after accepting");
+
+        // A skill that isn't under generated-skills/ can't be promoted.
+        assert!(promote_skill(&dest.to_string_lossy()).is_err());
+
+        // Accepting onto an existing skill of the same name is refused (no clobber).
+        let staged2 = home.join("generated-skills/fresh-skill");
+        std::fs::create_dir_all(&staged2).unwrap();
+        std::fs::write(staged2.join("SKILL.md"), "---\nname: fresh-skill\n---\nv2").unwrap();
+        assert!(promote_skill(&staged2.to_string_lossy()).is_err());
+        assert!(dest.join("SKILL.md").exists(), "the already-accepted skill is untouched");
 
         let _ = std::fs::remove_dir_all(&base);
     }

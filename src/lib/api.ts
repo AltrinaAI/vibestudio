@@ -168,6 +168,10 @@ export interface DiscoveredSkill {
   kind: string;
   /** Repo/folder name when the skill is project-scoped (`<repo>/.claude/skills/…`). */
   project?: string;
+  /** A machine-generated draft staged under `generated-skills/` (e.g. by the
+   *  skill-miner) — surfaced as a proposal to accept (promote) or discard. The
+   *  backend always sends it (defaults to false), so it's required here. */
+  proposed: boolean;
 }
 export interface AgentSkills {
   agent: string;
@@ -296,6 +300,16 @@ export interface DeleteResult {
 export const deleteSkill = (root: string) =>
   isTauri ? invoke<DeleteResult>("delete_skill", { root }) : http<DeleteResult>("POST", "delete-skill", { root });
 
+// --- accept a proposed (generated-skills) skill: promote it into the real home ---
+export interface PromoteResult {
+  /** New canonical root after the skill is moved out of generated-skills/. */
+  root: string;
+}
+/** Accept a proposed skill — move it out of its `generated-skills/` staging folder
+ *  up into the real skills home, turning it into an ordinary skill. */
+export const promoteSkill = (root: string) =>
+  isTauri ? invoke<PromoteResult>("promote_skill", { root }) : http<PromoteResult>("POST", "promote-skill", { root });
+
 // --- per-skill git version control ---
 export interface GitInfo {
   available: boolean;
@@ -357,6 +371,17 @@ export interface GitCommitDetail {
 }
 export const gitInfo = (root: string) =>
   isTauri ? invoke<GitInfo>("git_info", { root }) : http<GitInfo>("POST", "git-info", { root });
+/** One skill root's uncommitted-changes flag (from the batch [`gitDirtyMany`]). */
+export interface DirtyState {
+  root: string;
+  dirty: boolean;
+}
+/** Batch "has uncommitted changes?" for the home page — one cheap status check per
+ *  skill root, scoped to its own folder. Roots not under git report `dirty: false`. */
+export const gitDirtyMany = (roots: string[]) =>
+  isTauri
+    ? invoke<DirtyState[]>("git_dirty_many", { roots })
+    : http<DirtyState[]>("POST", "git-dirty-many", { roots });
 export const gitInit = (root: string) =>
   isTauri ? invoke<GitInfo>("git_init", { root }) : http<GitInfo>("POST", "git-init", { root });
 export const gitCommit = (root: string, message: string) =>
@@ -370,7 +395,7 @@ export const gitLog = (root: string, limit = 20) =>
 /** Whether the on-device model is downloaded yet, so the UI can warn about the
  *  one-time first-run download before the user clicks Generate. */
 export interface CommitModelStatus {
-  /** Active model id (e.g. "qwen3.5-2b"). */
+  /** Active model id (e.g. "qwen3-0.6b"). */
   model: string;
   /** The GGUF is present on disk (generation won't trigger a download). */
   downloaded: boolean;

@@ -105,6 +105,13 @@ async fn delete_skill(root: String) -> Result<sync::DeleteResult, String> {
     sync::delete_skill(&root)
 }
 
+/// Accept a proposed skill: move it out of its `generated-skills/` staging folder
+/// up into the real skills home, so it becomes an ordinary discovered skill.
+#[tauri::command]
+async fn promote_skill(root: String) -> Result<sync::PromoteResult, String> {
+    sync::promote_skill(&root)
+}
+
 #[tauri::command]
 async fn skill_homes() -> Result<Vec<sync::SkillHome>, String> {
     sync::skill_homes()
@@ -123,6 +130,13 @@ async fn git_info(root: String) -> Result<gitops::GitInfo, String> {
 #[tauri::command]
 async fn git_init(root: String) -> Result<gitops::GitInfo, String> {
     gitops::git_init(&root)
+}
+
+/// Batch "has uncommitted changes?" for the home page — one cheap status check per
+/// skill root, so cards can flag fresh, unsaved edits without a round-trip each.
+#[tauri::command]
+async fn git_dirty_many(roots: Vec<String>) -> Result<Vec<gitops::DirtyState>, String> {
+    Ok(gitops::git_dirty_many(&roots))
 }
 
 #[tauri::command]
@@ -361,10 +375,12 @@ pub fn run() {
             sync_targets,
             sync_skill,
             delete_skill,
+            promote_skill,
             skill_homes,
             create_skill,
             git_info,
             git_init,
+            git_dirty_many,
             git_commit,
             git_log,
             generate_commit_message,
