@@ -3041,6 +3041,7 @@ dependencies = [
  "dirs 5.0.1",
  "portable-pty",
  "serde",
+ "serde_json",
  "skill-core",
 ]
 

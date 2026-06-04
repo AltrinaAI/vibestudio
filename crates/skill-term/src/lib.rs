@@ -19,14 +19,15 @@
 //!           `@ass_owner_pid` is no longer a live process;
 //!       (c) `cleanup_owned()` kills this process's sessions on graceful exit.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -581,6 +582,12 @@ struct Spec {
     supports_ide: bool,
     ext_prefix: &'static str,
     ext_rel: ExtRel,
+    /// Fixed, non-PATH install locations to also probe (agent-specific; `~` ok).
+    /// Catches installs that aren't on the current shell's PATH — native
+    /// standalone, the curl-installer dir, a different node manager, etc.
+    cli_paths: &'static [&'static str],
+    /// Env var naming an install dir to also probe (`<dir>/<name>`); "" if none.
+    install_dir_env: &'static str,
 }
 
 fn agent_specs() -> Vec<Spec> {
@@ -592,6 +599,8 @@ fn agent_specs() -> Vec<Spec> {
             supports_ide: true,
             ext_prefix: "anthropic.claude-code-",
             ext_rel: ExtRel::File("resources/native-binary/claude"),
+            cli_paths: &["~/.claude/local/claude"],
+            install_dir_env: "",
         },
         Spec {
             agent: "codex",
@@ -603,6 +612,9 @@ fn agent_specs() -> Vec<Spec> {
                 dir: "bin",
                 file: "codex",
             },
+            // The native/standalone managed install (curl installer / IDE-managed).
+            cli_paths: &["~/.codex/packages/standalone/current/codex"],
+            install_dir_env: "CODEX_INSTALL_DIR",
         },
     ]
 }
