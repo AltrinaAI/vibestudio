@@ -96,6 +96,30 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/fetch-engine.sh
 
+      # Optional CUDA GPU backend bridge (libggml-cuda.so / ggml-cuda.dll),
+      # ABI-matched to the engine above. We do NOT ship the CUDA runtime — the
+      # bridge links the user's own CUDA install (driver+runtime present → GPU,
+      # absent → CPU). Linux is built from source in a CUDA image (slow; no Linux
+      # CUDA prebuilt exists), so cache it per build-tag+arch-set. Windows pulls
+      # the official prebuilt DLL. macOS is skipped (Metal is compiled in).
+      - name: Cache CUDA backend bridge
+        id: cuda-bridge
+        if: startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/binaries/*/libggml-cuda.so
+            src-tauri/binaries/*/ggml-cuda.dll
+          key: cuda-bridge-${{ matrix.platform }}-b9486-sm75to120
+
+      - name: Vendor CUDA backend bridge
+        if: (startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'windows-latest') && steps.cuda-bridge.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          LLAMA_BUILD: b9486
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/fetch-cuda-backend.sh
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

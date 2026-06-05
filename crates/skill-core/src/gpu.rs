@@ -124,6 +124,22 @@ fn cuda_runtime_dirs() -> Vec<PathBuf> {
         }
     }
 
+    // Windows CUDA toolkit: the runtime DLLs live in <CUDA_PATH>\bin (usually also
+    // on PATH, but be explicit). Cover the standard install location too.
+    #[cfg(windows)]
+    {
+        if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+            add(PathBuf::from(cuda_path).join("bin"));
+        }
+        let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| String::from("C:\\Program Files"));
+        let cuda_root = PathBuf::from(pf).join("NVIDIA GPU Computing Toolkit").join("CUDA");
+        if let Ok(rd) = std::fs::read_dir(&cuda_root) {
+            for e in rd.flatten() {
+                add(e.path().join("bin"));
+            }
+        }
+    }
+
     dirs
 }
 
