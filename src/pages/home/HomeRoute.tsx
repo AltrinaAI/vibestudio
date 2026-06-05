@@ -7,6 +7,7 @@ import { FolderIcon } from "@/components/FileIcon";
 import FolderPicker from "@/components/FolderPicker";
 import NewSkillDialog from "./NewSkillDialog";
 import ImportSkillDialog from "./ImportSkillDialog";
+import RemotesDialog from "@/components/RemotesDialog";
 import SecretsManager from "@/components/SecretsManager";
 import { useRecents, removeRecent } from "@/lib/recents";
 import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO } from "@/lib/agents";
@@ -65,6 +66,16 @@ function TerminalIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <rect x="3" y="4" width="18" height="16" rx="2" />
       <path d="m7 9 3 3-3 3M13 15h4" />
+    </svg>
+  );
+}
+function RemoteIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="2" y="3" width="20" height="9" rx="2" />
+      <rect x="2" y="15" width="20" height="6" rx="2" />
+      <path d="M6 7.5h.01M6 18h.01" />
+      <path d="M10 7.5h6M10 18h6" />
     </svg>
   );
 }
@@ -334,6 +345,7 @@ export function Component() {
   const [secretsOpen, setSecretsOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [remotesOpen, setRemotesOpen] = useState(false);
 
   useEffect(() => {
     if (!secretsOpen) return;
@@ -456,6 +468,15 @@ export function Component() {
         >
           <TerminalIcon />
           <span className="hidden text-xs sm:inline">Terminals</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setRemotesOpen(true)}
+          title="Connect to a remote over SSH"
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
+        >
+          <RemoteIcon />
+          <span className="hidden text-xs sm:inline">Remote</span>
         </button>
         <button
           type="button"
@@ -624,6 +645,8 @@ export function Component() {
           }}
         />
       )}
+
+      {remotesOpen && <RemotesDialog onClose={() => setRemotesOpen(false)} />}
 
       {importOpen && (
         <ImportSkillDialog

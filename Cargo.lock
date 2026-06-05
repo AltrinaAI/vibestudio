@@ -15,6 +15,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skill-core",
+ "skill-remote",
  "skill-term",
  "tauri",
  "tauri-build",
@@ -3021,6 +3022,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "skill-remote"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "skill-server"
 version = "0.1.0"
 dependencies = [
@@ -3028,6 +3038,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skill-core",
+ "skill-remote",
  "skill-term",
  "tiny_http",
  "urlencoding",

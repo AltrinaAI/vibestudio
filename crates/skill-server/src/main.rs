@@ -200,6 +200,13 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
                 skill_term::resize(&s("id"), u16f("cols", 80), u16f("rows", 24)).map(|_| json!({ "ok": true })),
             )
         }
+        // --- SSH remote sessions (provision + launch skill-server, tunnel to it) ---
+        (Method::Get, "/api/remote/hosts") => json_reply(skill_remote::list_hosts()),
+        (Method::Get, "/api/remote/list") => json_reply(Ok(skill_remote::list_sessions())),
+        (Method::Post, "/api/remote/connect") => json_reply(skill_remote::connect(&s("host"))),
+        (Method::Post, "/api/remote/disconnect") => {
+            json_reply(skill_remote::disconnect(&s("id")).map(|_| json!({ "ok": true })))
+        }
         (Method::Post, "/api/detect-required-env") => {
             let root = s("root");
             json_reply(secrets::secret_keys().map(|keys| skill::scan_for_env_vars(Path::new(&root), &keys)))

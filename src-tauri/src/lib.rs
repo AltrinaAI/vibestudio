@@ -323,6 +323,57 @@ fn terminal_detach(state: State<'_, TermState>, id: String) -> Result<(), String
     Ok(())
 }
 
+// ───────────────────────── SSH remote sessions ─────────────────────────
+
+#[tauri::command]
+fn remote_hosts() -> Result<Vec<skill_remote::SshHost>, String> {
+    skill_remote::list_hosts()
+}
+
+#[tauri::command]
+fn remote_list() -> Vec<skill_remote::RemoteSession> {
+    skill_remote::list_sessions()
+}
+
+/// Connect to a host: provision + launch an identical skill-server on the remote
+/// and forward a local port to it. Blocks until the tunnel is serving, so it runs
+/// on a blocking thread (`async` + `spawn_blocking`) to keep the UI responsive.
+#[tauri::command]
+async fn remote_connect(host: String) -> Result<skill_remote::RemoteSession, String> {
+    tauri::async_runtime::spawn_blocking(move || skill_remote::connect(&host))
+        .await
+        .map_err(|e| format!("remote connect task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn remote_disconnect(id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || skill_remote::disconnect(&id))
+        .await
+        .map_err(|e| format!("remote disconnect task failed: {e}"))?
+}
+
+/// Open a URL in the user's real browser — the desktop path for "open the remote
+/// UI in a new window". A separate OS browser process is not the Tauri webview, so
+/// it isn't bound by the app's `default-src 'self'` CSP (the browser path just
+/// uses `window.open`). Loopback only, so this can't be turned into an open redirect.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:")) {
+        return Err("Refusing to open a non-loopback URL.".into());
+    }
+    #[cfg(target_os = "linux")]
+    let prog = "xdg-open";
+    #[cfg(target_os = "macos")]
+    let prog = "open";
+    #[cfg(target_os = "windows")]
+    let prog = "explorer";
+    std::process::Command::new(prog)
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Couldn't open the browser: {e}"))
+}
+
 /// Locate the bundled `llama-server` so the on-device commit-message generator
 /// runs with zero setup. Checks the production bundle (resource dir) then the
 /// dev-vendored tree (`src-tauri/binaries/<triple>/`, populated by
@@ -407,6 +458,11 @@ pub fn run() {
             terminal_write,
             terminal_resize,
             terminal_detach,
+            remote_hosts,
+            remote_list,
+            remote_connect,
+            remote_disconnect,
+            open_url,
         ])
         // Reap terminals orphaned by a previous (hard-killed) app process.
         .setup(|app| {
@@ -428,6 +484,7 @@ pub fn run() {
             // Closing the desktop app reaps the agents it owns (no zombies).
             if let tauri::RunEvent::Exit = event {
                 skill_term::cleanup_owned();
+                skill_remote::cleanup_all(); // drop SSH tunnels + stop remote servers
                 engine::shutdown(); // reap the inference engine child too
             }
         });

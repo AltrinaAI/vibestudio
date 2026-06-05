@@ -549,6 +549,73 @@ export const terminalCreate = (a: CreateTermArgs) =>
 export const terminalKill = (id: string) =>
   isTauri ? invoke<void>("terminal_kill", { id }) : http<{ ok: boolean }>("POST", "terminal/kill", { id }).then(() => {});
 
+// --- SSH remote sessions (the VS Code-remote model: provision skill-server on a
+//     remote box from your ~/.ssh/config, tunnel to it, open it in a new window) ---
+
+/** One `Host` alias from the user's `~/.ssh/config`, offered in the remote picker. */
+export interface SshHost {
+  /** The alias to connect by (what we pass to `ssh`). */
+  name: string;
+  /** Real address (`HostName`), when set. */
+  hostName?: string;
+  /** `User`, when set. */
+  user?: string;
+  /** `Port`, when set. */
+  port?: number;
+}
+
+/** A live remote connection: a forwarded local port pointed at the remote server. */
+export interface RemoteSession {
+  /** Stable id — the handle for disconnect. */
+  id: string;
+  /** The ssh host alias this is connected to. */
+  host: string;
+  /** Loopback port on THIS machine — open `http://localhost:<localPort>`. */
+  localPort: number;
+  /** Loopback port the remote skill-server listens on. */
+  remotePort: number;
+  /** How the server got there: "reused" | "transferred". */
+  provisioned: string;
+  /** Unix seconds (as a string) when the session came up. */
+  created: string;
+  /** A caveat worth surfacing (e.g. a libc note), or absent. */
+  note?: string;
+}
+
+/** The user's configured ssh hosts (parsed from `~/.ssh/config`; empty if none). */
+export const remoteHosts = () =>
+  isTauri ? invoke<SshHost[]>("remote_hosts") : http<SshHost[]>("GET", "remote/hosts");
+/** Live remote sessions (newest first). */
+export const remoteList = () =>
+  isTauri ? invoke<RemoteSession[]>("remote_list") : http<RemoteSession[]>("GET", "remote/list");
+/** Connect to a host: provision + launch skill-server on the remote and tunnel to
+ *  it. Resolves once the tunnel is serving; can take a while on first provision. */
+export const remoteConnect = (host: string) =>
+  isTauri
+    ? invoke<RemoteSession>("remote_connect", { host })
+    : http<RemoteSession>("POST", "remote/connect", { host });
+/** Disconnect: drop the tunnel, stop the remote server, close the SSH master. */
+export const remoteDisconnect = (id: string) =>
+  isTauri
+    ? invoke<void>("remote_disconnect", { id })
+    : http<{ ok: boolean }>("POST", "remote/disconnect", { id }).then(() => {});
+
+/**
+ * Open the remote UI in a new window — the "just like VS Code" finish. In the
+ * browser that's a plain `window.open` to the forwarded loopback URL; on the
+ * desktop it's the OS browser (a separate process, so the app's `default-src
+ * 'self'` CSP doesn't apply). Returns false if a popup blocker stopped it.
+ */
+export async function openRemoteWindow(localPort: number): Promise<boolean> {
+  const url = `http://localhost:${localPort}/`;
+  if (isTauri) {
+    await invoke<void>("open_url", { url });
+    return true;
+  }
+  const win = window.open(url, "_blank", "noopener");
+  return win != null;
+}
+
 // base64 ↔ bytes for the text-only transports (SSE data: frames / JSON input).
 function bytesToB64(bytes: Uint8Array): string {
   let bin = "";

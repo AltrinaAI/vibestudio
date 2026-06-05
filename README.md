@@ -36,6 +36,11 @@ box you drive from a browser (the VS Code-remote model — see [`design.md`](./d
 - **App-managed terminals** — run Claude Code, Codex, or a shell in tmux-backed
   sessions that survive UI disconnect, so you can close the lid and let the agent
   keep going.
+- **SSH remotes** — pick a host from your `~/.ssh/config`, and Studio connects,
+  sets up an identical `skill-server` on that box (reusing a cached one or
+  transferring the local binary + UI when the OS/arch matches), tunnels a local
+  port to it, and opens the remote app in a new window — the VS Code-remote UX,
+  so your laptop just drives a skill-studio running on the remote's filesystem.
 
 ## Run it
 
@@ -65,10 +70,12 @@ first-class human UX. Next:
 1. **Skill Mining** — a local agent that mines past conversations to propose the
    skills that would have helped, and flags stale ones (the Proposed-skills /
    `generated-skills/` staging is already in place for it).
-2. **Full SSH support** from your local config — drive agents on a remote box via
-   the Terminal and close your laptop.
-3. **Version-controlled team collaboration & team secret managers.**
-4. **Multi-modal skills / SOP documents** in a readable format.
+2. **Version-controlled team collaboration & team secret managers.**
+3. **Multi-modal skills / SOP documents** in a readable format.
+
+(**SSH remotes** — drive a skill-studio on a remote box from your local
+`~/.ssh/config` — has landed; see Features above. Key-based auth for now;
+cross-OS/arch remotes need a `skill-server` already installed there.)
 
 ## Notes
 
