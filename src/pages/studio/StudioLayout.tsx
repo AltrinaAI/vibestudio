@@ -108,6 +108,7 @@ export default function StudioLayout() {
           root={data.root}
           dirName={data.dirName}
           kind={skillKind(data.root).kind}
+          declared={requiredEnv(data.frontmatter)}
           onClose={() => setManageOpen(false)}
           onDeleted={onDeleted}
         />

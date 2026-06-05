@@ -207,16 +207,74 @@ function CollaborateSection() {
   );
 }
 
+// ---- Secrets (this skill's referenced env vars) -----------------------------
+// `declared` is the skill's reconciled metadata.required-env (detected on save).
+// We cross-check it against the store so the panel shows, at a glance, which of
+// this skill's secrets are set and which are still missing — then jump to manage.
+function SecretsSection({ declared, onOpen }: { declared: string[]; onOpen: () => void }) {
+  const [stored, setStored] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    api
+      .secretsList()
+      .then((ls) => setStored(new Set(ls.map((s) => s.key))))
+      .catch(() => setStored(new Set<string>()));
+  }, []);
+
+  const missing = stored ? declared.filter((k) => !stored.has(k)) : [];
+
+  return (
+    <div className="space-y-2.5">
+      {declared.length === 0 ? (
+        <p className="text-xs text-muted">
+          This skill doesn’t reference any secrets yet. The env vars it uses are detected on save and shown here.
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-muted">
+            This skill uses {declared.length} secret{declared.length === 1 ? "" : "s"}
+            {stored &&
+              (missing.length === 0 ? " — all set in your store." : `, ${missing.length} not in your store yet.`)}
+          </p>
+          <ul className="flex flex-wrap gap-1.5">
+            {declared.map((k) => {
+              const known = stored !== null;
+              const have = stored?.has(k) ?? false;
+              return (
+                <li
+                  key={k}
+                  title={!known ? "Checking your store…" : have ? "In your store" : "Not in your store — add it"}
+                  className={`flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[0.7rem] ${
+                    !known ? "border-border text-faint" : have ? "border-ok/40 text-ok" : "border-warn/40 text-warn"
+                  }`}
+                >
+                  {k}
+                  {known && have ? " ✓" : ""}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      <button type="button" onClick={onOpen} className={btnGhost}>
+        Open Secrets →
+      </button>
+    </div>
+  );
+}
+
 export default function ManagePanel({
   root,
   dirName,
   kind,
+  declared,
   onClose,
   onDeleted,
 }: {
   root: string;
   dirName: string;
   kind: SkillKind;
+  /** Env vars this skill declares it needs (its reconciled metadata.required-env). */
+  declared: string[];
   onClose: () => void;
   /** Called after the skill folder is deleted, so the host can navigate away. */
   onDeleted: () => void;
@@ -244,22 +302,13 @@ export default function ManagePanel({
 
         <div className="min-h-0 flex-1 overflow-auto">
           <Section title="Secrets">
-            <div className="space-y-2.5">
-              <p className="text-xs text-muted">
-                API keys and tokens live on their own page now — stored on this machine, with cloud sync and team
-                sharing coming soon.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  navigate(secretsPath());
-                }}
-                className={btnGhost}
-              >
-                Open Secrets →
-              </button>
-            </div>
+            <SecretsSection
+              declared={declared}
+              onOpen={() => {
+                onClose();
+                navigate(secretsPath());
+              }}
+            />
           </Section>
           <Section title="Sync to another agent">
             <SyncSection root={root} />
