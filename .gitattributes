@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings even on Windows checkouts (core.autocrlf=true
+# on GitHub's windows runners would otherwise give them CRLF, and `set -euo
+# pipefail\r` aborts bash with "set: pipefail: invalid option name").
+*.sh text eol=lf

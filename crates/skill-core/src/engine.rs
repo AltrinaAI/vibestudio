@@ -36,18 +36,19 @@ struct ModelSpec {
     ctx: u32,
 }
 
-/// The on-device model: the official Qwen3-0.6B GGUF, Q8_0. Tiny (~610 MiB), so
-/// the first-run download stays light, and Q8_0 is near-lossless — the right quant
-/// for a model this small, where lower bit-widths cost more quality than the bytes
-/// they save. Qwen3 is a hybrid-thinking model that defaults thinking ON under
-/// `--jinja`; we disable it per request via `chat_template_kwargs {enable_thinking:
-/// false}` (the original Qwen3 template honors it) so the message lands in
-/// `content`, not a `<think>` block.
+/// The on-device model: Qwen3.5-2B, Q4_K_M (~1.4 GB, downloaded on first run). The
+/// 0.6B was tried but isn't smart enough for this task — it anchored on the top of
+/// the diff (the skill's `description:`) instead of describing the change. Qwen3.5
+/// defaults thinking ON under `--jinja` and, for this model, buries the answer in
+/// `reasoning_content` leaving `content` empty, so we DISABLE it via
+/// `chat_template_kwargs {enable_thinking:false}`. Message quality relies on the
+/// structured-output `analysis` field (see `commitmsg::commit_schema`) as the
+/// model's reasoning channel.
 const MODEL: ModelSpec = ModelSpec {
-    id: "qwen3-0.6b",
-    repo: "Qwen/Qwen3-0.6B-GGUF",
-    file: "Qwen3-0.6B-Q8_0.gguf",
-    sha256: Some("9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"), // 639,446,688 B (~610 MiB)
+    id: "qwen3.5-2b",
+    repo: "bartowski/Qwen_Qwen3.5-2B-GGUF",
+    file: "Qwen_Qwen3.5-2B-Q4_K_M.gguf",
+    sha256: Some("57a1085840f497d764a7fc5d346922dbde961efb54cc792ea81d694fd846a1d8"), // 1.40 GB
     ctx: 8192,
 };
 
@@ -435,7 +436,6 @@ impl ChatMessage {
 /// make the model produce an `analysis` field before the `commit_message`.
 pub fn chat(
     messages: &[ChatMessage],
-    max_tokens: u32,
     temperature: f32,
     seed: i64,
     response_format: Option<serde_json::Value>,
@@ -452,7 +452,6 @@ pub fn chat(
     #[derive(Serialize)]
     struct ChatRequest<'a> {
         messages: &'a [ChatMessage],
-        max_tokens: u32,
         temperature: f32,
         /// Sampling seed. A fixed seed (the auto/eager path) makes the same diff
         /// produce the same message; a varying seed (the manual re-roll) gives a
@@ -468,9 +467,11 @@ pub fn chat(
         #[serde(skip_serializing_if = "Option::is_none")]
         response_format: Option<serde_json::Value>,
     }
+    // No `max_tokens`: output is bounded only by the context window, EOS, and the
+    // JSON grammar (the model stops once it closes the schema object). An absent cap
+    // means llama-server runs with n_predict = -1 (generate until context/EOS).
     let body = serde_json::to_string(&ChatRequest {
         messages,
-        max_tokens,
         temperature,
         seed,
         stream: false,

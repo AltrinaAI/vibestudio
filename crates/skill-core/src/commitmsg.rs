@@ -32,23 +32,23 @@ pub fn generate(root: &str) -> Result<String, String> {
     if let Some(msg) = cached_for(root, hash) {
         return Ok(msg); // diff is byte-for-byte unchanged → reuse, no model run
     }
-    // Auto / eager path: a fixed seed + low temperature → deterministic, so the
-    // background draft and a repeat call agree.
-    run(root, &diff, hash, 42, 0.2)
+    // Auto / eager path: a fixed seed makes the draft deterministic (same diff ⇒
+    // same message), so the background draft and a repeat call agree.
+    run(root, &diff, hash, 42, 1.0)
 }
 
 /// Force a fresh draft, ignoring the cache. The manual ✨ Generate button calls
 /// this: each click should offer a genuinely different phrasing, so we vary the
-/// seed and raise the temperature (at the deterministic 0.2 + fixed seed a re-run
-/// just reproduces the cached message — clicking would appear to do nothing). The
-/// newest result replaces the cache, so the dialog/auto-populate reflect it.
+/// seed (the auto path's fixed seed would just reproduce the cached message —
+/// clicking would appear to do nothing). The newest result replaces the cache, so
+/// the dialog/auto-populate reflect it.
 pub fn regenerate(root: &str) -> Result<String, String> {
     let diff = gitops::worktree_diff_text(root)?;
     if diff.trim().is_empty() {
         return Err("No changes to describe — make some edits first.".into());
     }
     let hash = diff_hash(&diff);
-    run(root, &diff, hash, next_seed(), 0.7)
+    run(root, &diff, hash, next_seed(), 1.0)
 }
 
 /// Shared generation core: minimal prompt (analyse first, then commit, via the
@@ -61,14 +61,14 @@ pub fn regenerate(root: &str) -> Result<String, String> {
 /// no `feat:`/`fix:`/type prefix.
 fn run(root: &str, diff: &str, hash: u64, seed: i64, temperature: f32) -> Result<String, String> {
     let prompt = format!(
-        "Analyze the following git diff in no more than 100 words, then write a commit message. \
+        "Analyze the following git diff in no more than 100 words, then write a short commit message. \
 The message must be one short, plain-English sentence describing what changed — with no \
 \"feat:\"/\"fix:\"/type prefix and no filename prefix, just the description.\n\nDiff:\n{}",
         truncate_on_boundary(diff, MAX_PROMPT_DIFF_BYTES)
     );
     let messages = vec![ChatMessage::new("user", prompt)];
 
-    let raw = engine::chat(&messages, 400, temperature, seed, Some(commit_schema()))?;
+    let raw = engine::chat(&messages, temperature, seed, Some(commit_schema()))?;
     let msg = post_process(&extract_commit_message(&raw));
     debug_log(root, &messages, &raw, &msg);
     if msg.is_empty() {

@@ -395,7 +395,7 @@ export const gitLog = (root: string, limit = 20) =>
 /** Whether the on-device model is downloaded yet, so the UI can warn about the
  *  one-time first-run download before the user clicks Generate. */
 export interface CommitModelStatus {
-  /** Active model id (e.g. "qwen3-0.6b"). */
+  /** Active model id (e.g. "qwen3.5-2b"). */
   model: string;
   /** The GGUF is present on disk (generation won't trigger a download). */
   downloaded: boolean;

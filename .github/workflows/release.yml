@@ -80,6 +80,22 @@ jobs:
           "AZURE_SIGNING_ENDPOINT=${{ secrets.AZURE_SIGNING_ENDPOINT }}" >> $env:GITHUB_ENV
           "AZURE_SIGNING_ALIAS=${{ secrets.AZURE_SIGNING_ALIAS }}" >> $env:GITHUB_ENV
 
+      # The on-device llama.cpp engine is declared as a Tauri bundle resource
+      # (src-tauri/binaries/<triple>/) but is gitignored, so it must be vendored
+      # per-runner before `tauri build` or the build aborts with
+      # "resource path `binaries` doesn't exist". Pinned for reproducible releases.
+      - name: Setup Python (engine vendor script)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Vendor llama.cpp engine into src-tauri/binaries
+        shell: bash
+        env:
+          LLAMA_BUILD: b9486
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/fetch-engine.sh
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
