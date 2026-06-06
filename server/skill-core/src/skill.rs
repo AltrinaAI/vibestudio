@@ -332,7 +332,7 @@ pub fn list_dir_impl(path: &str) -> Result<DirListing, String> {
             });
         }
     }
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|e| e.name.to_lowercase());
     Ok(DirListing {
         path: p.to_string_lossy().into_owned(),
         parent: p.parent().map(|pp| pp.to_string_lossy().into_owned()),

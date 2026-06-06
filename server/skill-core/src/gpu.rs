@@ -105,14 +105,14 @@ fn nvidia_smi_reports_gpu() -> bool {
 fn driver_lib_present() -> bool {
     #[cfg(target_os = "linux")]
     {
-        return [
+        [
             "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
             "/usr/lib/wsl/lib/libcuda.so.1",
             "/usr/lib64/libcuda.so.1",
             "/usr/lib/aarch64-linux-gnu/libcuda.so.1",
         ]
         .iter()
-        .any(|p| Path::new(p).exists());
+        .any(|p| Path::new(p).exists())
     }
     #[cfg(target_os = "windows")]
     {

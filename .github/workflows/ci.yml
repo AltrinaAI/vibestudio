@@ -52,11 +52,10 @@ jobs:
       - name: Install tmux (skill-term tests)
         run: sudo apt-get update && sudo apt-get install -y tmux
       # clippy on the server crates (no webkit deps; the desktop crate is checked in
-      # its own job below). NOT `-D warnings` yet: the tree carries a handful of
-      # pre-existing lints, and turning them fatal is a separate cleanup — flip this
-      # on once they're paid down. clippy still fails the job on real errors.
+      # its own job below). `-D warnings` makes any lint fatal — the tree is clean,
+      # so this keeps it that way. (No rustfmt gate: formatting is hand-maintained.)
       - name: clippy
-        run: cargo clippy -p skill-core -p skill-term -p skill-server --all-targets
+        run: cargo clippy -p skill-core -p skill-term -p skill-server --all-targets -- -D warnings
       - name: test
         run: cargo test -p skill-core -p skill-term -p skill-server
 
@@ -88,6 +87,12 @@ jobs:
       - run: npm ci
       - name: Build SPA (tauri-build needs frontendDist)
         run: npm run build
+      # The on-device llama.cpp engine is a declared bundle resource
+      # (client/desktop/binaries/) but is gitignored and only vendored at release
+      # (scripts/fetch-engine.sh). tauri-build aborts if the path is missing even on
+      # `cargo check`, so stub it — a check doesn't bundle, it just needs it to exist.
+      - name: Stub the engine resource dir
+        run: mkdir -p client/desktop/binaries && touch client/desktop/binaries/.keep
       - name: cargo check (desktop shell)
         run: cargo check -p skill-studio
 
