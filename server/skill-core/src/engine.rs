@@ -16,7 +16,7 @@
 //! file for airgapped installs), never bundled in the binary.
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -344,7 +344,7 @@ fn free_port() -> Result<u16, String> {
 }
 
 fn spawn_one(
-    model: &PathBuf,
+    model: &Path,
     ctx: u32,
     ngl: &str,
     gpu: Option<&crate::gpu::GpuBackend>,
@@ -416,9 +416,10 @@ fn spawn_one(
 ///   - everything else (`Cpu`: GPU disabled, non-NVIDIA, no CUDA runtime): spawn
 ///     straight to `-ngl 0` — authoritative even if ggml auto-loads a sibling CUDA
 ///     backend, since 0 layers offload.
+///
 /// The GPU attempts run under a tight timeout and fall back to CPU; a pure-CPU
 /// failure surfaces immediately rather than re-running an identical spawn.
-fn spawn_engine(model: &PathBuf, ctx: u32) -> Result<Engine, String> {
+fn spawn_engine(model: &Path, ctx: u32) -> Result<Engine, String> {
     match crate::gpu::gpu_plan() {
         crate::gpu::GpuPlan::Cpu => spawn_one(model, ctx, "0", None, READY_TIMEOUT),
         crate::gpu::GpuPlan::BuiltIn => spawn_one(model, ctx, GPU_NGL, None, GPU_READY_TIMEOUT)

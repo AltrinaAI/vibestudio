@@ -13,11 +13,11 @@
 //!     reader, or the desktop's managed state). When a client disconnects the
 //!     strong ref drops → the attach PTY dies → tmux detaches → session lives.
 //!   * session ↔ backend — bound, so a dead backend leaves no zombie agents:
-//!       (a) each session embeds an owner-pid watchdog that self-reaps within
-//!           ~2s of the backend pid vanishing (covers crash / SIGKILL);
-//!       (b) `sweep_orphans()` (run at startup) kills any `ass-*` session whose
-//!           `@ass_owner_pid` is no longer a live process;
-//!       (c) `cleanup_owned()` kills this process's sessions on graceful exit.
+//!     (a) each session embeds an owner-pid watchdog that self-reaps within
+//!     ~2s of the backend pid vanishing (covers crash / SIGKILL);
+//!     (b) `sweep_orphans()` (run at startup) kills any `ass-*` session whose
+//!     `@ass_owner_pid` is no longer a live process;
+//!     (c) `cleanup_owned()` kills this process's sessions on graceful exit.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -487,8 +487,12 @@ impl Drop for Attachment {
     }
 }
 
-fn registry() -> &'static Mutex<HashMap<String, (u64, Weak<Attachment>)>> {
-    static REG: OnceLock<Mutex<HashMap<String, (u64, Weak<Attachment>)>>> = OnceLock::new();
+/// Live attachments keyed by session id; the `u64` is the attachment seq (identity
+/// for the replace-vs-clobber check), the `Weak` lets a dropped owner expire the entry.
+type Registry = Mutex<HashMap<String, (u64, Weak<Attachment>)>>;
+
+fn registry() -> &'static Registry {
+    static REG: OnceLock<Registry> = OnceLock::new();
     REG.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -873,14 +877,11 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         let mut seen = String::new();
         while std::time::Instant::now() < deadline {
-            match rx.recv_timeout(std::time::Duration::from_millis(300)) {
-                Ok(b) => {
-                    seen.push_str(&String::from_utf8_lossy(&b));
-                    if seen.contains("HELLO_RT") {
-                        break;
-                    }
+            if let Ok(b) = rx.recv_timeout(std::time::Duration::from_millis(300)) {
+                seen.push_str(&String::from_utf8_lossy(&b));
+                if seen.contains("HELLO_RT") {
+                    break;
                 }
-                Err(_) => {}
             }
         }
         drop(att);

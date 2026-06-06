@@ -52,11 +52,10 @@ jobs:
       - name: Install tmux (skill-term tests)
         run: sudo apt-get update && sudo apt-get install -y tmux
       # clippy on the server crates (no webkit deps; the desktop crate is checked in
-      # its own job below). NOT `-D warnings` yet: the tree carries a handful of
-      # pre-existing lints, and turning them fatal is a separate cleanup — flip this
-      # on once they're paid down. clippy still fails the job on real errors.
+      # its own job below). `-D warnings` makes any lint fatal — the tree is clean,
+      # so this keeps it that way. (No rustfmt gate: formatting is hand-maintained.)
       - name: clippy
-        run: cargo clippy -p skill-core -p skill-term -p skill-server --all-targets
+        run: cargo clippy -p skill-core -p skill-term -p skill-server --all-targets -- -D warnings
       - name: test
         run: cargo test -p skill-core -p skill-term -p skill-server
 
