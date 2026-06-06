@@ -10,9 +10,9 @@ import ImportSkillDialog from "./ImportSkillDialog";
 import { useRecents, removeRecent } from "@/lib/recents";
 import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO } from "@/lib/agents";
 import * as api from "@/lib/api";
-import type { AgentSkills, DiscoveredSkill } from "@/lib/api";
+import type { AgentSkills, DiscoveredSkill, AgentsDoc } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
-import { studioPath } from "@/lib/routes";
+import { studioPath, agentMdPath } from "@/lib/routes";
 
 const EXAMPLES = [
   { name: "docx", path: "examples/docx", blurb: "Create & edit Word documents" },
@@ -331,6 +331,75 @@ function ProposedCard({
   );
 }
 
+// --- AGENTS.md guides (the cross-agent project-guide standard) -------------
+
+function GuideCard({ doc, onOpen }: { doc: AgentsDoc; onOpen: (path: string) => void }) {
+  const title = doc.title ?? doc.project ?? baseName(doc.dir);
+  // Show where in the repo a nested guide lives; a root guide just shows "AGENTS.md".
+  const where = doc.scope === "project" ? doc.relInProject ?? doc.file : "Global";
+  return (
+    <button type="button" onClick={() => onOpen(doc.path)} className={`${cardCls} h-full w-full`}>
+      <div className="flex items-center gap-2">
+        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: agentColor("Agent Skills") }} aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{title}</span>
+        <span className={`${pillCls} bg-[color-mix(in_srgb,var(--info)_16%,transparent)] text-info`}>
+          {doc.scope === "global" ? "Global" : "Project"}
+        </span>
+      </div>
+      {doc.project && doc.scope === "project" && (
+        <span className="inline-flex max-w-full items-center gap-1 text-[0.7rem] font-medium text-accent" title={`Guide in ${doc.project}`}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+          </svg>
+          <span className="truncate">{doc.project}</span>
+        </span>
+      )}
+      <span className="mt-auto truncate pt-0.5 font-mono text-[0.7rem] text-faint" title={doc.path}>
+        {where}
+      </span>
+    </button>
+  );
+}
+
+function GuidesSection({ docs, loading, onOpen, onRefresh }: { docs: AgentsDoc[]; loading: boolean; onOpen: (path: string) => void; onRefresh: () => void }) {
+  return (
+    <section className="mt-12">
+      <div className="mb-1.5 flex items-center gap-2">
+        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
+          Agent guides
+          {loading ? <Spinner className="h-3 w-3" /> : <span className="text-faint">· {docs.length}</span>}
+        </h2>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          title="Rescan for AGENTS.md guides"
+          aria-label="Refresh agent guides"
+          className="rounded-md p-1 text-muted hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <RefreshIcon className={loading ? "animate-spin" : ""} />
+        </button>
+      </div>
+      <p className="mb-4 max-w-2xl text-sm text-muted">
+        <code className="font-mono text-[0.8em]">AGENTS.md</code> files — the cross-agent project-guide standard. Open one to
+        edit it with the same Markdown editor, verified against the standard.
+      </p>
+      {!loading && docs.length === 0 ? (
+        <p className="max-w-2xl text-sm text-muted">
+          No <code className="font-mono text-[0.8em]">AGENTS.md</code> guides found. Add one at a repo root (or a per-agent home
+          dir) and rescan.
+        </p>
+      ) : (
+        <div className={gridCls}>
+          {docs.map((d) => (
+            <GuideCard key={d.path} doc={d} onOpen={onOpen} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ProposedSection({
   skills,
   busyRoot,
@@ -417,6 +486,27 @@ export function Component() {
   useEffect(() => {
     void runDiscovery();
   }, [runDiscovery]);
+
+  // AGENTS.md guides discover independently of skills (separate endpoint), so the
+  // two lists paint as each resolves rather than blocking one another.
+  const [guides, setGuides] = useState<AgentsDoc[]>([]);
+  const [guidesLoading, setGuidesLoading] = useState(true);
+  const guidesEpoch = useRef(0);
+  const runGuideDiscovery = useCallback(async () => {
+    const epoch = ++guidesEpoch.current;
+    setGuidesLoading(true);
+    try {
+      const docs = await api.discoverAgentsMd();
+      if (epoch === guidesEpoch.current) setGuides(docs);
+    } catch {
+      // Keep whatever was already found if a rescan fails.
+    } finally {
+      if (epoch === guidesEpoch.current) setGuidesLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void runGuideDiscovery();
+  }, [runGuideDiscovery]);
 
   const acceptProposed = useCallback(
     async (root: string) => {
@@ -636,6 +726,13 @@ export function Component() {
             </div>
           )}
         </section>
+
+        <GuidesSection
+          docs={guides}
+          loading={guidesLoading}
+          onOpen={(p) => navigate(agentMdPath(p))}
+          onRefresh={() => void runGuideDiscovery()}
+        />
 
         <section className="mt-12">
           <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-muted">Examples</h2>

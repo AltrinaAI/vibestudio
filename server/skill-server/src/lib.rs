@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::thread;
 
 use serde_json::{json, Value};
-use skill_core::{commitmsg, discover, engine, gitops, secrets, skill, sync};
+use skill_core::{agentmd, commitmsg, discover, engine, gitops, secrets, skill, sync};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 mod proxy;
@@ -554,6 +554,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             extra: vec![],
         },
         (Method::Get, "/api/discover") => json_reply(discover::discover_all()),
+        (Method::Get, "/api/discover-agents") => json_reply(agentmd::discover_agents_md()),
         (Method::Post, "/api/read-skill") => {
             let root = skill::resolve_skill_input(&s("path"), ctx.examples_base.as_deref());
             json_reply(skill::build_raw_skill(&root))

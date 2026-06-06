@@ -203,6 +203,51 @@ export interface AgentSkills {
   skills: DiscoveredSkill[];
 }
 
+// --- AGENTS.md guides (the cross-agent project-guide standard) ---
+/** A discovered AGENTS.md. `dir` + `file` are the (root, rel) the read-file /
+ *  write-file routes take, so the editor reuses the same file IO as skills. */
+export interface AgentsDoc {
+  /** Absolute path to the guide file. */
+  path: string;
+  /** Directory holding it — the editor "root". */
+  dir: string;
+  /** File name as spelled on disk (normally "AGENTS.md"). */
+  file: string;
+  /** First Markdown H1, when present. */
+  title?: string;
+  /** "global" (a per-agent home dir) | "project" (inside a repo under home). */
+  scope: string;
+  /** Repo/folder name for a project guide. */
+  project?: string;
+  /** Path relative to the repo root (e.g. "packages/api/AGENTS.md"). */
+  relInProject?: string;
+  size: number;
+}
+/** Discover AGENTS.md guides across home config dirs + repos under the home dir. */
+export const discoverAgentsMd = () => http<AgentsDoc[]>("GET", "discover-agents");
+
+/** A loaded AGENTS.md ready to edit (content + the IO coordinates to save it). */
+export interface AgentsMdData {
+  /** Absolute path to the guide file. */
+  path: string;
+  /** Directory holding it (the write-file root). */
+  dir: string;
+  /** File name (the write-file rel). */
+  file: string;
+  content: string;
+}
+/** Load an AGENTS.md by its absolute path. Splits off the dir/file and reuses
+ *  the same `read-file` route skills use — one file-IO core, not two. */
+export async function loadAgentsMd(path: string): Promise<AgentsMdData> {
+  const parts = path.split(/[\\/]/);
+  const file = parts.pop() || path;
+  const dir = path.slice(0, Math.max(0, path.length - file.length - 1)) || path;
+  const fd = await readFile(dir, file);
+  return { path, dir, file, content: fd.content ?? "" };
+}
+/** Persist an AGENTS.md (reuses the shared `write-file` route). */
+export const saveAgentsMd = (dir: string, file: string, content: string) => writeFile(dir, file, content);
+
 // --- sync a skill into a shared/global skills dir other agents read ---
 export interface SyncTarget {
   /** Stable id passed back to syncSkill ("universal" | "claude-code"). */

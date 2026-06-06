@@ -2,7 +2,7 @@
 
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useAutosave } from "./useAutosave";
+import { useAutosave } from "@/lib/useAutosave";
 import { useStudio } from "./StudioContext";
 import DiffView from "./DiffView";
 import { skillKind } from "@/lib/agents";
@@ -10,7 +10,7 @@ import { humanSize } from "@/lib/fileTypes";
 import * as api from "@/lib/api";
 import type { FileData } from "@/lib/types";
 
-const LiveEditor = lazy(() => import("./LiveEditor"));
+const LiveEditor = lazy(() => import("@/components/LiveEditor"));
 const EditorFallback = () => <div className="px-8 py-6 text-sm text-muted">Loading editor…</div>;
 
 export default function FilePane({ root, file, onSaved }: { root: string; file: FileData; onSaved?: () => void }) {

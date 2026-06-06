@@ -10,6 +10,11 @@
 /** The dedicated secret-manager page (machine-local store + future providers). */
 export const secretsPath = () => "/secrets";
 
+/** The AGENTS.md guide editor, keyed by the guide file's absolute path (which
+ *  contains slashes, so it rides as a single encoded `:path` segment — decoded
+ *  by the router on read, exactly like a skill `:root`). */
+export const agentMdPath = (path: string) => `/agents/${encodeURIComponent(path)}`;
+
 export const studioPath = (root: string) => `/studio/${encodeURIComponent(root)}`;
 
 export const studioFilePath = (root: string, rel: string) =>

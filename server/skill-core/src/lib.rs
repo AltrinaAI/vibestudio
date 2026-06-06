@@ -1,5 +1,6 @@
 // Transport-agnostic core: skill filesystem ops + discovery, no GUI/Tauri deps.
 // Reused by both the Tauri desktop app and the headless skill-server.
+pub mod agentmd;
 pub mod commitmsg;
 pub mod discover;
 pub mod engine;
