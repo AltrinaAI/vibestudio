@@ -2,11 +2,13 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath, URL } from "node:url";
 
-// Vite config for the Tauri frontend. `@` -> ./src.
+// Vite config for the React SPA (client/web). `@` -> ./client/web.
+// index.html + this config stay at the repo root (the Vite root); only the
+// source tree moved to client/web/.
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+    alias: { "@": fileURLToPath(new URL("./client/web", import.meta.url)) },
   },
   // Tauri expects a fixed dev server.
   clearScreen: false,
@@ -23,8 +25,8 @@ export default defineConfig({
       },
     },
     watch: {
-      // Don't watch the Rust crate from Vite.
-      ignored: ["**/src-tauri/**"],
+      // Don't watch the Rust shell/server crates from Vite.
+      ignored: ["**/client/desktop/**", "**/server/**"],
     },
   },
   // Build for the WebKit/WebView2 engines Tauri ships.

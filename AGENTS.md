@@ -1,33 +1,40 @@
 # Skill Studio — agent guide
 
 Skill Studio is a **Tauri 2 desktop app** for viewing, editing, versioning, and
-running [Agent Skills](https://agentskills.io/home). The stack:
+running [Agent Skills](https://agentskills.io/home). The repo is laid out by the
+**client / server** boundary it's built around:
 
-- **Rust backend.** All real work (filesystem, git, skill discovery, secrets,
-  terminals, the on-device LLM) lives in `crates/skill-core` — pure, transport-agnostic
-  Rust that `crates/skill-server` exposes over HTTP at `/api/*`. `crates/skill-term`
-  handles tmux-backed terminals. `src-tauri/` is a thin native shell that spawns a
-  `skill-server` and points a webview at it.
-- **Frontend.** React 19 + TypeScript in `src/`, built with **Vite**. UI uses
-  CodeMirror (`@uiw/react-codemirror`), `react-router-dom` v7, and xterm, and talks to
-  the backend through `src/lib/api.ts`.
+- **`server/` — the backend** (the unit you build, ship, and run over SSH). Pure,
+  transport-agnostic Rust: all real work (filesystem, git, skill discovery,
+  secrets, terminals, the on-device LLM) lives in `server/skill-core`;
+  `server/skill-term` handles tmux-backed terminals; `server/skill-server` is the
+  HTTP face — it exposes them over `/api/*` (+ SSE) and serves the built UI. It
+  runs **in-process inside the desktop** (loopback) or **standalone on a remote host**.
+- **`client/` — what connects to a server.** `client/web` is the React 19 + TS SPA
+  (Vite; CodeMirror, react-router v7, xterm) that talks to the backend through
+  `client/web/lib/api.ts`. `client/desktop` is the thin Tauri shell: it spawns a
+  loopback `skill-server` and points its webview at that origin.
 
 ## The one rule that matters most
 
-**Every capability is reached over HTTP/JSON (+ SSE for streaming):** `skill-server` is
-the whole API, and that single transport is what lets the backend and frontend run on
-different machines (the VS Code-remote model). Adding a feature = logic in `skill-core`
-→ an `/api/<name>` route in `skill-server` → one function in `src/lib/api.ts`.
+**Every capability is reached over HTTP/JSON (+ SSE for streaming).** `skill-server`
+is the whole API — there is no `invoke` transport. That single contract is what lets
+the client and server run on different machines (the VS Code-remote model). Adding a
+feature = logic in `server/skill-core` → an `/api/<name>` route in
+`server/skill-server` → one function in `client/web/lib/api.ts`.
 
 **Read [design.md](design.md) before adding a feature** — it is the authoritative
-architecture doc (the HTTP-only rationale, the feature recipe, the dev-workflow table,
-and the on-device commit-message reference example).
+architecture doc (the HTTP-only rationale, the feature recipe, the dev-workflow
+table, and the on-device commit-message reference example).
 
 ## Commands
 
-- `npm run dev` — native desktop (`tauri dev`); a `skill-server` must be reachable at the Vite proxy target.
-- `npm run dev:vite` — frontend only in the browser (`:1420`); pair with `cargo run -p skill-server` (`:8765`).
-- `npm run build` — `tsc --noEmit && vite build`.
+- `npm run dev` — native desktop (`tauri dev`); the shell spawns its own loopback
+  `skill-server`, so no separate backend is needed.
+- `npm run dev:vite` — the SPA only, in a browser (`:1420`); pair with
+  `cargo run -p skill-server` (`:8765`), which the Vite `/api` proxy targets.
+- `npm run build` — `tsc --noEmit && vite build` (the SPA lives in `client/web`,
+  built to `./dist` at the repo root).
 - `npm run lint` — ESLint.
 
 Heed deprecation notices and follow the existing patterns in the relevant crate/module.

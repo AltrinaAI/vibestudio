@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "ai.generalagency.skillstudio",
   "build": {
-    "beforeDevCommand": "npm run dev:vite",
+    "beforeDevCommand": { "script": "npm run dev:vite", "cwd": "../.." },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "../.." },
+    "frontendDist": "../../dist"
   },
   "app": {
     "windows": [
@@ -17,7 +17,8 @@
         "width": 1200,
         "height": 800,
         "minWidth": 720,
-        "minHeight": 480
+        "minHeight": 480,
+        "create": false
       }
     ],
     "security": {
@@ -34,7 +35,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": { "../examples": "examples", "../skills": "skills", "binaries": "binaries" },
+    "resources": { "../../dist": "dist", "../../examples": "examples", "../../skills": "skills", "binaries": "binaries" },
     "category": "DeveloperTool",
     "shortDescription": "View and edit Agent Skills",
     "longDescription": "Discover, view, and edit Agent Skills across Claude Code, Codex, Cursor, and OpenClaw.",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Vendor the ggml CUDA backend "bridge" (libggml-cuda.so / ggml-cuda.dll) into
-# src-tauri/binaries/<target-triple>/, next to the CPU engine that fetch-engine.sh
+# client/desktop/binaries/<target-triple>/, next to the CPU engine that fetch-engine.sh
 # vendors. It MUST come from the same llama.cpp build as that engine — ggml
 # backends are only ABI-compatible within one build — so the build tag is read
 # from the engine's .llama-build (or $LLAMA_BUILD).
@@ -8,7 +8,7 @@
 # We deliberately do NOT ship the CUDA runtime (cuBLAS/cudart, ~1 GB): the bridge
 # links the *user's own* CUDA install at load time. Driver + CUDA runtime present
 # → GPU; absent → the backend fails to load (non-fatal) and llama-server runs on
-# CPU. See crates/skill-core/src/gpu.rs.
+# CPU. See server/skill-core/src/gpu.rs.
 #
 # Linux : built from source in a CUDA Docker image (there is no official Linux
 #         CUDA prebuilt). Needs Docker; no GPU required to compile.
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST_ROOT="$REPO_ROOT/src-tauri/binaries"
+DEST_ROOT="$REPO_ROOT/client/desktop/binaries"
 
 # The bridge must match the CPU engine's build exactly. Prefer an explicit
 # $LLAMA_BUILD; otherwise read the tag fetch-engine.sh wrote next to the engine.
@@ -82,4 +82,4 @@ else
   cp -a "$bin" "$dest/"
 fi
 
-echo "vendored CUDA bridge → src-tauri/binaries/$TRIPLE/$LIB  ($(du -h "$dest/$LIB" | cut -f1))"
+echo "vendored CUDA bridge → client/desktop/binaries/$TRIPLE/$LIB  ($(du -h "$dest/$LIB" | cut -f1))"

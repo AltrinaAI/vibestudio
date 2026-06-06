@@ -1,6 +1,6 @@
 //! Generate a Conventional-Commits message from a skill's uncommitted diff,
-//! using the on-device `engine`. Transport-agnostic: both the Tauri command and
-//! the headless server route call `generate`.
+//! using the on-device `engine`. Transport-agnostic: reached over `/api` by
+//! `skill-server` (in-process in the desktop, or standalone on a remote host).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};

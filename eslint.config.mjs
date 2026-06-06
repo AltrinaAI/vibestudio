@@ -6,7 +6,7 @@ import boundaries from "eslint-plugin-boundaries";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "src-tauri", "public", "node_modules", ".next"] },
+  { ignores: ["dist", "client/desktop", "server", "public", "node_modules", ".next"] },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
@@ -22,15 +22,15 @@ export default tseslint.config(
     settings: {
       // Resolve the `@/*` alias so boundaries can map imports to layers.
       "import/resolver": { typescript: { project: "./tsconfig.json" } },
-      "boundaries/include": ["src/**/*"],
+      "boundaries/include": ["client/web/**/*"],
       // The architecture's four layers. A page captures its folder name so the
       // rule below can forbid one page importing another's internals.
       "boundaries/elements": [
-        { type: "app", mode: "full", pattern: "src/app/**" },
-        { type: "app", mode: "full", pattern: "src/main.tsx" },
-        { type: "pages", mode: "full", pattern: "src/pages/*/**", capture: ["page", "_"] },
-        { type: "components", mode: "full", pattern: "src/components/**" },
-        { type: "lib", mode: "full", pattern: "src/lib/**" },
+        { type: "app", mode: "full", pattern: "client/web/app/**" },
+        { type: "app", mode: "full", pattern: "client/web/main.tsx" },
+        { type: "pages", mode: "full", pattern: "client/web/pages/*/**", capture: ["page", "_"] },
+        { type: "components", mode: "full", pattern: "client/web/components/**" },
+        { type: "lib", mode: "full", pattern: "client/web/lib/**" },
       ],
     },
     rules: {

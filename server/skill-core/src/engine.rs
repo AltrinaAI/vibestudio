@@ -253,7 +253,7 @@ fn engine() -> &'static Mutex<Option<Engine>> {
 ///   1. `SKILL_STUDIO_LLAMA_SERVER` (explicit override; the Tauri app also sets
 ///      this to the bundled resource path on the user's machine).
 ///   2. Next to our own binary (where a Tauri sidecar would land).
-///   3. The repo's vendored tree `<repo>/src-tauri/binaries/<triple>/` — covers
+///   3. The repo's vendored tree `<repo>/client/desktop/binaries/<triple>/` — covers
 ///      every dev invocation (skill-server, `tauri dev`, `cargo test`) with no
 ///      env var. In a shipped build this baked-in path doesn't exist, so it's
 ///      skipped and (1) carries it.
@@ -273,8 +273,8 @@ pub(crate) fn engine_binary() -> PathBuf {
             }
         }
     }
-    // skill-core's manifest is crates/skill-core, so the repo root is two up.
-    let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/binaries");
+    // skill-core's manifest is server/skill-core, so the repo root is two up.
+    let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../client/desktop/binaries");
     if let Some(p) = find_in_dir(&vendored, exe_name) {
         return p;
     }

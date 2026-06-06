@@ -54,7 +54,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: "./src-tauri -> target"
+          workspaces: "./client/desktop -> target"
 
       - run: npm ci
 
@@ -91,7 +91,7 @@ jobs:
           "AZURE_SIGNING_ALIAS=${{ secrets.AZURE_SIGNING_ALIAS }}" >> $env:GITHUB_ENV
 
       # The on-device llama.cpp engine is declared as a Tauri bundle resource
-      # (src-tauri/binaries/<triple>/) but is gitignored, so it must be vendored
+      # (client/desktop/binaries/<triple>/) but is gitignored, so it must be vendored
       # per-runner before `tauri build` or the build aborts with
       # "resource path `binaries` doesn't exist". Pinned for reproducible releases.
       - name: Setup Python (engine vendor script)
@@ -99,7 +99,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Vendor llama.cpp engine into src-tauri/binaries
+      - name: Vendor llama.cpp engine into client/desktop/binaries
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -117,8 +117,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            src-tauri/binaries/*/libggml-cuda.so
-            src-tauri/binaries/*/ggml-cuda.dll
+            client/desktop/binaries/*/libggml-cuda.so
+            client/desktop/binaries/*/ggml-cuda.dll
           key: cuda-bridge-${{ matrix.platform }}-${{ env.LLAMA_BUILD }}-${{ env.CUDA_ARCHS }}
 
       - name: Vendor CUDA backend bridge
@@ -135,6 +135,7 @@ jobs:
           # APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
           # APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
         with:
+          projectPath: client/desktop
           tagName: ${{ github.ref_name }}
           releaseName: "Agent Skill Studio ${{ github.ref_name }}"
           releaseDraft: true

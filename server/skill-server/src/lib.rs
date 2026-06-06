@@ -1,10 +1,20 @@
-// Headless HTTP server for the WSL2 / remote-backend mode. Serves the built UI
-// (dist/) and a /api/* JSON endpoint that mirrors the Tauri commands, all from
-// one origin so a browser can run the app against this machine's filesystem.
-//
-// Usage: skill-server [--port N] [--host H] [--dist PATH]
-//   defaults: --host 127.0.0.1  --port 8765  --dist ./dist
+//! skill-server — the HTTP face of `skill-core` + `skill-term`.
+//!
+//! This crate IS the backend: it exposes every capability over `/api/*` (JSON,
+//! plus SSE for terminal output) and serves the built UI (`dist/`) from the same
+//! origin. It runs two ways from ONE serve loop:
+//!   * **standalone** — the `skill-server` binary (`src/main.rs`), e.g. on a remote
+//!     host reached over an `ssh -L` tunnel, or for browser-local dev.
+//!   * **in-process** — the desktop shell ([client/desktop]) calls [`spawn`] on a
+//!     background thread and points its webview at the returned loopback URL.
+//!
+//! The desktop and the remote host therefore run byte-identical request handling;
+//! only the entry point differs. Configuration (bind addr, the `dist` directory,
+//! the bootstrap-skill + examples bases, an optional bearer token) flows in via
+//! [`ServerConfig`] — the library makes no CWD-relative guesses of its own.
+
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -13,6 +23,184 @@ use std::thread;
 use serde_json::{json, Value};
 use skill_core::{commitmsg, discover, engine, gitops, secrets, skill, sync};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+
+// ───────────────────────────── public API ─────────────────────────────
+
+/// How to run the server. Build with `..Default::default()` and override fields.
+pub struct ServerConfig {
+    /// Bind host. Desktop and CLI both use `127.0.0.1`.
+    pub host: String,
+    /// Requested port. `0` = ephemeral (the desktop uses this and reads the real
+    /// port back from [`ServerHandle::addr`]).
+    pub port: u16,
+    /// Directory of the built UI (`index.html` + assets). Required — the library
+    /// does NOT fall back to a CWD-relative `dist`.
+    pub dist: PathBuf,
+    /// Where the bundled `skill-studio` activation skill lives (for
+    /// `/api/secrets-setup`). `None` falls back to an env/CWD/dist probe.
+    pub bootstrap_skill: Option<PathBuf>,
+    /// Base dir for resolving a bundled example by relative path in
+    /// `/api/read-skill`. `None` keeps absolute-path-only behaviour.
+    pub examples_base: Option<PathBuf>,
+    /// Optional bearer token. `None` = no auth (loopback). `Some` = require
+    /// `Authorization: Bearer <token>` on every request (the SSH case).
+    pub token: Option<String>,
+    /// Worker-thread count.
+    pub workers: usize,
+    /// Run `sweep_orphans` / `reap_orphans` / `prefetch_model` on start. The
+    /// standalone binary owns this; an embedding process (the desktop) that does
+    /// its own lifecycle sets it `false` so the chores don't run twice.
+    pub startup_maintenance: bool,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            host: "127.0.0.1".into(),
+            port: 0,
+            dist: PathBuf::from("dist"),
+            bootstrap_skill: None,
+            examples_base: None,
+            token: None,
+            workers: 4,
+            startup_maintenance: true,
+        }
+    }
+}
+
+/// A running server. The worker threads each hold the listener, so the server
+/// keeps serving even if this handle is dropped; keep it to read [`addr`] or to
+/// [`join`] (block) on it.
+///
+/// [`addr`]: ServerHandle::addr
+/// [`join`]: ServerHandle::join
+pub struct ServerHandle {
+    /// The ACTUAL bound address; `.port()` is the kernel-assigned port when
+    /// `ServerConfig::port` was `0`.
+    pub addr: SocketAddr,
+    workers: Vec<thread::JoinHandle<()>>,
+}
+
+impl ServerHandle {
+    /// `http://<addr>` — point a webview here.
+    pub fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+    /// Block until the workers exit (they serve until the process ends).
+    pub fn join(self) {
+        for w in self.workers {
+            let _ = w.join();
+        }
+    }
+}
+
+/// Bind synchronously (so a bind error surfaces here), then serve on background
+/// worker threads. Returns immediately with the bound address.
+pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
+    let server = Server::http(format!("{}:{}", cfg.host, cfg.port))
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let addr = server
+        .server_addr()
+        .to_ip()
+        .ok_or_else(|| std::io::Error::other("server bound to a non-IP address"))?;
+    let server = Arc::new(server);
+
+    if cfg.startup_maintenance {
+        // Reap terminals / inference engines orphaned by a previous backend that
+        // died hard, then warm the model so the first commit draft is fast.
+        skill_term::sweep_orphans();
+        engine::reap_orphans();
+        engine::prefetch_model();
+    }
+
+    let ctx = Arc::new(ServerCtx {
+        dist: cfg.dist,
+        bootstrap_skill: cfg.bootstrap_skill,
+        examples_base: cfg.examples_base,
+        token: cfg.token,
+    });
+
+    let mut workers = Vec::with_capacity(cfg.workers);
+    for _ in 0..cfg.workers {
+        let server = Arc::clone(&server);
+        let ctx = Arc::clone(&ctx);
+        workers.push(thread::spawn(move || worker_loop(&server, &ctx)));
+    }
+    Ok(ServerHandle { addr, workers })
+}
+
+/// Resolved per-request context (config the handlers actually read).
+struct ServerCtx {
+    dist: PathBuf,
+    bootstrap_skill: Option<PathBuf>,
+    examples_base: Option<PathBuf>,
+    token: Option<String>,
+}
+
+/// Bearer-token guard. `None` token ⇒ always authorized (loopback default).
+///
+/// NOTE for when a token is actually used (the SSH case): the SSE attach path
+/// (`/api/terminal/attach`) is consumed with `EventSource`, which can't send an
+/// `Authorization` header — so that route will need the token via a query param,
+/// or to lean on the loopback-bound `ssh -L` tunnel for auth. See design.md.
+fn authorized(token: &Option<String>, request: &Request) -> bool {
+    match token {
+        None => true,
+        Some(t) => {
+            let want = format!("Bearer {t}");
+            request
+                .headers()
+                .iter()
+                .any(|h| h.field.equiv("Authorization") && h.value.as_str() == want.as_str())
+        }
+    }
+}
+
+fn worker_loop(server: &Server, ctx: &ServerCtx) {
+    for mut request in server.incoming_requests() {
+        let method = request.method().clone();
+        let url = request.url().to_string();
+        // Auth at the single choke point (no-op when token is None). OPTIONS
+        // preflight carries no Authorization, so it stays unauthenticated.
+        if method != Method::Options && !authorized(&ctx.token, &request) {
+            reply_status(request, 401, "Unauthorized");
+            continue;
+        }
+        // Terminal output streams (SSE) block for the session's lifetime — run
+        // them on a dedicated thread so they never starve this worker.
+        if method == Method::Get && url.split('?').next() == Some("/api/terminal/attach") {
+            thread::spawn(move || stream_terminal(request, &url));
+            continue;
+        }
+        let mut body = String::new();
+        if method == Method::Post {
+            let _ = request.as_reader().read_to_string(&mut body);
+        }
+        let reply = handle(&method, &url, &body, ctx);
+
+        let mut response = Response::from_data(reply.body).with_status_code(reply.status);
+        let headers = [
+            ("Content-Type", reply.content_type.as_str()),
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+            ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
+            ("Cache-Control", "no-store"),
+        ];
+        for (k, val) in headers {
+            if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
+                response.add_header(h);
+            }
+        }
+        for (k, val) in &reply.extra {
+            if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
+                response.add_header(h);
+            }
+        }
+        let _ = request.respond(response);
+    }
+}
+
+// ───────────────────────────── request handling ─────────────────────────────
 
 struct Reply {
     status: u16,
@@ -63,10 +251,9 @@ fn web_mime(path: &str) -> &'static str {
 /// Serve a static asset from `dist`, falling back to index.html (SPA).
 fn serve_static(dist: &Path, url_path: &str) -> Reply {
     let rel = url_path.trim_start_matches('/');
-    // Reject traversal; only serve within dist.
-    let candidate = if rel.is_empty() {
-        dist.join("index.html")
-    } else if rel.contains("..") {
+    // Empty path or a traversal attempt → fall back to the SPA index; only ever
+    // serve within dist.
+    let candidate = if rel.is_empty() || rel.contains("..") {
         dist.join("index.html")
     } else {
         dist.join(rel)
@@ -121,7 +308,7 @@ fn bootstrap_skill_dir(dist: &Path) -> Option<PathBuf> {
     candidates.into_iter().find(|c| c.join("SKILL.md").exists())
 }
 
-fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
+fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
     let path = url.split('?').next().unwrap_or(url);
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
@@ -135,7 +322,7 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
         },
         (Method::Get, "/api/discover") => json_reply(discover::discover_all()),
         (Method::Post, "/api/read-skill") => {
-            let root = skill::resolve_skill_input(&s("path"), None);
+            let root = skill::resolve_skill_input(&s("path"), ctx.examples_base.as_deref());
             json_reply(skill::build_raw_skill(&root))
         }
         (Method::Post, "/api/read-file") => json_reply(skill::read_file_impl(&s("root"), &s("rel"))),
@@ -246,7 +433,8 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
             json_reply(secrets::secret_delete(&s("key")).map(|_| json!({ "ok": true })))
         }
         (Method::Post, "/api/secrets-setup") => {
-            json_reply(secrets::secrets_setup(bootstrap_skill_dir(dist).as_deref()))
+            let bootstrap = ctx.bootstrap_skill.clone().or_else(|| bootstrap_skill_dir(&ctx.dist));
+            json_reply(secrets::secrets_setup(bootstrap.as_deref()))
         }
         (Method::Get, "/api/download") => {
             let root = query_param(url, "root").unwrap_or_default();
@@ -267,7 +455,7 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
                 Err(e) => json_reply::<()>(Err(e)),
             }
         }
-        (Method::Get, _) => serve_static(dist, path),
+        (Method::Get, _) => serve_static(&ctx.dist, path),
         _ => Reply {
             status: 404,
             body: serde_json::to_vec(&json!({ "error": "Not found" })).unwrap_or_default(),
@@ -364,86 +552,4 @@ fn stream_terminal(request: Request, url: &str) {
     }
     let _ = write_chunk(w.as_mut(), b""); // terminating 0-length chunk
     drop(att); // detach (the tmux session keeps running)
-}
-
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let mut host = "127.0.0.1".to_string();
-    let mut port = "8765".to_string();
-    let mut dist = std::env::var("SKILL_DIST").unwrap_or_else(|_| "dist".to_string());
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--host" => { i += 1; host = args.get(i).cloned().unwrap_or(host); }
-            "--port" => { i += 1; port = args.get(i).cloned().unwrap_or(port); }
-            "--dist" => { i += 1; dist = args.get(i).cloned().unwrap_or(dist); }
-            _ => {}
-        }
-        i += 1;
-    }
-    let dist = PathBuf::from(dist);
-    let addr = format!("{host}:{port}");
-
-    let server = match Server::http(&addr) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            eprintln!("skill-server: failed to bind {addr}: {e}");
-            std::process::exit(1);
-        }
-    };
-    println!("skill-server listening on http://{addr}  (dist: {})", dist.display());
-    // Reap any terminal sessions / inference engines orphaned by a previous
-    // backend that died hard.
-    skill_term::sweep_orphans();
-    engine::reap_orphans();
-    engine::prefetch_model(); // download the model now so the first draft is fast
-    if !dist.join("index.html").is_file() {
-        println!("  note: {} has no index.html — run `npm run build` to serve the UI.", dist.display());
-    }
-
-    let mut workers = Vec::new();
-    for _ in 0..4 {
-        let server = Arc::clone(&server);
-        let dist = dist.clone();
-        workers.push(thread::spawn(move || {
-            for mut request in server.incoming_requests() {
-                let method = request.method().clone();
-                let url = request.url().to_string();
-                // Terminal output streams (SSE) block for the session's lifetime —
-                // run them on a dedicated thread so they never starve this worker.
-                if method == Method::Get && url.split('?').next() == Some("/api/terminal/attach") {
-                    thread::spawn(move || stream_terminal(request, &url));
-                    continue;
-                }
-                let mut body = String::new();
-                if method == Method::Post {
-                    let _ = request.as_reader().read_to_string(&mut body);
-                }
-                let reply = handle(&method, &url, &body, &dist);
-
-                let mut response = Response::from_data(reply.body).with_status_code(reply.status);
-                let headers = [
-                    ("Content-Type", reply.content_type.as_str()),
-                    ("Access-Control-Allow-Origin", "*"),
-                    ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-                    ("Access-Control-Allow-Headers", "Content-Type"),
-                    ("Cache-Control", "no-store"),
-                ];
-                for (k, val) in headers {
-                    if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
-                        response.add_header(h);
-                    }
-                }
-                for (k, val) in &reply.extra {
-                    if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
-                        response.add_header(h);
-                    }
-                }
-                let _ = request.respond(response);
-            }
-        }));
-    }
-    for w in workers {
-        let _ = w.join();
-    }
 }

@@ -39,7 +39,7 @@ interface RawSkill {
   totalBytes: number;
 }
 
-// --- raw command transports ---
+// --- HTTP endpoints (skill-server /api/*) ---
 const readSkillRaw = (path: string) => http<RawSkill>("POST", "read-skill", { path });
 
 export const readFile = (root: string, rel: string) => http<FileData>("POST", "read-file", { root, rel });

@@ -7,11 +7,12 @@
 
 The app is two parts that can run on **different machines**:
 
-- **Backend (Rust).** All real work — filesystem, git, skill discovery, secrets,
-  app-managed terminals, the on-device LLM — lives in `crates/skill-core`
-  (transport-agnostic, **no GUI/Tauri deps**) and is exposed over HTTP by
-  `crates/skill-server` at `/api/*`.
-- **Frontend (React/TS, `src/`).** Talks to the backend through `src/lib/api.ts`.
+- **Backend (Rust), `server/`.** All real work — filesystem, git, skill discovery,
+  secrets, app-managed terminals, the on-device LLM — lives in `server/skill-core`
+  (transport-agnostic, **no GUI/Tauri deps**); `server/skill-term` handles terminals;
+  `server/skill-server` exposes them over HTTP at `/api/*` (+ SSE) and serves the UI.
+- **Frontend (React/TS), `client/web/`.** Talks to the backend through
+  `client/web/lib/api.ts`. `client/desktop/` is the Tauri shell that hosts the webview.
 
 The contract between them is **HTTP/JSON** (plus **SSE** for streaming). That contract
 is what lets the backend run on one machine (WSL2, a remote dev box, a container) and
@@ -49,8 +50,8 @@ fallback) must still originate in **Rust** on the server side, never the webview
 1. **Logic** → a function in `skill-core` (keep it Tauri-free so `skill-server` builds).
 2. **HTTP route** → a match arm in `skill-server`'s `handle()` under `/api/<name>`.
    **This is the API.** If you can't reach it from skill-server, it isn't done.
-3. **Frontend** → one function in `src/lib/api.ts` that calls `http(...)`. No `invoke`,
-   no `isTauri` branch.
+3. **Frontend** → one function in `client/web/lib/api.ts` that calls `http(...)`. No
+   `invoke`, no `isTauri` branch.
 
 Extra constraints:
 - **Streaming** uses SSE (`request.into_writer()` + chunked `data:` frames — see
@@ -64,7 +65,7 @@ Extra constraints:
 
 ## Reference example: on-device commit messages
 
-- Logic: `skill-core/src/engine.rs` + `commitmsg.rs`.
+- Logic: `server/skill-core/src/engine.rs` + `commitmsg.rs`.
 - HTTP: `POST /api/generate-commit-message`, `GET /api/commit-model-status`.
 - Frontend: `api.generateCommitMessage()` / `api.commitModelStatus()` over `http`.
 - Verified end-to-end through the HTTP path (skill-server) — the only path.
@@ -79,8 +80,12 @@ Extra constraints:
 | Production / remote | `npm run build` then run skill-server | (served by skill-server) | skill-server's port (UI + API, one origin) |
 
 The Vite `/api` proxy lives in `vite.config.ts` (`server.proxy`, target overridable via
-`VITE_API_TARGET`). In `tauri dev` the same proxy serves the webview's `/api`, so a
-`skill-server` must be running at the proxy target.
+`VITE_API_TARGET`). In `tauri dev` the desktop shell spawns its own loopback
+`skill-server` on `:8765` (the proxy target), so no separate backend is needed.
+
+The desktop runs the server **in-process** by calling `skill_server::spawn(ServerConfig)`
+([client/desktop/src/lib.rs](client/desktop/src/lib.rs)); `ServerConfig` already carries
+the `token` (bearer-auth) and `examples_base` seams the remote case will use.
 
 ## Next: the connection manager (VS Code "Remote - SSH")
 
@@ -93,3 +98,11 @@ and connects a remote server. Sketch:
 - Launch it on an ephemeral port with a bearer token; read `ready port=N token=T` from stdout.
 - SSH `-L` forward to that port; point the webview/`API_BASE` at the local end with the token.
 - skill-server's terminals are tmux-backed, so sessions already survive reconnects.
+
+> **Token + SSE gotcha (for when the token is turned on).** The auth guard
+> (`authorized()` in `server/skill-server/src/lib.rs`) expects `Authorization: Bearer
+> <token>`, but the terminal stream is consumed with `EventSource`, which has **no
+> header API**. So the SSE attach path must take the token via a query param — or skip
+> it: the `ssh -L` tunnel already authenticates, and the server binds loopback only, so
+> only tunnelled traffic reaches it. The token mainly guards against *other users on the
+> remote box*. Decide this when wiring the token, not before.

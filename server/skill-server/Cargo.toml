@@ -2,7 +2,11 @@
 name = "skill-server"
 version = "0.1.0"
 edition = "2021"
-description = "Headless HTTP server exposing skill-core over /api (WSL2 / remote backend)"
+description = "The backend: HTTP face of skill-core + skill-term (/api + SSE), serving the built UI. Runs in-process in the desktop (loopback) or standalone on a remote host."
+
+[lib]
+name = "skill_server"
+path = "src/lib.rs"
 
 [[bin]]
 name = "skill-server"
@@ -15,4 +19,3 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
 urlencoding = "2"
-dirs = "5"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Vendor the prebuilt llama.cpp `llama-server` engine (MIT-licensed) for the local
-# platform into src-tauri/binaries/<target-triple>/, so the app can bundle it and
+# platform into client/desktop/binaries/<target-triple>/, so the app can bundle it and
 # spawn it on-device. CI runs this for every shipped target before `tauri build`.
 #
 #   scripts/fetch-engine.sh                 # latest llama.cpp release, host platform
@@ -8,7 +8,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST_ROOT="$REPO_ROOT/src-tauri/binaries"
+DEST_ROOT="$REPO_ROOT/client/desktop/binaries"
 
 # Host → (llama.cpp release asset substring, Rust target triple).
 # Windows hosts report MINGW*/MSYS*/CYGWIN* under the bash that CI (and Git Bash) use.
@@ -80,4 +80,4 @@ rm -rf "$dest"; mkdir -p "$dest"
 cp -a "$(dirname "$bin")/." "$dest/"   # binary + its shared libs (rpath=\$ORIGIN / same-dir DLLs)
 chmod +x "$dest/$(basename "$bin")" 2>/dev/null || true
 printf '%s\n' "$TAG" > "$dest/.llama-build"
-echo "vendored → src-tauri/binaries/$TRIPLE/ ($(du -sh "$dest" | cut -f1))"
+echo "vendored → client/desktop/binaries/$TRIPLE/ ($(du -sh "$dest" | cut -f1))"

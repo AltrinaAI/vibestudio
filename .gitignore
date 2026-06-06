@@ -19,11 +19,11 @@
 
 # rust / tauri build output (Cargo workspace target lives at the repo root now)
 /target
-/src-tauri/target
+/client/desktop/target
 **/target
 
 # vendored on-device LLM engine (fetched by scripts/fetch-engine.sh; not committed)
-/src-tauri/binaries
+/client/desktop/binaries
 
 # misc
 .DS_Store
