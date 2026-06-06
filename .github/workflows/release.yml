@@ -166,3 +166,79 @@ jobs:
           # `--no-sign` branch below — the bundle.windows.signCommand + scripts/sign-windows.ps1
           # are kept in place. (&& / || precedence: each `A && B` is evaluated before the `||`s.)
           args: ${{ matrix.platform == 'macos-15-intel' && '--target x86_64-apple-darwin' || matrix.platform == 'windows-latest' && '--no-sign' || '' }}
+
+  # Standalone `skill-server` binaries for the Remote-SSH feature. The desktop app
+  # provisions one onto a remote host on demand (VS Code-style: the remote curls it,
+  # with a local-download-piped-over-ssh fallback). Static musl on Linux so glibc skew
+  # on old remotes never bites; native builds on macOS. Uploaded to the SAME release
+  # as the desktop bundles (needs: build, which creates the draft via tauri-action).
+  # The desktop fetches the asset from the release tag matching its own version (the
+  # "Sync app version from tag" step above stamps that version), so a fresh remote
+  # downloads the right binary. (Build-time override: SKILL_STUDIO_SERVER_BASE_URL.)
+  server-binaries:
+    name: skill-server (${{ matrix.target }})
+    # Run AFTER build (so the draft release usually exists) but NOT gated on its
+    # success: a flaky desktop leg (signing/notarization) must not skip the server
+    # binaries, or Remote-SSH can't provision that release. The job ensures the release
+    # exists itself before uploading.
+    needs: build
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            musl: true
+          - runner: ubuntu-22.04-arm # GitHub-hosted arm64 Linux runner
+            target: aarch64-unknown-linux-musl
+            musl: true
+          - runner: macos-latest # Apple silicon
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install musl toolchain (Linux)
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # Builds ONLY skill-server (+ skill-core/skill-term) — no tauri/webkit deps, so
+      # the static musl link is clean and fast.
+      - name: Build skill-server
+        run: cargo build --release -p skill-server --bin skill-server --target ${{ matrix.target }}
+
+      - name: Package + checksum
+        shell: bash
+        run: |
+          out="skill-server-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/skill-server" "$out"
+          if command -v sha256sum >/dev/null 2>&1; then sha256sum "$out" > "$out.sha256"; else shasum -a 256 "$out" > "$out.sha256"; fi
+
+      # The draft is normally created by tauri-action in `build`; create it if a build
+      # failure meant it never got made (|| true tolerates the matrix-leg race).
+      - name: Ensure the release exists
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
+            gh release create "${{ github.ref_name }}" --draft \
+              --title "Agent Skill Studio ${{ github.ref_name }}" \
+              --notes "Desktop bundles and standalone skill-server binaries." || true
+
+      - name: Upload to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "skill-server-${{ matrix.target }}" "skill-server-${{ matrix.target }}.sha256" --clobber

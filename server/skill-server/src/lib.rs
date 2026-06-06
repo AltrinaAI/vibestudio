@@ -24,7 +24,61 @@ use serde_json::{json, Value};
 use skill_core::{commitmsg, discover, engine, gitops, secrets, skill, sync};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+mod proxy;
+mod remote_api;
+mod sshmgr;
+
+pub use sshmgr::SshRemoteControl;
+
 // ───────────────────────────── public API ─────────────────────────────
+
+// ── Remote-SSH connection manager (desktop only) ──
+// The desktop's SSH controller plugs in here so the UI can drive it over
+// `/api/remote/*`; while connected, the local server reverse-proxies the rest of
+// `/api/*` to the remote. The standalone (remote) binary leaves
+// `ServerConfig::remote` as `None`, so none of this is active there. The types live
+// here so `ServerConfig` can name them; the impl lives in `client/desktop`
+// (preserving the one-way `client/desktop` → `skill_server` crate dependency).
+
+/// A host the user can connect to: an alias from `~/.ssh/config`, or free-form
+/// `user@host`.
+#[derive(serde::Serialize)]
+pub struct RemoteHost {
+    pub name: String,
+    /// Resolved `user@hostname:port` for display, when known.
+    pub detail: Option<String>,
+}
+
+/// Live connection state, polled by the UI via `GET /api/remote/status`.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteStatus {
+    /// `idle` | `detecting` | `installing` | `launching` | `forwarding` | `connected` | `error`.
+    pub state: String,
+    pub host: Option<String>,
+    pub message: Option<String>,
+}
+
+/// Where the switchboard forwards `/api/*` while connected. The `token` is injected
+/// into the upstream `Authorization` header by the proxy and never reaches the
+/// browser (so the SSE `EventSource`, which can't set headers, needs no token).
+#[derive(Clone)]
+pub struct RemoteTarget {
+    /// `http://127.0.0.1:<local-forwarded-port>`.
+    pub base_url: String,
+    pub token: String,
+}
+
+/// The desktop's SSH connection manager. `connect` kicks off provisioning/tunnelling
+/// on a background thread and reports progress through `status`; `active_target`
+/// returns `Some` only once fully connected — that's the proxy's signal to forward.
+pub trait RemoteControl: Send + Sync {
+    fn list_hosts(&self) -> Result<Vec<RemoteHost>, String>;
+    fn connect(&self, host: &str) -> Result<(), String>;
+    fn disconnect(&self) -> Result<(), String>;
+    fn status(&self) -> RemoteStatus;
+    fn active_target(&self) -> Option<RemoteTarget>;
+}
 
 /// How to run the server. Build with `..Default::default()` and override fields.
 pub struct ServerConfig {
@@ -51,6 +105,10 @@ pub struct ServerConfig {
     /// standalone binary owns this; an embedding process (the desktop) that does
     /// its own lifecycle sets it `false` so the chores don't run twice.
     pub startup_maintenance: bool,
+    /// The SSH connection manager (desktop only). `None` = a plain server with no
+    /// remoting (the standalone binary, or browser-local dev). When set, the server
+    /// serves `/api/remote/*` and proxies the rest of `/api/*` to the connected remote.
+    pub remote: Option<Arc<dyn RemoteControl>>,
 }
 
 impl Default for ServerConfig {
@@ -64,6 +122,7 @@ impl Default for ServerConfig {
             token: None,
             workers: 4,
             startup_maintenance: true,
+            remote: None,
         }
     }
 }
@@ -118,6 +177,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
         bootstrap_skill: cfg.bootstrap_skill,
         examples_base: cfg.examples_base,
         token: cfg.token,
+        remote: cfg.remote,
     });
 
     let mut workers = Vec::with_capacity(cfg.workers);
@@ -135,6 +195,7 @@ struct ServerCtx {
     bootstrap_skill: Option<PathBuf>,
     examples_base: Option<PathBuf>,
     token: Option<String>,
+    remote: Option<Arc<dyn RemoteControl>>,
 }
 
 /// Bearer-token guard. `None` token ⇒ always authorized (loopback default).
@@ -160,15 +221,47 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
     for mut request in server.incoming_requests() {
         let method = request.method().clone();
         let url = request.url().to_string();
+        let path = url.split('?').next().unwrap_or(url.as_str()).to_string();
         // Auth at the single choke point (no-op when token is None). OPTIONS
         // preflight carries no Authorization, so it stays unauthenticated.
         if method != Method::Options && !authorized(&ctx.token, &request) {
             reply_status(request, 401, "Unauthorized");
             continue;
         }
+
+        // ── Remote-SSH switchboard (desktop only; `ctx.remote` is None on the
+        //    standalone binary, so neither branch fires there) ──
+        // The connection manager is ALWAYS handled locally, even while connected.
+        if path.starts_with("/api/remote/") {
+            let mut body = String::new();
+            if method == Method::Post {
+                let _ = request.as_reader().read_to_string(&mut body);
+            }
+            send_reply(request, remote_api::handle(&method, &path, &body, ctx));
+            continue;
+        }
+        // While a remote is connected, every other /api/* is reverse-proxied to it.
+        // (Must precede the local attach branch so the SSE stream proxies too.) BOTH
+        // proxy paths run on their OWN thread, so a slow/hung remote can never pin a
+        // pooled worker — keeping the locally-handled connection manager (status,
+        // disconnect) responsive even when every request is being proxied.
+        if path.starts_with("/api/") {
+            if let Some(target) = ctx.remote.as_ref().and_then(|r| r.active_target()) {
+                let url = url.clone();
+                if method == Method::Get && path == "/api/terminal/attach" {
+                    thread::spawn(move || proxy::proxy_sse(request, &url, &target));
+                } else {
+                    let method = method.clone();
+                    thread::spawn(move || proxy::proxy_buffered(request, &method, &url, &target));
+                }
+                continue;
+            }
+        }
+
+        // ── local handling ──
         // Terminal output streams (SSE) block for the session's lifetime — run
         // them on a dedicated thread so they never starve this worker.
-        if method == Method::Get && url.split('?').next() == Some("/api/terminal/attach") {
+        if method == Method::Get && path == "/api/terminal/attach" {
             thread::spawn(move || stream_terminal(request, &url));
             continue;
         }
@@ -176,28 +269,32 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
         if method == Method::Post {
             let _ = request.as_reader().read_to_string(&mut body);
         }
-        let reply = handle(&method, &url, &body, ctx);
-
-        let mut response = Response::from_data(reply.body).with_status_code(reply.status);
-        let headers = [
-            ("Content-Type", reply.content_type.as_str()),
-            ("Access-Control-Allow-Origin", "*"),
-            ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-            ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
-            ("Cache-Control", "no-store"),
-        ];
-        for (k, val) in headers {
-            if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
-                response.add_header(h);
-            }
-        }
-        for (k, val) in &reply.extra {
-            if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
-                response.add_header(h);
-            }
-        }
-        let _ = request.respond(response);
+        send_reply(request, handle(&method, &url, &body, ctx));
     }
+}
+
+/// Serialize a `Reply` onto the wire with the standard CORS + no-store headers, then
+/// any reply-specific `extra` headers. Shared by local handlers and the proxy.
+pub(crate) fn send_reply(request: Request, reply: Reply) {
+    let mut response = Response::from_data(reply.body).with_status_code(reply.status);
+    let headers = [
+        ("Content-Type", reply.content_type.as_str()),
+        ("Access-Control-Allow-Origin", "*"),
+        ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+        ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
+        ("Cache-Control", "no-store"),
+    ];
+    for (k, val) in headers {
+        if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
+            response.add_header(h);
+        }
+    }
+    for (k, val) in &reply.extra {
+        if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
+            response.add_header(h);
+        }
+    }
+    let _ = request.respond(response);
 }
 
 // ───────────────────────────── request handling ─────────────────────────────
@@ -475,7 +572,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
 // drops it → detaches, leaving the tmux session running (nohup w.r.t. the UI).
 
 /// Write one HTTP/1.1 chunk and flush it to the socket immediately.
-fn write_chunk(w: &mut dyn Write, frame: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_chunk(w: &mut dyn Write, frame: &[u8]) -> std::io::Result<()> {
     write!(w, "{:x}\r\n", frame.len())?;
     w.write_all(frame)?;
     w.write_all(b"\r\n")?;
@@ -487,7 +584,25 @@ fn write_chunk(w: &mut dyn Write, frame: &[u8]) -> std::io::Result<()> {
 static ACTIVE_STREAMS: AtomicUsize = AtomicUsize::new(0);
 const MAX_STREAMS: usize = 256;
 
-fn reply_status(request: Request, status: u16, error: &str) {
+/// RAII guard for one streaming slot; releases the count on drop (every exit path).
+pub(crate) struct StreamSlot;
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        ACTIVE_STREAMS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+/// Reserve a streaming slot, or `None` if `MAX_STREAMS` are already open. Shared by the
+/// local terminal stream and the proxied (remote) one so the cap covers both paths.
+pub(crate) fn acquire_stream_slot() -> Option<StreamSlot> {
+    if ACTIVE_STREAMS.fetch_add(1, Ordering::Relaxed) >= MAX_STREAMS {
+        ACTIVE_STREAMS.fetch_sub(1, Ordering::Relaxed);
+        None
+    } else {
+        Some(StreamSlot)
+    }
+}
+
+pub(crate) fn reply_status(request: Request, status: u16, error: &str) {
     let body = serde_json::to_vec(&json!({ "error": error })).unwrap_or_default();
     let mut resp = Response::from_data(body).with_status_code(StatusCode(status));
     for (k, val) in [("Content-Type", "application/json"), ("Access-Control-Allow-Origin", "*")] {
@@ -501,18 +616,10 @@ fn reply_status(request: Request, status: u16, error: &str) {
 /// Handle `GET /api/terminal/attach?id=&cols=&rows=` on its own thread (it blocks
 /// for the session's lifetime, so it must not occupy a pooled worker).
 fn stream_terminal(request: Request, url: &str) {
-    // RAII slot accounting so the count is released on every exit path.
-    struct Slot;
-    impl Drop for Slot {
-        fn drop(&mut self) {
-            ACTIVE_STREAMS.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-    if ACTIVE_STREAMS.fetch_add(1, Ordering::Relaxed) >= MAX_STREAMS {
-        ACTIVE_STREAMS.fetch_sub(1, Ordering::Relaxed);
-        return reply_status(request, 503, "Too many terminal streams are open.");
-    }
-    let _slot = Slot;
+    let _slot = match acquire_stream_slot() {
+        Some(s) => s,
+        None => return reply_status(request, 503, "Too many terminal streams are open."),
+    };
 
     let id = query_param(url, "id").unwrap_or_default();
     let cols = query_param(url, "cols").and_then(|s| s.parse().ok()).unwrap_or(80u16);

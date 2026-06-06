@@ -8,7 +8,7 @@
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 use skill_core::engine;
-use skill_server::ServerConfig;
+use skill_server::{ServerConfig, SshRemoteControl};
 
 /// Locate the bundled `llama-server` so the on-device commit-message generator
 /// runs with zero setup. Checks the production bundle (resource dir) then the
@@ -44,8 +44,14 @@ fn find_bundled_engine(app: &tauri::App) -> Option<std::path::PathBuf> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The SSH connection manager is created in `setup` (it needs the app version to
+    // provision the matching remote `skill-server`); this slot hands it to the exit
+    // handler so a live session is torn down on quit (no orphaned remote/tunnel).
+    let remote_slot: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>> =
+        std::sync::Arc::new(std::sync::OnceLock::new());
+    let remote_slot_setup = remote_slot.clone();
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             // ── lifecycle this process owns (the in-process server is spawned with
             //    startup_maintenance:false, so these run exactly once) ──
             skill_term::sweep_orphans(); // reap terminals orphaned by a hard-killed predecessor
@@ -59,6 +65,13 @@ pub fn run() {
             }
             engine::reap_orphans(); // kill any engine orphaned by a previous hard-kill
             engine::prefetch_model(); // start the one-time model download now, not on first Generate
+
+            // SSH connection manager: provisions the release-matching `skill-server`
+            // onto remotes, so it needs the app version (from tauri.conf.json).
+            let remote = std::sync::Arc::new(SshRemoteControl::new(
+                app.package_info().version.to_string(),
+            ));
+            let _ = remote_slot_setup.set(remote.clone());
 
             // ── bring up the loopback backend and point the webview at it ──
             let resource_dir = app.path().resource_dir().ok();
@@ -75,6 +88,8 @@ pub fn run() {
                 bootstrap_skill: resource_dir.clone().map(|r| r.join("skills").join("skill-studio")),
                 examples_base: resource_dir, // resolve bundled examples by relative path
                 startup_maintenance: false,
+                // Plug the SSH connection manager into the local switchboard.
+                remote: Some(remote.clone() as std::sync::Arc<dyn skill_server::RemoteControl>),
                 ..Default::default()
             };
             let port = match skill_server::spawn(cfg) {
@@ -103,9 +118,13 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
-            // Closing the desktop app reaps the agents + engine it owns (no zombies).
+        .run(move |_app, event| {
+            // Closing the desktop app reaps the agents + engine it owns (no zombies)
+            // and tears down any live SSH session (no orphaned remote server/tunnel).
             if let tauri::RunEvent::Exit = event {
+                if let Some(r) = remote_slot.get() {
+                    r.shutdown();
+                }
                 skill_term::cleanup_owned();
                 engine::shutdown(); // reap the inference engine child too
             }

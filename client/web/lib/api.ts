@@ -62,6 +62,34 @@ export async function discoverSkills(): Promise<AgentSkills[]> {
   }));
 }
 
+// --- Remote-SSH connection manager (desktop only) ---
+// These reach the LOCAL server's switchboard. While connected, EVERY other endpoint
+// above transparently operates on the remote (the local server proxies it) — skills,
+// files, git, secrets, terminals, the lot — so the whole window is remote-backed and
+// this file is unchanged by remoting. On a server without remoting (browser dev, or
+// the remote binary itself) these 404 — the caller treats that as "unavailable".
+export interface RemoteHost {
+  name: string;
+  detail?: string | null;
+}
+export type RemoteState =
+  | "idle"
+  | "detecting"
+  | "installing"
+  | "launching"
+  | "forwarding"
+  | "connected"
+  | "error";
+export interface RemoteStatus {
+  state: RemoteState;
+  host?: string | null;
+  message?: string | null;
+}
+export const remoteList = () => http<RemoteHost[]>("GET", "remote/list");
+export const remoteStatus = () => http<RemoteStatus>("GET", "remote/status");
+export const remoteConnect = (host: string) => http<{ ok: boolean }>("POST", "remote/connect", { host });
+export const remoteDisconnect = () => http<{ ok: boolean }>("POST", "remote/disconnect");
+
 // --- composed helpers ---
 export async function loadSkill(path: string): Promise<SkillData> {
   const r = await readSkillRaw(path);

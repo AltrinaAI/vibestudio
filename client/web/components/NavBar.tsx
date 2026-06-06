@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { TerminalMark } from "./FileIcon";
 import { ThemeToggle } from "./ui";
+import RemoteMenu from "./RemoteMenu";
 import { secretsPath } from "@/lib/routes";
 import { toggleTheme } from "@/lib/theme";
 
@@ -83,6 +84,7 @@ export default function NavBar({ breadcrumb, children }: { breadcrumb?: ReactNod
       <div className="ml-auto flex items-center gap-1">
         {children}
         {children && <span className="mx-1 h-5 w-px bg-border" aria-hidden />}
+        <RemoteMenu />
         <NavLink icon={<TerminalIcon />} label="Terminals" active={pathname === "/terminals"} onClick={() => navigate("/terminals")} />
         <NavLink icon={<KeyIcon />} label="Secrets" active={pathname === "/secrets"} onClick={() => navigate(secretsPath())} />
         <ThemeToggle onClick={toggleTheme} />

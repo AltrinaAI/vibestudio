@@ -2986,11 +2986,15 @@ dependencies = [
 name = "skill-server"
 version = "0.1.0"
 dependencies = [
+ "dirs 5.0.1",
+ "getrandom 0.2.17",
  "serde",
  "serde_json",
+ "sha2",
  "skill-core",
  "skill-term",
  "tiny_http",
+ "ureq",
  "urlencoding",
 ]
 

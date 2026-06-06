@@ -19,3 +19,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
 urlencoding = "2"
+# Reverse-proxy client for the Remote-SSH switchboard + downloading the remote
+# `skill-server` asset (pure-Rust rustls + gzip).
+ureq = "2"
+# SSH connection manager (sshmgr): `~/.ssh/config` discovery (dirs), per-session
+# bearer token (getrandom), and verifying the downloaded binary's checksum (sha2).
+# All pure-Rust / already in the lockfile, so the static-musl build is unaffected.
+dirs = "5"
+getrandom = "0.2"
+sha2 = "0.10"

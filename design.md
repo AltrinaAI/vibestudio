@@ -87,22 +87,39 @@ The desktop runs the server **in-process** by calling `skill_server::spawn(Serve
 ([client/desktop/src/lib.rs](client/desktop/src/lib.rs)); `ServerConfig` already carries
 the `token` (bearer-auth) and `examples_base` seams the remote case will use.
 
-## Next: the connection manager (VS Code "Remote - SSH")
+## The connection manager (VS Code "Remote - SSH")
 
-HTTP-only makes "remote" a config change; the remaining work is the broker that provisions
-and connects a remote server. Sketch:
-- Shell out to the system `ssh` (inherits the user's keys/config/ProxyJump — "any host you
-  can already SSH to" comes free).
-- Detect the remote arch; ensure a version-pinned `skill-server` is installed (scp a static
-  `musl` build if missing — one file, no runtime to install).
-- Launch it on an ephemeral port with a bearer token; read `ready port=N token=T` from stdout.
-- SSH `-L` forward to that port; point the webview/`API_BASE` at the local end with the token.
-- skill-server's terminals are tmux-backed, so sessions already survive reconnects.
+Implemented as a **local proxy switchboard** — the realization of "local is just remote
+where the host is localhost." The webview NEVER changes origin; the server it talks to
+becomes a switchboard:
 
-> **Token + SSE gotcha (for when the token is turned on).** The auth guard
-> (`authorized()` in `server/skill-server/src/lib.rs`) expects `Authorization: Bearer
-> <token>`, but the terminal stream is consumed with `EventSource`, which has **no
-> header API**. So the SSE attach path must take the token via a query param — or skip
-> it: the `ssh -L` tunnel already authenticates, and the server binds loopback only, so
-> only tunnelled traffic reaches it. The token mainly guards against *other users on the
-> remote box*. Decide this when wiring the token, not before.
+- `/api/remote/{list,connect,disconnect,status}` is the **connection manager**, always
+  handled locally. The impl is `SshRemoteControl` in
+  [server/skill-server/src/sshmgr/](server/skill-server/src/sshmgr/) (a `RemoteControl`
+  trait object on `ServerConfig`); it shells out to the system `ssh`.
+- While connected, **every other `/api/*` (incl. the `/api/terminal/attach` SSE) is
+  reverse-proxied** to the remote `skill-server` over the `ssh -L` tunnel
+  ([proxy.rs](server/skill-server/src/proxy.rs)), with the bearer token injected on the
+  upstream side. So `client/web` is unchanged by remoting, and **the token never reaches
+  the browser** — which dissolves the old `EventSource`-can't-send-`Authorization`
+  problem entirely (the proxy adds the header; the browser only ever talks same-origin).
+- Non-`/api` GETs always serve the local UI, so the remote binary need not serve it.
+
+The connect flow (VS Code-style): read `~/.ssh/config` → detect remote arch (`uname`) →
+ensure a version-pinned static-musl `skill-server` is installed (remote `curl`/`wget`, or
+a local-download piped over ssh; checksum-verified) → launch it loopback-bound with a
+token delivered via env (off the process table) → ONE `ssh` child is both the tunnel and
+the lifeline (its held stdin EOFs the remote on disconnect/crash, so no orphan; a monitor
+clears the session if it dies). On reaching "connected" the SPA reloads, so the whole
+window rebinds to the remote. Terminals are tmux-backed, so sessions survive reconnects.
+
+**Same code in every server.** The manager lives server-side, so a `skill-server`
+exposes it whether it runs **in-process in the desktop** or **standalone** (browser-local
+dev, or a dev box) — there's no browser-vs-desktop divergence. Two safety gates keep it
+off where it shouldn't broker: a *provisioned remote* (launched `--lifeline-stdin`) and a
+*non-loopback* bind both leave `ServerConfig::remote = None`.
+
+Provisioning downloads the matching `skill-server-<target>` from the GitHub release whose
+tag matches the app version (CI builds static-musl + macOS binaries — see
+[.github/workflows/release.yml](.github/workflows/release.yml)). Override the source with
+`SKILL_STUDIO_SERVER_BASE_URL` / `SKILL_STUDIO_SERVER_VERSION`.

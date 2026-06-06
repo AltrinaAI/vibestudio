@@ -17,4 +17,6 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 skill-core = { path = "../../server/skill-core" }
 skill-term = { path = "../../server/skill-term" }
+# Backend (incl. the SSH connection manager) — the desktop wires it into its
+# in-process server; the ssh/provisioning code lives here, not in the shell.
 skill-server = { path = "../../server/skill-server" }
