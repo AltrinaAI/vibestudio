@@ -9,6 +9,7 @@
 import { skillKind, type SkillKind } from "@/lib/agents";
 import { requiredEnv, withRequiredEnv } from "@/lib/skill";
 import * as api from "@/lib/api";
+import { log } from "@/lib/log";
 import type { SkillData } from "@/lib/types";
 
 /** Describes the save that just landed on disk; handed to every hook. */
@@ -108,7 +109,7 @@ export async function runSaveHooks(
       const effect = await h.run(ctx);
       if (effect) effects.push(effect);
     } catch (e) {
-      console.error(`[save-hook:${h.name}] failed`, e);
+      log.error(`save-hook:${h.name}`, "failed", e);
     }
   }
   return effects;

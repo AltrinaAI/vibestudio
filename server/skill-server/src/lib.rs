@@ -47,13 +47,64 @@ pub use sshmgr::SshRemoteControl;
 /// (`opentelemetry-appender-log`) can replace this subscriber later with no
 /// call-site changes.
 pub fn init_logging() {
-    let _ = env_logger::Builder::from_env(
-        env_logger::Env::default()
-            .default_filter_or("warn,skill_server=info,skill_core=info,skill_term=info"),
-    )
-    .target(env_logger::Target::Stderr)
-    .format_timestamp_millis()
-    .try_init();
+    let _ = base_log_builder().target(env_logger::Target::Stderr).try_init();
+}
+
+/// Like [`init_logging`], but ALSO append logs to `path` — for the packaged desktop,
+/// where stderr goes nowhere (no attached terminal; on Windows the release build
+/// detaches the console entirely). Tees every line to BOTH stderr (so `npm run dev`
+/// keeps showing logs) and the file. Best-effort: if the file can't be opened it
+/// falls back to stderr-only, so logging never breaks. The file is kept small by
+/// rotating once at startup when it exceeds ~1 MiB (retaining a single `.log.1`); at
+/// the default `warn` level it grows very slowly.
+pub fn init_logging_to_file(path: &Path) {
+    let target = match open_log_file(path) {
+        Some(file) => env_logger::Target::Pipe(Box::new(TeeWriter { file })),
+        None => env_logger::Target::Stderr,
+    };
+    let _ = base_log_builder().target(target).try_init();
+}
+
+const DEFAULT_LOG_FILTER: &str = "warn,skill_server=info,skill_core=info,skill_term=info";
+
+/// Shared builder: read `RUST_LOG` (quiet default), millisecond timestamps. The
+/// caller picks the sink via `.target(...)`.
+fn base_log_builder() -> env_logger::Builder {
+    let mut b =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(DEFAULT_LOG_FILTER));
+    b.format_timestamp_millis();
+    b
+}
+
+/// Rotate the log if it's already large (keep one previous `.log.1`), then open it
+/// for append. All steps best-effort — any failure yields `None` → stderr-only.
+fn open_log_file(path: &Path) -> Option<std::fs::File> {
+    const MAX_BYTES: u64 = 1024 * 1024; // 1 MiB — keep the on-disk log small.
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::metadata(path).map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
+        let _ = std::fs::rename(path, path.with_extension("log.1"));
+    }
+    std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+/// Fans each formatted log line out to the file (the durable sink for a packaged
+/// app) AND stderr (keeps `npm run dev` working). The stderr write is best-effort so
+/// a closed/invalid stderr in a bundled app never drops the file write. env_logger
+/// serializes writes to this target internally, so no extra locking is needed.
+struct TeeWriter {
+    file: std::fs::File,
+}
+impl Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stderr().write_all(buf);
+        self.file.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stderr().flush();
+        self.file.flush()
+    }
 }
 
 // ───────────────────────────── public API ─────────────────────────────
@@ -266,6 +317,18 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
             send_reply(request, remote_api::handle(&method, &path, &body, ctx));
             continue;
         }
+        // Frontend log shipping — ALWAYS handled locally (never proxied), so the
+        // UI's own warns/errors land in THIS machine's log file, which is where
+        // you'd look to debug the desktop app. The client batches these, so it
+        // only fires when the UI actually logs a warning/error.
+        if path == "/api/client-log" {
+            let mut body = String::new();
+            if method == Method::Post {
+                let _ = request.as_reader().read_to_string(&mut body);
+            }
+            send_reply(request, client_log(&body));
+            continue;
+        }
         // While a remote is connected, every other /api/* is reverse-proxied to it.
         // (Must precede the local attach branch so the SSE stream proxies too.) BOTH
         // proxy paths run on their OWN thread, so a slow/hung remote can never pin a
@@ -366,6 +429,34 @@ fn json_reply<T: serde::Serialize>(result: Result<T, String>) -> Reply {
             extra: vec![],
         },
     }
+}
+
+/// Re-emit a batch of frontend log entries through the server logger, so they land
+/// in the same sink (stderr + the on-disk file) as backend logs. Only `warn`/`error`
+/// are forwarded by the client, under the `skill_client` target; malformed batches
+/// are ignored (never let client input crash the route).
+fn client_log(body: &str) -> Reply {
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        level: String,
+        scope: Option<String>,
+        msg: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Batch {
+        entries: Vec<Entry>,
+    }
+    if let Ok(batch) = serde_json::from_str::<Batch>(body) {
+        for e in batch.entries.into_iter().take(200) {
+            let scope = e.scope.as_deref().unwrap_or("client");
+            if e.level == "error" {
+                log::error!(target: "skill_client", "[{scope}] {}", e.msg);
+            } else {
+                log::warn!(target: "skill_client", "[{scope}] {}", e.msg);
+            }
+        }
+    }
+    json_reply(Ok(json!({ "ok": true })))
 }
 
 fn web_mime(path: &str) -> &'static str {

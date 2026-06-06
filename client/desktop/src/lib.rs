@@ -8,7 +8,7 @@
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 use skill_core::engine;
-use skill_server::{init_logging, ServerConfig, SshRemoteControl};
+use skill_server::{init_logging, init_logging_to_file, ServerConfig, SshRemoteControl};
 
 /// Locate the bundled `llama-server` so the on-device commit-message generator
 /// runs with zero setup. Checks the production bundle (resource dir) then the
@@ -44,11 +44,6 @@ fn find_bundled_engine(app: &tauri::App) -> Option<std::path::PathBuf> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Logger first (shared with the in-process server; stderr, RUST_LOG-gated).
-    // Visible under `npm run dev`; in a packaged app stderr has nowhere to go —
-    // an on-disk sink is a deferred follow-up.
-    init_logging();
-
     // The SSH connection manager is created in `setup` (it needs the app version to
     // provision the matching remote `skill-server`); this slot hands it to the exit
     // handler so a live session is torn down on quit (no orphaned remote/tunnel).
@@ -57,6 +52,20 @@ pub fn run() {
     let remote_slot_setup = remote_slot.clone();
     tauri::Builder::default()
         .setup(move |app| {
+            // Logger first, so even early startup is captured. Tee to a small on-disk
+            // file (durable for the packaged app, where stderr goes nowhere) + stderr
+            // (so `npm run dev` still shows logs). The in-process server shares this
+            // process, so its `log::*` records land here too. RUST_LOG-gated; quiet by
+            // default. Frontend warns/errors arrive via POST /api/client-log.
+            let log_path = app.path().app_log_dir().ok().map(|d| d.join("skill-studio.log"));
+            match &log_path {
+                Some(p) => init_logging_to_file(p),
+                None => init_logging(),
+            }
+            if let Some(p) = &log_path {
+                log::info!("on-disk log: {}", p.display());
+            }
+
             // ── lifecycle this process owns (the in-process server is spawned with
             //    startup_maintenance:false, so these run exactly once) ──
             skill_term::sweep_orphans(); // reap terminals orphaned by a hard-killed predecessor

@@ -67,7 +67,7 @@ export default function TopBar({
           onClick={onToggleReview}
           aria-pressed={reviewMode}
           title="Review change mode — show changes since the last saved version"
-          className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+          className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
             reviewMode ? "bg-accent text-white hover:opacity-90" : "text-muted hover:bg-panel hover:text-fg"
           }`}
         >

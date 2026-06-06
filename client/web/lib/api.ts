@@ -12,23 +12,35 @@ import {
 } from "@/lib/skill";
 import type { SkillData, FileData, TreeNode } from "@/lib/types";
 import { isBootstrapSkill } from "@/lib/agents";
+import { log } from "@/lib/log";
 
 // Same-origin by default (server serves the UI + /api). Override for dev with
 // VITE_API_BASE (e.g. point a Vite dev server at a remote skill-server).
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
 async function http<T>(method: "GET" | "POST", path: string, args?: Record<string, unknown>): Promise<T> {
-  const res = await fetch(`${API_BASE}/api/${path}`, {
-    method,
-    headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
-    body: method === "POST" ? JSON.stringify(args ?? {}) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/${path}`, {
+      method,
+      headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
+      body: method === "POST" ? JSON.stringify(args ?? {}) : undefined,
+    });
+  } catch (e) {
+    // Transport failure (server unreachable / dropped tunnel). Console-only in dev;
+    // not forwarded — the log endpoint lives on the very server that's unreachable.
+    log.debug("api", `${method} ${path} — network error`, e instanceof Error ? e.message : String(e));
+    throw e;
+  }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // Console-only (debug): the server already logs its own 4xx/5xx, so forwarding
+    // would be redundant networking.
+    log.debug("api", `${method} ${path} -> ${res.status}`, (json && json.error) || "");
     // Carry the HTTP status so callers can tell an HTTP error (e.g. a 404 — route
-    // absent) from a transport failure (fetch throws *before* here, so that error has
-    // no `status`). Used by the remote store to distinguish "no remoting on this server"
-    // from "the local server is unreachable".
+    // absent) from a transport failure (the rethrow above has no `status`). Used by
+    // the remote store to distinguish "no remoting on this server" from "the local
+    // server is unreachable".
     const err = new Error((json && json.error) || `Request failed (${res.status})`) as Error & { status?: number };
     err.status = res.status;
     throw err;
@@ -571,6 +583,7 @@ export function attachTerminal(
   es.onerror = () => {
     // CLOSED ⇒ the browser gave up (e.g. a 4xx because the session is gone) and
     // won't reconnect; surface it once. CONNECTING ⇒ a transient blip, let it retry.
+    log.debug("sse", `terminal/attach id=${id} readyState=${es.readyState}`);
     if (es.readyState === EventSource.CLOSED && !closed) {
       closed = true;
       opts.onClose?.();
