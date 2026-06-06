@@ -1,0 +1,113 @@
+name: ci
+
+# Pre-merge gate. The release workflow (release.yml) only runs on `v*` tags and
+# never validates a PR, so without this nothing runs `lint`, `clippy`, `test`, or
+# the `tsc --noEmit && vite build` gate before code lands on master. A green run
+# here predicts a green release: the server job builds the exact `-p skill-server`
+# unit the release leg ships, and the desktop job `cargo check`s the Tauri crate.
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The React 19 + TS SPA in client/web: the same lint + build the maintainer runs
+  # locally (package.json `lint`/`build`). `build` is `tsc --noEmit && vite build`,
+  # so it type-checks the whole frontend AND proves the bundle compiles.
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  # The transport-agnostic backend (server/skill-core, skill-term, skill-server).
+  # No webkit/Tauri deps, so clippy + the existing unit/integration tests (incl.
+  # server/skill-server/tests/proxy_smoke.rs) run fast and cache cleanly. tmux is
+  # needed for the skill-term terminal tests (they self-skip if it's absent, but
+  # the GitHub runner has it, so install to actually exercise them).
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Install tmux (skill-term tests)
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      # clippy on the server crates (no webkit deps; the desktop crate is checked in
+      # its own job below). NOT `-D warnings` yet: the tree carries a handful of
+      # pre-existing lints, and turning them fatal is a separate cleanup — flip this
+      # on once they're paid down. clippy still fails the job on real errors.
+      - name: clippy
+        run: cargo clippy -p skill-core -p skill-term -p skill-server --all-targets
+      - name: test
+        run: cargo test -p skill-core -p skill-term -p skill-server
+
+  # The Tauri shell (client/desktop, crate `skill-studio`). tauri-build validates
+  # the frontendDist at check time, so the SPA must be built into ./dist first.
+  # A `cargo check` (not a full bundle — that's the release's job) catches Rust /
+  # tauri.conf drift pre-merge, which today only surfaces when a tag is cut.
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential curl wget file \
+            libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev patchelf
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./client/desktop -> target"
+      - run: npm ci
+      - name: Build SPA (tauri-build needs frontendDist)
+        run: npm run build
+      - name: cargo check (desktop shell)
+        run: cargo check -p skill-studio
+
+  # Provisioning keys off the app version (the desktop downloads skill-server from
+  # the release whose tag matches its own version — see design.md). The release
+  # workflow stamps both package.json and tauri.conf.json from the tag, so the two
+  # committed versions must already agree, or a tag could ship a mismatched pair.
+  version-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: package.json and tauri.conf.json versions must match
+        run: |
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+            const tauri = JSON.parse(fs.readFileSync("client/desktop/tauri.conf.json", "utf8")).version;
+            if (pkg !== tauri) {
+              console.error(`version mismatch: package.json=${pkg} tauri.conf.json=${tauri}`);
+              process.exit(1);
+            }
+            console.log(`versions agree: ${pkg}`);
+          '

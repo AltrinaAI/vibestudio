@@ -1,0 +1,127 @@
+name: provision-smoke
+
+# The loop-closer. release.yml builds the standalone `skill-server` binaries and
+# uploads them to the release, but nothing ever RUNS them — yet Remote-SSH
+# provisioning downloads exactly these assets (by the release tag matching the
+# app version) and expects them to boot. A binary that won't start, has a bad
+# checksum, or a wrong asset name silently breaks Remote-SSH for everyone on that
+# version. This job downloads each asset the way the desktop does, verifies its
+# .sha256, boots it loopback-bound with a token, and exercises the /api HTTP face
+# + the auth choke point on the SHIPPED artifact — so a release can't go out with
+# a skill-server that doesn't run.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to smoke-test (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each binary runs on a runner of its own architecture, so the smoke is a
+          # real native boot — mirrors release.yml's server-binaries matrix.
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # Resolve the tag from either trigger: the published release, or the manual input.
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: echo "tag=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      # Pull the asset exactly as a fresh remote would: by tag, by target name.
+      - name: Download skill-server asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "skill-server-$TARGET" \
+            --pattern "skill-server-$TARGET.sha256"
+
+      - name: Verify checksum
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -c "skill-server-$TARGET.sha256"
+          else
+            shasum -a 256 -c "skill-server-$TARGET.sha256"
+          fi
+
+      - name: Smoke-test the binary
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="./skill-server-$TARGET"
+          chmod +x "$bin"
+
+          # --version must work and exit 0 (the desktop reads this to verify the install).
+          "$bin" --version
+
+          # Boot loopback on an ephemeral port, token-guarded (the SSH case). The binary
+          # prints `SKILL_SERVER_READY port=<port>` to stdout once listening.
+          token="ci-smoke-token"
+          "$bin" --host 127.0.0.1 --port 0 --token "$token" --dist /tmp/skill-no-dist \
+            > server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+          # Wait (up to ~10s) for the ready line, then extract the chosen port.
+          port=""
+          for _ in $(seq 1 50); do
+            if port=$(grep -oE 'SKILL_SERVER_READY port=[0-9]+' server.log 2>/dev/null | head -1 | cut -d= -f2); then
+              [ -n "$port" ] && break
+            fi
+            sleep 0.2
+          done
+          if [ -z "$port" ]; then
+            echo "::error::skill-server never printed a ready line"
+            cat server.log
+            exit 1
+          fi
+          echo "skill-server up on port $port"
+
+          base="http://127.0.0.1:$port"
+
+          # /api/* must reject a request with no bearer (auth choke point, design.md).
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/remote/status")
+          if [ "$code" != "401" ]; then
+            echo "::error::expected 401 without token, got $code"
+            cat server.log
+            exit 1
+          fi
+
+          # With the bearer, the locally-handled connection manager answers 200 — proving
+          # the HTTP face serves /api/* on the shipped binary.
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $token" "$base/api/remote/status")
+          if [ "$code" != "200" ]; then
+            echo "::error::expected 200 with token, got $code"
+            cat server.log
+            exit 1
+          fi
+
+          echo "smoke OK: $TARGET boots, checksum matches, /api auth enforced"
