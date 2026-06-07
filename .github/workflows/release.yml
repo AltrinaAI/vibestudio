@@ -237,15 +237,12 @@ jobs:
         shell: bash
         run: bash scripts/stamp-version.sh "${GITHUB_REF_NAME#v}"
 
-      - name: Refresh stamped server lockfile
-        run: cargo update -w --offline
-
       # Builds ONLY skill-server (+ skill-core/skill-term) — no tauri/webkit deps, so
       # the static musl link is clean and fast.
       - name: Build skill-server
         env:
           CARGO_NET_RETRY: 10
-        run: cargo build --release -p skill-server --bin skill-server --target ${{ matrix.target }} --locked
+        run: cargo build --release -p skill-server --bin skill-server --target ${{ matrix.target }}
 
       - name: Package + checksum
         shell: bash

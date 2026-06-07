@@ -10,8 +10,9 @@ name: provision-smoke
 # + the auth choke point on the SHIPPED artifact — so a release can't go out with
 # a skill-server that doesn't run.
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["build"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -24,6 +25,7 @@ permissions:
 jobs:
   smoke:
     name: ${{ matrix.target }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.workflow_run.head_branch, 'v') }}
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +46,12 @@ jobs:
       - name: Resolve release tag
         id: tag
         shell: bash
-        run: echo "tag=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
+          fi
 
       # Pull the asset exactly as a fresh remote would: by tag, by target name.
       - name: Download skill-server asset
