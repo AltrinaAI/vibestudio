@@ -166,6 +166,24 @@ jobs:
           #    Re-enable by dropping the `--no-sign` branch (signCommand + script are kept).
           args: ${{ matrix.platform == 'macos-15-intel' && '--target x86_64-apple-darwin' || matrix.platform == 'windows-latest' && '--no-sign' || startsWith(matrix.platform, 'ubuntu') && '--bundles deb' || '' }}
 
+      - name: Upload desktop bundles
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: skill-studio-${{ matrix.platform }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            client/desktop/target/release/bundle/deb/*.deb
+            client/desktop/target/release/bundle/dmg/*.dmg
+            client/desktop/target/release/bundle/macos/*.app
+            client/desktop/target/release/bundle/macos/*.app.tar.gz
+            client/desktop/target/release/bundle/nsis/*.exe
+            client/desktop/target/release/bundle/nsis/*.msi
+            client/desktop/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+            client/desktop/target/x86_64-apple-darwin/release/bundle/macos/*.app
+            client/desktop/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+
   # Standalone `skill-server` binaries for the Remote-SSH feature. The desktop app
   # provisions one onto a remote host on demand (VS Code-style: the remote curls it,
   # with a local-download-piped-over-ssh fallback). Static musl on Linux so glibc skew
