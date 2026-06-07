@@ -43,7 +43,7 @@
     },
     "macOS": { "minimumSystemVersion": "10.15", "signingIdentity": "-" },
     "windows": {
-      "nsis": { "installMode": "perMachine" },
+      "nsis": { "installMode": "perMachine", "installerIcon": "icons/icon.ico" },
       "signCommand": {
         "cmd": "pwsh",
         "args": [
