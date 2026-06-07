@@ -1,10 +1,12 @@
 "use client";
 
 // A tiny external store the diff editor publishes its changed-chunk geometry
-// into, so chrome OUTSIDE the editor (the overview ruler on the scroll pane) can
-// place markers. The editor is the only thing that can locate off-screen changes
-// (CodeMirror virtualizes off-screen lines and only its height map knows their
-// pixel position), so it reports them; the ruler maps them onto the scroll pane.
+// into, so the overview ruler on the scroll pane (the one piece of diff chrome
+// that can't be an in-editor decoration — you can't decorate the native
+// scrollbar from inside CodeMirror) can place its marks. The editor is the only
+// thing that can locate off-screen changes (CodeMirror virtualizes off-screen
+// lines and only its height map knows their pixel position), so it reports them.
+// The left change bars + revert buttons are in-editor decorations (see LiveEditor).
 
 import { useSyncExternalStore } from "react";
 
@@ -20,12 +22,10 @@ export interface DiffMark {
 }
 
 export interface DiffGeometry {
-  /** The `.cm-editor` element, so overlays can map editor-relative tops/lefts
-   *  into the scroll pane's content coordinates. */
+  /** The `.cm-editor` element, so the ruler can map editor-relative tops into the
+   *  scroll pane's content coordinates. */
   el: HTMLElement;
   marks: DiffMark[];
-  /** Revert a chunk (by a position inside it) to the committed version. */
-  revert: (pos: number) => void;
 }
 
 let geom: DiffGeometry | null = null;

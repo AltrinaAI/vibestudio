@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
+import { ReviewToggleContext } from "./reviewContext";
 import { EditorView, Decoration, WidgetType, keymap, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { StateField, StateEffect, Text, type Extension, type Range, type EditorState } from "@codemirror/state";
@@ -12,6 +13,13 @@ import {
   syntaxHighlighting,
   syntaxTree,
   LanguageDescription,
+  codeFolding,
+  foldService,
+  foldState,
+  foldEffect,
+  unfoldEffect,
+  foldedRanges,
+  foldKeymap,
 } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -610,6 +618,13 @@ const CHECK_ICON =
 // Trash icon for the table row/column delete menu.
 const TRASH_ICON =
   '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+// Disclosure chevron for the heading-fold toggle. Points down when expanded;
+// CSS rotates it -90° (pointing right) when the section is collapsed.
+const CHEVRON_ICON =
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+// Curved "undo" arrow for the per-chunk Revert button (review mode).
+const REVERT_ICON =
+  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>';
 
 // A small copy button pinned to the top-right of a fenced code block.
 class CopyButtonWidget extends WidgetType {
@@ -815,6 +830,114 @@ const anchorNav = (() => {
   });
 })();
 
+// ---------------------------------------------------------------------------
+// Collapsible heading sections (Obsidian/Notion-style). A hover chevron in the
+// left gutter folds everything under a heading up to the next heading of the
+// same-or-higher level. CodeMirror's codeFolding() stores and position-maps the
+// folded ranges and renders the "⋯" placeholder; we only compute the section
+// extents and dispatch fold/unfold effects.
+// ---------------------------------------------------------------------------
+type Heading = { level: number; lineFrom: number; foldFrom: number };
+
+// Every heading in document order. `foldFrom` is the position at the end of the
+// heading line (where a fold — and its placeholder — begins); for a two-line
+// Setext heading that's the end of the underline line.
+function headingList(state: EditorState): Heading[] {
+  const doc = state.doc;
+  const out: Heading[] = [];
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      const m = /^(?:ATX|Setext)Heading([1-6])$/.exec(node.name);
+      if (!m) return undefined;
+      const first = doc.lineAt(node.from);
+      const last = doc.lineAt(Math.min(node.to, doc.length));
+      out.push({ level: Number(m[1]), lineFrom: first.from, foldFrom: last.to });
+      return false;
+    },
+  });
+  return out;
+}
+
+// The collapsible range under heading `idx`: from the end of the heading line to
+// the end of the last line before the next heading of the same-or-higher level
+// (or the document's end). Null when the section is empty — nothing to collapse.
+function sectionRange(state: EditorState, headings: Heading[], idx: number): { from: number; to: number } | null {
+  const doc = state.doc;
+  const { level, foldFrom } = headings[idx];
+  let boundary = 0; // line number of the next sibling/parent heading, if any
+  for (let j = idx + 1; j < headings.length; j++) {
+    if (headings[j].level <= level) {
+      boundary = doc.lineAt(headings[j].lineFrom).number;
+      break;
+    }
+  }
+  const to = boundary > 1 ? doc.line(boundary - 1).to : doc.line(doc.lines).to;
+  // Empty, or nothing but blank lines under the heading → nothing to collapse.
+  if (to <= foldFrom || !doc.sliceString(foldFrom, to).trim()) return null;
+  return { from: foldFrom, to };
+}
+
+// foldService entry so the keyboard fold commands (foldKeymap) work on headings
+// too — given a line, return its section range when that line starts a heading.
+const headingFoldService = foldService.of((state, lineStart) => {
+  const headings = headingList(state);
+  const idx = headings.findIndex((h) => h.lineFrom === lineStart);
+  return idx < 0 ? null : sectionRange(state, headings, idx);
+});
+
+// The gutter chevron pinned to a heading line. Clicking toggles the section's
+// fold; the arrow points down when expanded and right (rotated in CSS) when
+// folded. `from`/`to` is the exact range to act on (the live folded range when
+// collapsed, so unfoldEffect — which matches on exact bounds — succeeds).
+class HeadingFoldWidget extends WidgetType {
+  constructor(
+    readonly from: number,
+    readonly to: number,
+    readonly folded: boolean,
+  ) {
+    super();
+  }
+  eq(other: WidgetType): boolean {
+    return (
+      other instanceof HeadingFoldWidget &&
+      other.from === this.from &&
+      other.to === this.to &&
+      other.folded === this.folded
+    );
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cm-md-fold-btn" + (this.folded ? " is-folded" : "");
+    btn.innerHTML = CHEVRON_ICON;
+    btn.title = this.folded ? "Expand section" : "Collapse section";
+    btn.setAttribute("aria-label", btn.title);
+    btn.setAttribute("aria-expanded", this.folded ? "false" : "true");
+    btn.addEventListener("mousedown", (e) => e.preventDefault()); // keep the caret put
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      view.dispatch({ effects: (this.folded ? unfoldEffect : foldEffect).of({ from: this.from, to: this.to }) });
+    });
+    return btn;
+  }
+}
+
+// Custom "⋯" placeholder for a collapsed section (the default click handler
+// toggles the fold back open).
+const foldPlaceholder = (_view: EditorView, onclick: (event: Event) => void): HTMLElement => {
+  const el = document.createElement("span");
+  el.className = "cm-md-fold-placeholder";
+  el.textContent = "⋯";
+  el.title = "Expand section";
+  el.setAttribute("aria-label", "Expand section");
+  el.onclick = onclick;
+  return el;
+};
+
 function buildMarkdownDecorations(state: EditorState): DecorationSet {
   const doc = state.doc;
   const tree = syntaxTree(state);
@@ -957,6 +1080,37 @@ function buildMarkdownDecorations(state: EditorState): DecorationSet {
     },
   });
 
+  // Heading-fold chevrons. One per heading that has collapsible content; the
+  // heading line is marked relative so the chevron can sit in the left gutter.
+  // Skipped entirely when codeFolding() isn't in the config (review/diff mode) —
+  // a fold there would hide merge deletion widgets and changed lines.
+  const headings = state.field(foldState, false) ? headingList(state) : [];
+  if (headings.length) {
+    // Assign each live fold to the heading that owns it: the last heading whose
+    // foldFrom is ≤ the fold's start. Matching by ownership (not exact `from`
+    // equality) keeps the chevron in sync after an edit shifts a fold's start off
+    // the heading boundary, while still giving a nested fold to the inner heading.
+    const foldByHeading = new Map<number, { from: number; to: number }>();
+    foldedRanges(state).between(0, doc.length, (from, to) => {
+      let owner = -1;
+      for (let i = 0; i < headings.length && headings[i].foldFrom <= from; i++) owner = i;
+      if (owner >= 0 && !foldByHeading.has(owner)) foldByHeading.set(owner, { from, to });
+    });
+    headings.forEach((h, i) => {
+      const range = sectionRange(state, headings, i);
+      if (!range) return; // empty section — nothing to collapse
+      const folded = foldByHeading.get(i);
+      const action = folded ?? range;
+      decos.push(Decoration.line({ class: "cm-md-heading-line" }).range(h.lineFrom));
+      decos.push(
+        Decoration.widget({
+          widget: new HeadingFoldWidget(action.from, action.to, Boolean(folded)),
+          side: -1,
+        }).range(h.lineFrom),
+      );
+    });
+  }
+
   return Decoration.set(decos, true);
 }
 
@@ -968,7 +1122,7 @@ const markdownBlocks = StateField.define<DecorationSet>({
     if (
       tr.docChanged ||
       tr.selection ||
-      tr.effects.some((e) => e.is(setFocused) || e.is(setEdit)) ||
+      tr.effects.some((e) => e.is(setFocused) || e.is(setEdit) || e.is(foldEffect) || e.is(unfoldEffect)) ||
       syntaxTree(tr.startState) !== syntaxTree(tr.state) ||
       // The diff chunks finished computing / changed → re-decide which lines to
       // reveal as raw (so unchanged lines render and changed ones show source).
@@ -993,6 +1147,15 @@ const markdownExtensions: Extension[] = [
   anchorNav,
   markdownBlocks,
   baseTheme,
+];
+
+// Collapsible heading sections. Added only to NORMAL markdown editing — kept out
+// of review/diff mode, where a fold would hide merge deletion widgets / changed
+// lines (and buildMarkdownDecorations omits the chevrons when foldState is absent).
+const headingFolding: Extension[] = [
+  codeFolding({ placeholderDOM: foldPlaceholder }),
+  headingFoldService,
+  keymap.of(foldKeymap),
 ];
 
 const mergeNavKeymap = keymap.of([
@@ -1029,11 +1192,168 @@ function chunkMarks(view: EditorView, chunks: readonly Chunk[]): DiffMark[] {
 // field/plugin per baseline keeps it config-driven (reconfigure on baseline
 // change only — never on a keystroke).
 // ---------------------------------------------------------------------------
-function changeTracker(baseline: string): Extension[] {
+// Per-chunk Revert button (review mode only): a small undo button in the left
+// gutter that drops the chunk back to its committed version. Only shown while the
+// merge overlay is active (review), where rejectChunk has the original to restore.
+class RevertWidget extends WidgetType {
+  constructor(readonly pos: number) {
+    super();
+  }
+  eq(other: WidgetType): boolean {
+    return other instanceof RevertWidget && other.pos === this.pos;
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cm-diff-revert";
+    btn.title = "Revert this change to the committed version";
+    btn.setAttribute("aria-label", "Revert this change");
+    btn.innerHTML = REVERT_ICON;
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      rejectChunk(view, this.pos);
+    });
+    return btn;
+  }
+}
+
+// Which chunk the pointer is over, so the WHOLE chunk's bar reacts to hover as one
+// block (the bar is rendered per-line — the only way it scrolls correctly inside
+// CodeMirror — so a shared hover state is what makes the segments read as a single
+// bar). Set by the gutter mousemove handler in changeTracker.
+const setHoveredChunk = StateEffect.define<{ from: number; to: number } | null>();
+const hoveredChunk = StateField.define<{ from: number; to: number } | null>({
+  create: () => null,
+  update(val, tr) {
+    for (const e of tr.effects) if (e.is(setHoveredChunk)) return e.value;
+    if (val && tr.docChanged) return { from: tr.changes.mapPos(val.from, -1), to: tr.changes.mapPos(val.to, 1) };
+    return val;
+  },
+});
+
+// The change bar itself: a thin green/yellow/red bar in the left gutter, one per
+// changed line. A real widget element (not a ::before) so it has its own :hover
+// (the gutter sits outside the line's box, so a pseudo-element there can't drive
+// the line's :hover) and handles its own click → toggle "Review changes".
+type DiffKind = "add" | "mod" | "del";
+class DiffBarWidget extends WidgetType {
+  constructor(
+    readonly kind: DiffKind,
+    readonly from: number, // the chunk's B-range, so hovering any segment lights the whole bar
+    readonly to: number,
+    readonly onReview?: () => void,
+  ) {
+    super();
+  }
+  eq(other: WidgetType): boolean {
+    return (
+      other instanceof DiffBarWidget &&
+      other.kind === this.kind &&
+      other.from === this.from &&
+      other.to === this.to &&
+      !!other.onReview === !!this.onReview
+    );
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const el = document.createElement("div");
+    el.className = `cm-diff-bar cm-diff-${this.kind}`;
+    const range = { from: this.from, to: this.to };
+    // Hover any line's segment → the whole chunk's bar lights up (native enter/
+    // leave still fire even though ignoreEvent() hides it from CodeMirror).
+    el.addEventListener("mouseenter", () => {
+      const cur = view.state.field(hoveredChunk, false);
+      if (!cur || cur.from !== range.from || cur.to !== range.to) view.dispatch({ effects: setHoveredChunk.of(range) });
+    });
+    el.addEventListener("mouseleave", (e) => {
+      const to = e.relatedTarget as HTMLElement | null;
+      if (to?.closest?.(".cm-diff-bar")) return; // moving onto another segment of a bar
+      if (view.state.field(hoveredChunk, false)) view.dispatch({ effects: setHoveredChunk.of(null) });
+    });
+    if (this.onReview) {
+      const review = this.onReview;
+      el.title = "Review changes since the last commit";
+      el.setAttribute("role", "button");
+      el.addEventListener("mousedown", (e) => e.preventDefault());
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        review();
+      });
+    }
+    return el;
+  }
+}
+
+// The in-editor change chrome: a DiffBarWidget on every changed line (VS Code
+// "dirty diff", live as you edit), plus a Revert button per chunk in review mode.
+// Rendered as CodeMirror line/widget decorations so it tracks scroll, wrapping and
+// virtualization for free and stays INSIDE the editor column. The overview ruler
+// on the scroll pane is the only diff chrome that stays an overlay (the native
+// scrollbar can't be decorated from here).
+function buildDiffMarkers(
+  state: EditorState,
+  chunks: readonly Chunk[],
+  review: boolean,
+  onReview?: () => void,
+): DecorationSet {
+  const doc = state.doc;
+  const hovered = state.field(hoveredChunk, false) ?? null;
+  const decos: Range<Decoration>[] = [];
+  for (const c of chunks) {
+    const fromB = Math.min(c.fromB, doc.length);
+    const endB = Math.min(c.endB, doc.length);
+    // empty B ⇒ lines removed (del); empty A ⇒ pure addition (add); both ⇒ mod.
+    const emptyB = fromB === endB;
+    const kind: DiffKind = emptyB ? "del" : c.fromA === c.endA ? "add" : "mod";
+    const startLine = doc.lineAt(fromB);
+    const lastLine = emptyB ? startLine : doc.lineAt(endB > fromB ? endB - 1 : fromB);
+    // Whole chunk lights up when the pointer is over any of its lines.
+    const isHovered = !!hovered && hovered.from <= endB && hovered.to >= fromB;
+    const lineClass = isHovered ? "cm-diff-line cm-diff-hover" : "cm-diff-line";
+    for (let n = startLine.number; n <= lastLine.number; n++) {
+      const ln = doc.line(n);
+      decos.push(Decoration.line({ class: lineClass }).range(ln.from)); // position:relative anchor
+      decos.push(Decoration.widget({ widget: new DiffBarWidget(kind, fromB, endB, onReview), side: -1 }).range(ln.from));
+    }
+    if (review) decos.push(Decoration.widget({ widget: new RevertWidget(fromB), side: -1 }).range(startLine.from));
+  }
+  return Decoration.set(decos, true);
+}
+
+function changeTracker(baseline: string, review: boolean, onReview?: () => void): Extension[] {
   const baseText = Text.of(baseline.length ? baseline.split("\n") : [""]);
   const chunkField = StateField.define<readonly Chunk[]>({
     create: (state) => Chunk.build(baseText, state.doc),
     update: (chunks, tr) => (tr.docChanged ? Chunk.build(baseText, tr.state.doc) : chunks),
+  });
+  // Left-gutter change bars + (review) revert buttons, rebuilt when the chunks
+  // change. Block/line decorations, so they live in the document flow.
+  const markers = StateField.define<DecorationSet>({
+    // `field(chunkField, false)` (no throw) so a reconfigure transaction — which
+    // swaps in fresh field instances when entering/leaving review — never trips
+    // "field not present" before chunkField is initialized in the new state.
+    create: (state) => {
+      const chunks = state.field(chunkField, false);
+      return chunks ? buildDiffMarkers(state, chunks, review, onReview) : Decoration.none;
+    },
+    update(deco, tr) {
+      const prev = tr.startState.field(chunkField, false);
+      const next = tr.state.field(chunkField, false);
+      const hoverChanged = tr.effects.some((e) => e.is(setHoveredChunk));
+      if (tr.docChanged || prev !== next || hoverChanged) {
+        return next ? buildDiffMarkers(tr.state, next, review, onReview) : Decoration.none;
+      }
+      return deco;
+    },
+    provide: (f) => EditorView.decorations.from(f),
   });
   const reporter = ViewPlugin.fromClass(
     class {
@@ -1056,7 +1376,7 @@ function changeTracker(baseline: string): Extension[] {
             const sig = marks.map((m) => `${Math.round(m.top)}:${Math.round(m.height)}:${m.kind}`).join("|");
             if (sig === this.lastSig) return;
             this.lastSig = sig;
-            publishDiffGeometry({ el: this.view.dom, marks, revert: (pos) => rejectChunk(this.view, pos) });
+            publishDiffGeometry({ el: this.view.dom, marks });
           },
         });
       }
@@ -1065,7 +1385,9 @@ function changeTracker(baseline: string): Extension[] {
       }
     },
   );
-  return [chunkField, reporter];
+  // hoveredChunk holds the chunk under the pointer (set by the bar widgets' own
+  // hover listeners), so every line of that chunk lights its bar as one block.
+  return [chunkField, hoveredChunk, markers, reporter];
 }
 
 
@@ -1123,6 +1445,14 @@ export default function LiveEditor({
     };
   }, [kind, language, filename]);
 
+  // "Review changes" toggle from StudioLayout, behind a stable wrapper so a fresh
+  // toggle identity each render never reconfigures the editor; the gutter change
+  // bars call it on click.
+  const reviewToggle = useContext(ReviewToggleContext);
+  const reviewToggleRef = useRef(reviewToggle);
+  reviewToggleRef.current = reviewToggle;
+  const onReview = useMemo(() => () => reviewToggleRef.current?.(), []);
+
   // Memoized so editing (which changes `value`, NOT these deps) never rebuilds
   // the extension array — only a baseline reload or entering review reconfigures
   // (rare events), which @uiw applies via StateEffect.reconfigure, preserving the
@@ -1133,11 +1463,14 @@ export default function LiveEditor({
     // is on; untouched content always looks like normal viewing).
     const base =
       kind === "markdown"
-        ? markdownExtensions
+        ? review
+          ? markdownExtensions // folding off in review mode (it would hide diff content)
+          : [...markdownExtensions, ...headingFolding]
         : [...codeLang, EditorView.lineWrapping, syntaxHighlighting(codeHighlight), baseTheme];
     if (baseline === undefined) return base; // not tracked → plain editor
-    // Live change indicators (ruler + left bars) for every tracked file.
-    const exts: Extension[] = [...base, ...changeTracker(baseline)];
+    // Live change indicators (in-editor gutter bars + overview ruler) for every
+    // tracked file; the per-chunk Revert button is added in review mode.
+    const exts: Extension[] = [...base, ...changeTracker(baseline, Boolean(review) && kind === "markdown", onReview)];
     // The inline review overlay is markdown-only (code reviews via a read-only
     // diff in the file pane).
     if (review && kind === "markdown") {
@@ -1157,7 +1490,7 @@ export default function LiveEditor({
       );
     }
     return exts;
-  }, [kind, codeLang, baseline, review]);
+  }, [kind, codeLang, baseline, review, onReview]);
 
   return (
     <CodeMirror
@@ -1165,7 +1498,7 @@ export default function LiveEditor({
       onChange={onChange}
       placeholder={placeholder}
       extensions={extensions}
-      className={kind === "code" ? "cm-mono" : undefined}
+      className={kind === "code" ? "cm-mono" : "cm-prose"}
       basicSetup={{
         lineNumbers: false,
         foldGutter: false,

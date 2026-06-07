@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Outlet, useMatch, useNavigate, useSearchParams } from "react-router-dom";
+import { ReviewToggleContext } from "./reviewContext";
 import { skillKind } from "@/lib/agents";
 import { requiredEnv } from "@/lib/skill";
 import * as api from "@/lib/api";
@@ -37,16 +38,19 @@ export default function StudioLayout() {
   const reviewMode = searchParams.get("diff") === "worktree";
   const reviewAvailable = useReviewAvailable(data.root, selected ?? "SKILL.md");
   const showReview = selected != null && (reviewMode || reviewAvailable);
-  const toggleReview = () =>
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (reviewMode) next.delete("diff");
-        else next.set("diff", "worktree");
-        return next;
-      },
-      { replace: true },
-    );
+  const toggleReview = useCallback(
+    () =>
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (next.get("diff") === "worktree") next.delete("diff");
+          else next.set("diff", "worktree");
+          return next;
+        },
+        { replace: true },
+      ),
+    [setSearchParams],
+  );
 
   const [manageOpen, setManageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -86,18 +90,18 @@ export default function StudioLayout() {
       <PreviewBanner />
       <div className="flex min-h-0 flex-1">
         <Sidebar data={data} selected={selected} onSelect={onSelect} />
-        {/* The scroll pane (main) + diff overlays (overview ruler on the right,
-            change bars + revert buttons in the left margin) — mounted OUTSIDE the
-            centered editor column. Rendered for every file (it self-hides when
-            there are no changes); the editor publishes live change geometry while
-            you edit. `main` is position:relative so the portaled bars/buttons
-            position against the scroll content and scroll with it. Revert buttons
-            show only in review mode. */}
+        {/* The scroll pane (main) + the change overview ruler on its right edge.
+            The left change bars + per-chunk Revert buttons are in-editor gutter
+            decorations now (see LiveEditor); only the ruler stays an overlay (it
+            sits over the native scrollbar). It self-hides when there are no
+            changes; the editor publishes live change geometry while you edit. */}
         <div className="relative flex min-w-0 flex-1">
           <main ref={setScrollEl} className="relative min-w-0 flex-1 overflow-auto">
-            <Outlet />
+            <ReviewToggleContext.Provider value={showReview ? toggleReview : null}>
+              <Outlet />
+            </ReviewToggleContext.Provider>
           </main>
-          <DiffOverlays scrollEl={scrollEl} showRevert={reviewMode} onToggleReview={toggleReview} />
+          <DiffOverlays scrollEl={scrollEl} />
         </div>
       </div>
       {manageOpen && (

@@ -227,6 +227,79 @@ body {
   font-size: 0.9em;
 }
 
+/* In-editor left gutter for the chrome (fold chevrons + diff change bars).
+   Rather than render that chrome OUTSIDE the editor (a portal) — which forced a
+   text-column shift — the editor extends `--gutter` into the page's side padding
+   and the content is padded back by the same amount. Net: the text column keeps
+   its width and stays aligned with the metadata header above, while the gutter
+   lives INSIDE the scroller (never clipped, never shifting the column). */
+.cm-prose,
+.cm-mono {
+  --gutter: 1.4rem;
+  margin-left: calc(-1 * var(--gutter));
+  width: calc(100% + var(--gutter));
+}
+.cm-prose .cm-content,
+.cm-mono .cm-content {
+  padding-left: var(--gutter);
+}
+
+/* Collapsible heading sections: a hover chevron pinned to each heading line,
+   sitting in the OUTER part of the gutter (diff bars take the inner edge). */
+.cm-editor .cm-line.cm-md-heading-line {
+  position: relative; /* positioning context for the fold chevron */
+}
+.cm-md-fold-btn {
+  position: absolute;
+  left: calc(-1 * var(--gutter) + 0.05rem);
+  top: 0;
+  bottom: 0;
+  margin: auto 0; /* vertically centered against the (tall) heading line */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.95rem;
+  height: 0.95rem;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, color 0.1s ease, background 0.1s ease;
+}
+/* Revealed on hover of the heading, when focused, or while its section is
+   folded (so a collapsed section is always findable). */
+.cm-prose .cm-line.cm-md-heading-line:hover .cm-md-fold-btn,
+.cm-md-fold-btn.is-folded,
+.cm-md-fold-btn:focus-visible {
+  opacity: 1;
+}
+.cm-md-fold-btn:hover {
+  color: var(--fg);
+  background: var(--panel);
+}
+.cm-md-fold-btn svg {
+  transition: transform 0.12s ease;
+}
+.cm-md-fold-btn.is-folded svg {
+  transform: rotate(-90deg);
+}
+/* The "⋯" left inline where a collapsed section was. */
+.cm-md-fold-placeholder {
+  margin: 0 0.15em;
+  padding: 0 0.45em;
+  color: var(--muted);
+  background: var(--code-bg);
+  border-radius: 5px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.cm-md-fold-placeholder:hover {
+  color: var(--fg);
+}
+
 /* GFM tables rendered as a real grid (Obsidian-style live preview). */
 .cm-md-table-wrap {
   position: relative;
@@ -503,58 +576,76 @@ body {
   font-size: 1rem;
 }
 
-/* Revert buttons — an overlay in the LEFT margin (beyond the text column, so it
-   never shrinks it), one per changed chunk, portaled into the scroll content so
-   it scrolls with the text. Click reverts that chunk to the committed version. */
-.diff-revert-btn {
+/* Change bars — a thin green/yellow/red bar in the editor's left gutter (VS Code
+   "dirty diff", live as you edit). One bar widget per changed line — that's how a
+   bar scrolls correctly inside CodeMirror (lines are independent, virtualized DOM
+   nodes); the per-line segments are contiguous, so they read as one continuous
+   bar, and a shared `.cm-diff-hover` (set on every line of the chunk under the
+   pointer) makes the WHOLE bar widen/brighten as one block. The line carries
+   position:relative; the bar is anchored into the gutter. */
+.cm-editor .cm-line.cm-diff-line {
+  position: relative;
+}
+.cm-diff-bar {
   position: absolute;
-  z-index: 6;
+  left: calc(-1 * var(--gutter) + 0.55rem);
+  top: 0;
+  bottom: 0;
+  width: 0.7rem;
+  border-left: 3px solid color-mix(in srgb, var(--ok) 78%, transparent);
+  background: transparent;
+  cursor: pointer; /* the bar toggles "Review changes" */
+  transition: border-left-width 0.1s ease, background 0.1s ease, border-left-color 0.1s ease;
+}
+.cm-diff-bar.cm-diff-mod {
+  border-left-color: color-mix(in srgb, var(--warning) 88%, transparent);
+}
+.cm-diff-bar.cm-diff-del {
+  border-left-color: color-mix(in srgb, var(--error) 80%, transparent);
+}
+/* Whole-chunk hover (set on every line of the hovered chunk) → the bar widens +
+   brightens and a faint wash fills the gutter strip. */
+.cm-editor .cm-line.cm-diff-hover .cm-diff-bar {
+  border-left-width: 5px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.cm-editor .cm-line.cm-diff-hover .cm-diff-bar.cm-diff-add {
+  border-left-color: color-mix(in srgb, var(--ok) 100%, transparent);
+}
+.cm-editor .cm-line.cm-diff-hover .cm-diff-bar.cm-diff-mod {
+  border-left-color: color-mix(in srgb, var(--warning) 100%, transparent);
+}
+.cm-editor .cm-line.cm-diff-hover .cm-diff-bar.cm-diff-del {
+  border-left-color: color-mix(in srgb, var(--error) 100%, transparent);
+}
+
+/* Per-chunk Revert button (review mode) in the left gutter, on the chunk's first
+   line; revealed when the chunk is hovered. Reverts the chunk to committed. */
+.cm-diff-revert {
+  position: absolute;
+  left: calc(-1 * var(--gutter) + 0.1rem);
+  top: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin: 0;
+  width: 1.15rem;
+  height: 1.15rem;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border));
   border-radius: 5px;
   background: var(--surface);
   color: color-mix(in srgb, var(--error) 75%, var(--fg));
   cursor: pointer;
-  opacity: 0.6;
+  opacity: 0;
   transition: opacity 0.1s ease, background 0.1s ease;
 }
-.diff-revert-btn:hover {
+.cm-editor .cm-line.cm-diff-hover .cm-diff-revert,
+.cm-diff-revert:focus-visible {
   opacity: 1;
+}
+.cm-diff-revert:hover {
   background: color-mix(in srgb, var(--error) 12%, var(--surface));
   border-color: color-mix(in srgb, var(--error) 55%, var(--border));
-}
-
-/* Change bars — a thin green/yellow/red bar in the LEFT margin per changed chunk
-   (VS Code "dirty diff"), live as you edit, beyond the text column (no shift).
-   The button is wider than the visible 3px bar (border-left) for an easier click
-   target; clicking opens the review view. */
-.diff-change-bar {
-  position: absolute;
-  z-index: 5;
-  width: 10px;
-  margin: 0;
-  padding: 0;
-  border: none;
-  border-left: 3px solid color-mix(in srgb, var(--ok) 75%, transparent);
-  border-radius: 1px;
-  background: transparent;
-  cursor: pointer;
-}
-.diff-change-bar.is-mod {
-  border-left-color: color-mix(in srgb, var(--warning) 85%, transparent);
-}
-.diff-change-bar.is-del {
-  border-left-color: color-mix(in srgb, var(--error) 75%, transparent);
-}
-.diff-change-bar:hover {
-  border-left-width: 5px;
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 
 /* Change overview ruler — a React overlay on the SCROLL PANE's right edge (atop
