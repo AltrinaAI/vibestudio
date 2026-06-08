@@ -132,7 +132,7 @@ export default function TerminalsWorkspace({ visible }: { visible: boolean }) {
                 <button
                   type="button"
                   onClick={() => setNewOpen(true)}
-                  className="mt-3 rounded-md bg-fg px-3 py-1.5 text-sm font-medium text-app hover:opacity-90"
+                  className="mt-3 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:opacity-90"
                 >
                   ＋ New terminal
                 </button>

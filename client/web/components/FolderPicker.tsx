@@ -42,7 +42,7 @@ export default function FolderPicker({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div
-        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
+        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
@@ -131,7 +131,7 @@ export default function FolderPicker({
             type="button"
             onClick={() => listing && onSelect(listing.path)}
             disabled={!listing}
-            className="ml-auto shrink-0 rounded-md bg-fg px-3 py-1.5 text-sm font-medium text-app disabled:opacity-40"
+            className="ml-auto shrink-0 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-40"
           >
             Open this folder
           </button>

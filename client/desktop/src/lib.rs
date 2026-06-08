@@ -124,7 +124,7 @@ pub fn run() {
                 format!("http://127.0.0.1:{port}") // the in-process server serves UI + /api
             };
             WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::External(url.parse().unwrap()))
-                .title("Skill Studio")
+                .title("Altrina")
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(720.0, 480.0)
                 .build()?;

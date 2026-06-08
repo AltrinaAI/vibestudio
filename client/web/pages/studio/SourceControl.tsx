@@ -260,7 +260,7 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
           type="button"
           onClick={startTracking}
           disabled={busy}
-          className="rounded-md bg-fg px-3 py-1.5 text-xs font-medium text-app hover:opacity-90 disabled:opacity-40"
+          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-40"
         >
           {busy ? "Starting…" : "Start tracking"}
         </button>

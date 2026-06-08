@@ -67,7 +67,7 @@ export const KIND_META: Record<SkillKind, KindMeta> = {
   official: { kind: "official", label: "Official", rank: 1 },
   // The Skill Studio activation skill tallies with official but keeps its own
   // badge; rank it just after official so the list order matches that tally.
-  studio: { kind: "studio", label: "Skill Studio", rank: 2 },
+  studio: { kind: "studio", label: "Altrina", rank: 2 },
   plugin: { kind: "plugin", label: "Plugin", rank: 3 },
 };
 
@@ -76,7 +76,7 @@ export const KIND_TAG: Record<SkillKind, { label: string; cls: string }> = {
   personal: { label: "Yours", cls: "bg-accent-soft text-accent" },
   official: { label: "Official", cls: "bg-[color-mix(in_srgb,var(--ok)_16%,transparent)] text-ok" },
   plugin: { label: "Plugin", cls: "bg-panel text-muted" },
-  studio: { label: "Skill Studio", cls: "bg-panel text-muted" },
+  studio: { label: "Altrina", cls: "bg-panel text-muted" },
 };
 
 export function kindMeta(kind: string): KindMeta {

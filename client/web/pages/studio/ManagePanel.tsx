@@ -91,7 +91,7 @@ function SyncSection({ root }: { root: string }) {
             type="button"
             onClick={() => setLink(o.v)}
             title={o.hint}
-            className={`rounded px-2 py-0.5 ${link === o.v ? "bg-fg text-app" : "text-muted hover:text-fg"}`}
+            className={`rounded px-2 py-0.5 ${link === o.v ? "bg-accent text-accent-fg" : "text-muted hover:text-fg"}`}
           >
             {o.label}
           </button>

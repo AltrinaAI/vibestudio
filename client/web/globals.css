@@ -4,27 +4,32 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  /* Font stacks (no next/font in the desktop build — use system fonts). */
-  --font-geist-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Font stacks: Inter (self-hosted via @fontsource) leads, system fonts fall back. */
+  --font-geist-sans: "Inter", "Inter Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-geist-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
+  /* Altrina brand: deep teal mark/wordmark + a deep, desaturated teal-green for
+     primary actions (the "New Workflow" / "Add Schedule Trigger" buttons). */
+  --brand: #00364a;
   --bg: #ffffff;
   --surface: #ffffff;
-  --panel: #f7f7f5;
-  --border: #ebebea;
-  --border-strong: #dcdcda;
-  --fg: #32302c;
-  --muted: #8d8b85;
-  --faint: #bbb9b3;
-  --accent: #2f6fed;
-  --accent-soft: #eef2fe;
-  --code-bg: #f3f3f1;
-  --sel: rgba(47, 111, 237, 0.16);
-  --mark: #a6a49d;
+  --panel: #f4f5f6;
+  --border: #e6e8ea;
+  --border-strong: #d4d7da;
+  --fg: #1d2b30;
+  --muted: #6b747a;
+  --faint: #9aa1a6;
+  --accent: #00364a;
+  --accent-strong: #002230;
+  --accent-soft: #e4edf0;
+  --accent-fg: #ffffff; /* readable text/icon on an accent-filled surface */
+  --code-bg: #f1f3f3;
+  --sel: rgba(0, 54, 74, 0.16);
+  --mark: #9aa1a6;
   --error: #d4380d;
   --warning: #a16207;
-  --info: #2f6fed;
-  --ok: #2f9e44;
+  --info: #00364a;
+  --ok: #1f9d6b;
 
   /* Syntax palette (GitHub Light) */
   --sx-comment: #6e7781;
@@ -40,23 +45,29 @@
 }
 
 .dark {
-  --bg: #1a1a1a;
-  --surface: #1f1f1f;
-  --panel: #242424;
-  --border: #2f2f2f;
-  --border-strong: #3a3a3a;
-  --fg: #e6e6e3;
-  --muted: #908f8a;
-  --faint: #6a6a64;
-  --accent: #6ea8fe;
-  --accent-soft: #1e2733;
-  --code-bg: #2a2a2a;
-  --sel: rgba(110, 168, 254, 0.2);
-  --mark: #6f6f69;
+  /* Teal-tinted dark to echo the Altrina brand navy-teal; pale logo flips in. */
+  --brand: #d2ecf2;
+  --bg: #0f1518;
+  --surface: #141c1f;
+  --panel: #1a2226;
+  --border: #283034;
+  --border-strong: #384248;
+  --fg: #e6edf0;
+  --muted: #8b969c;
+  --faint: #5d676d;
+  /* The light brand color leads in dark mode (the pale logo variant); accent fills
+     get dark navy text via --accent-fg so they stay legible. */
+  --accent: #d2ecf2;
+  --accent-strong: #b9dfe8;
+  --accent-soft: #0e2832;
+  --accent-fg: #00364a;
+  --code-bg: #1c2529;
+  --sel: rgba(210, 236, 242, 0.18);
+  --mark: #5d676d;
   --error: #ff7875;
   --warning: #fab005;
-  --info: #6ea8fe;
-  --ok: #51cf66;
+  --info: #d2ecf2;
+  --ok: #46c08c;
 
   /* Syntax palette (GitHub Dark) */
   --sx-comment: #8b949e;
@@ -80,8 +91,11 @@
   --color-fg: var(--fg);
   --color-muted: var(--muted);
   --color-faint: var(--faint);
+  --color-brand: var(--brand);
   --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
   --color-danger: var(--error);
   --color-warn: var(--warning);
   --color-info: var(--info);
@@ -334,7 +348,7 @@ body {
   padding: 0;
   border-radius: 50%;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font-size: 13px;
   font-weight: 600;
   line-height: 15px;

@@ -229,7 +229,7 @@ function SkillErrorShell({ root, message }: { root: string; message: string }) {
         <button
           type="button"
           onClick={() => navigate("/")}
-          className="rounded-md bg-fg px-3 py-1.5 text-sm font-medium text-app hover:opacity-90"
+          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:opacity-90"
         >
           Back to home
         </button>

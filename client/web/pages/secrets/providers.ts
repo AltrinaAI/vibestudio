@@ -26,5 +26,5 @@ export interface Provider {
 export const FUTURE_PROVIDERS: Provider[] = [
   { id: "1password", name: "1Password", blurb: "Pull secrets straight from your 1Password vaults.", status: "soon", icon: "1password" },
   { id: "doppler", name: "Doppler", blurb: "Sync from your Doppler projects and configs.", status: "soon", icon: "doppler" },
-  { id: "studio-cloud", name: "Skill Studio Cloud", blurb: "A team-shared vault for your whole org.", status: "soon", icon: "cloud" },
+  { id: "studio-cloud", name: "Altrina Cloud", blurb: "A team-shared vault for your whole org.", status: "soon", icon: "cloud" },
 ];

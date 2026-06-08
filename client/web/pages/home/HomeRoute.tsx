@@ -313,7 +313,7 @@ function ProposedCard({
           disabled={busy}
           onClick={() => onAccept(skill.root)}
           title="Move this skill out of generated-skills/ into your skills home"
-          className="inline-flex items-center gap-1 rounded-md bg-fg px-2.5 py-1 text-xs font-medium text-app hover:opacity-90 disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-40"
         >
           {busy ? <Spinner className="h-3 w-3" /> : <CheckIcon />}
           Accept
@@ -550,14 +550,14 @@ export function Component() {
             <button
               type="button"
               onClick={browse}
-              className="shrink-0 rounded-lg border border-border px-3 py-2 text-sm font-medium text-fg hover:bg-panel"
+              className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-colors hover:bg-accent-strong"
             >
               Browse…
             </button>
             <button
               type="submit"
               disabled={!path.trim()}
-              className="inline-flex min-w-20 items-center justify-center gap-2 rounded-lg bg-fg px-4 py-2 text-sm font-medium text-app disabled:opacity-40"
+              className="inline-flex min-w-20 items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-fg disabled:opacity-40"
             >
               Open
             </button>

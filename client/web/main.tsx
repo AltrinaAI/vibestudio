@@ -3,6 +3,9 @@ import { RouterProvider } from "react-router-dom";
 import { router } from "./app/router";
 import { ConfirmProvider } from "@/components/confirm";
 import { initLogging } from "@/lib/log";
+// Self-hosted Inter (variable) — the Altrina UI font; bundled so it works offline
+// in the desktop build. Falls back to system fonts via --font-geist-sans.
+import "@fontsource-variable/inter";
 import "./globals.css";
 
 // Capture uncaught errors / unhandled rejections and forward warn+error to the

@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { TerminalMark } from "./FileIcon";
+import { AltrinaMark } from "./FileIcon";
 import { ThemeToggle } from "./ui";
 import RemoteMenu from "./RemoteMenu";
 import { secretsPath } from "@/lib/routes";
@@ -36,7 +36,7 @@ function NavLink({ icon, label, active, onClick }: { icon: ReactNode; label: str
       title={label}
       aria-current={active ? "page" : undefined}
       className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
-        active ? "bg-panel text-fg" : "text-muted hover:bg-panel hover:text-fg"
+        active ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel hover:text-fg"
       }`}
     >
       {icon}
@@ -60,9 +60,9 @@ export default function NavBar({ breadcrumb, children }: { breadcrumb?: ReactNod
   const atHome = pathname === "/";
 
   const brand = (
-    <span className="flex items-center gap-1.5">
-      <TerminalMark className="h-4.5 w-auto text-fg" />
-      <span className="font-medium text-fg">Skill Studio</span>
+    <span className="flex items-center gap-1.5 text-brand">
+      <AltrinaMark className="h-5 w-auto" />
+      <span className="text-[0.95rem] font-semibold lowercase tracking-tight">altrina</span>
     </span>
   );
 

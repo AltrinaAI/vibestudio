@@ -1,22 +1,34 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 
-/** Shared dialog/action button styles, previously copy-pasted into every dialog.
- *  primary = filled, ghost = outlined, danger = filled red (destructive confirms). */
+/* Shared button classes — the Altrina teal primary (filled, white text, deepens on
+   hover) and a bordered secondary/ghost. Exported as strings so the dialogs that
+   build raw <button>s (which carry their own busy/disabled logic) stay consistent
+   without each redefining the look. */
 export const btnPrimary =
-  "rounded-md bg-fg px-3 py-1.5 text-sm font-medium text-app transition-opacity hover:opacity-90 disabled:opacity-40";
+  "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg transition-colors hover:bg-accent-strong disabled:opacity-40";
 export const btnGhost =
   "rounded-md border border-border px-3 py-1.5 text-sm text-fg transition-colors hover:bg-panel disabled:opacity-40";
+/** Destructive confirm action — filled red, white text (intentionally off-palette). */
 export const btnDanger =
   "rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40";
+
+/** Primary/secondary button primitive for the common case (no custom sizing). */
+export function Button({
+  variant = "primary",
+  className = "",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" }) {
+  return <button {...props} className={`${variant === "primary" ? btnPrimary : btnGhost} ${className}`} />;
+}
 
 export type Tone = "default" | "accent" | "ok" | "warn" | "danger" | "info" | "muted";
 
 const TONE_CLASSES: Record<Tone, string> = {
   default: "bg-panel text-fg border-border",
   muted: "bg-panel text-muted border-border",
-  accent: "border-transparent text-white",
+  accent: "border-transparent text-accent-fg",
   ok: "bg-[color-mix(in_srgb,var(--ok)_14%,transparent)] text-ok border-[color-mix(in_srgb,var(--ok)_35%,transparent)]",
   warn: "bg-[color-mix(in_srgb,var(--warning)_14%,transparent)] text-warn border-[color-mix(in_srgb,var(--warning)_35%,transparent)]",
   danger: "bg-[color-mix(in_srgb,var(--error)_14%,transparent)] text-danger border-[color-mix(in_srgb,var(--error)_35%,transparent)]",

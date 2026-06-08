@@ -150,7 +150,7 @@ jobs:
         with:
           projectPath: client/desktop
           tagName: ${{ github.ref_name }}
-          releaseName: "Agent Skill Studio ${{ github.ref_name }}"
+          releaseName: "Altrina ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
           # Per-platform args (&& / || precedence: each `A && B` resolves before the `||`s):
@@ -259,7 +259,7 @@ jobs:
         run: |
           gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
             gh release create "${{ github.ref_name }}" --draft \
-              --title "Agent Skill Studio ${{ github.ref_name }}" \
+              --title "Altrina ${{ github.ref_name }}" \
               --notes "Desktop bundles and standalone skill-server binaries." || true
 
       - name: Upload to the release

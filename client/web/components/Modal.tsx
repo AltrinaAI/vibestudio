@@ -46,7 +46,7 @@ export function Modal({
       }}
     >
       <div
-        className={`flex w-full ${widthClass} flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-xl`}
+        className={`flex w-full ${widthClass} flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-xl`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-5 py-3">
