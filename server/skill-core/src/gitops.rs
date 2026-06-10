@@ -217,7 +217,7 @@ pub fn git_info(root: &str) -> Result<GitInfo, String> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirtyState {
-    root: String,
+    pub(crate) root: String,
     pub(crate) dirty: bool,
 }
 

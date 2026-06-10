@@ -10,7 +10,7 @@
 //!
 //! The desktop and the remote host therefore run byte-identical request handling;
 //! only the entry point differs. Configuration (bind addr, the `dist` directory,
-//! the bootstrap-skill + examples bases, an optional bearer token) flows in via
+//! the bundled-skills + examples bases, an optional bearer token) flows in via
 //! [`ServerConfig`] — the library makes no CWD-relative guesses of its own.
 
 use std::io::Write;
@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::thread;
 
 use serde_json::{json, Value};
-use skill_core::{commitmsg, discover, engine, github, gitops, secrets, skill, sync};
+use skill_core::{commitmsg, discover, engine, github, gitops, mining, secrets, skill, sync};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 mod proxy;
@@ -167,9 +167,10 @@ pub struct ServerConfig {
     /// Directory of the built UI (`index.html` + assets). Required — the library
     /// does NOT fall back to a CWD-relative `dist`.
     pub dist: PathBuf,
-    /// Where the bundled `skill-studio` activation skill lives (for
-    /// `/api/secrets-setup`). `None` falls back to an env/CWD/dist probe.
-    pub bootstrap_skill: Option<PathBuf>,
+    /// Base dir of the bundled built-in skills (`load-secrets`, `skill-miner`),
+    /// each a subfolder with a `SKILL.md`. `None` falls back to an env/CWD/dist
+    /// probe.
+    pub bundled_skills: Option<PathBuf>,
     /// Base dir for resolving a bundled example by relative path in
     /// `/api/read-skill`. `None` keeps absolute-path-only behaviour.
     pub examples_base: Option<PathBuf>,
@@ -197,7 +198,7 @@ impl Default for ServerConfig {
             host: "127.0.0.1".into(),
             port: 0,
             dist: PathBuf::from("dist"),
-            bootstrap_skill: None,
+            bundled_skills: None,
             examples_base: None,
             token: None,
             workers: 4,
@@ -256,7 +257,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
 
     let ctx = Arc::new(ServerCtx {
         dist: cfg.dist,
-        bootstrap_skill: cfg.bootstrap_skill,
+        bundled_skills: cfg.bundled_skills,
         examples_base: cfg.examples_base,
         token: cfg.token,
         remote: cfg.remote,
@@ -274,7 +275,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
 /// Resolved per-request context (config the handlers actually read).
 struct ServerCtx {
     dist: PathBuf,
-    bootstrap_skill: Option<PathBuf>,
+    bundled_skills: Option<PathBuf>,
     examples_base: Option<PathBuf>,
     token: Option<String>,
     remote: Option<Arc<dyn RemoteControl>>,
@@ -529,21 +530,26 @@ fn query_param(url: &str, key: &str) -> Option<String> {
     None
 }
 
-/// Locate the bundled `skill-studio` activation skill so setup can install it.
-/// Honors `SKILL_BOOTSTRAP_SKILL`, else looks relative to CWD and the dist dir.
-fn bootstrap_skill_dir(dist: &Path) -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("SKILL_BOOTSTRAP_SKILL") {
+/// Locate the base dir of the bundled built-in skills (`load-secrets`,
+/// `skill-miner`). Honors `SKILL_STUDIO_BUNDLED_SKILLS`, else looks relative to
+/// CWD and the dist dir. A candidate counts if it contains the activation skill.
+fn bundled_skills_dir(dist: &Path) -> Option<PathBuf> {
+    let has_skills = |p: &Path| p.join("load-secrets").join("SKILL.md").exists();
+    if let Ok(p) = std::env::var("SKILL_STUDIO_BUNDLED_SKILLS") {
         let pb = PathBuf::from(p);
-        if pb.join("SKILL.md").exists() {
+        if has_skills(&pb) {
             return Some(pb);
         }
     }
-    let candidates = [
-        PathBuf::from("skills/skill-studio"),
-        dist.join("../skills/skill-studio"),
-        dist.join("skills/skill-studio"),
-    ];
-    candidates.into_iter().find(|c| c.join("SKILL.md").exists())
+    let candidates = [PathBuf::from("skills"), dist.join("../skills"), dist.join("skills")];
+    candidates.into_iter().find(|c| has_skills(c))
+}
+
+/// A bundled skill's folder, by dir name.
+fn bundled_skill(ctx: &ServerCtx, name: &str) -> Option<PathBuf> {
+    let base = ctx.bundled_skills.clone().or_else(|| bundled_skills_dir(&ctx.dist))?;
+    let dir = base.join(name);
+    dir.join("SKILL.md").exists().then_some(dir)
 }
 
 fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
@@ -643,6 +649,44 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             // path on THIS machine, which is where the agent runs.
             json_reply(skill_term::save_pasted_image(&s("data"), &s("mime")).map(|p| json!({ "path": p })))
         }
+        // --- skill mining (a skill-miner run in an agent terminal) ---
+        (Method::Get, "/api/mine/sources") => {
+            let days = query_param(url, "days").and_then(|d| d.parse().ok()).unwrap_or(35);
+            json_reply(Ok(mining::sources(days)))
+        }
+        (Method::Post, "/api/mine/start") => {
+            let days = v.get("days").and_then(|x| x.as_u64()).unwrap_or(35);
+            let sources: Vec<String> = v
+                .get("sources")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let improve = v.get("improve").and_then(|x| x.as_bool()).unwrap_or(true);
+            let agent = s("agent");
+            let bundled = bundled_skill(ctx, "skill-miner");
+            json_reply((|| {
+                let prep = mining::prepare_run(days, &sources, improve, bundled.as_deref())?;
+                // Claude's auto mode lets the run proceed without permission
+                // prompts nobody is watching for; other agents take no flag.
+                let auto = agent.starts_with("claude");
+                let sess = skill_term::create_session(
+                    &agent, &prep.run_dir, 200, 50, false, false, auto,
+                    &[prep.prompt.clone()],
+                )?;
+                mining::record_run(prep, &agent, &sess.id)
+            })())
+        }
+        (Method::Get, "/api/mine/state") => {
+            let alive = |id: &str| {
+                skill_term::list_sessions()
+                    .map(|ss| ss.iter().any(|s| s.id == id))
+                    .unwrap_or(false)
+            };
+            json_reply(mining::state(alive))
+        }
+        (Method::Post, "/api/mine/stop") => {
+            json_reply(mining::stop(skill_term::kill_session).map(|_| json!({ "ok": true })))
+        }
         (Method::Post, "/api/detect-required-env") => {
             let root = s("root");
             json_reply(secrets::secret_keys().map(|keys| skill::scan_for_env_vars(Path::new(&root), &keys)))
@@ -716,7 +760,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         }
         (Method::Post, "/api/secrets-preview-env") => json_reply(Ok(secrets::preview_dotenv(&s("data")))),
         (Method::Post, "/api/secrets-setup") => {
-            let bootstrap = ctx.bootstrap_skill.clone().or_else(|| bootstrap_skill_dir(&ctx.dist));
+            let bootstrap = bundled_skill(ctx, "load-secrets");
             json_reply(secrets::secrets_setup(bootstrap.as_deref()))
         }
         // The skill's secrets as a plain-text .env download — for handing a

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Spinner } from "@/components/ui";
-import { skillKind, KIND_TAG } from "@/lib/agents";
+import { skillKind, isEditableBundledSkill, KIND_TAG } from "@/lib/agents";
 import { useEditorStatus } from "@/lib/editorState";
 import { useConfirm } from "@/components/useConfirm";
 import { useStudio } from "./StudioContext";
@@ -121,6 +121,10 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
   const { reload, gitVersion, bumpGit, preview, enterVersion, keepVersion } = useStudio();
   const confirm = useConfirm();
   const kind = skillKind(root).kind;
+  // Versioning is for skills that are yours to change: personal ones, plus the
+  // editable bundled skills (skill-miner) — installed into your skills home and
+  // meant to be tuned; a reinstall restores the official version as a diff.
+  const versionable = kind === "personal" || isEditableBundledSkill(root);
 
   // The version being previewed stays highlighted in the list. The open file
   // (file route, or the index = SKILL.md) drives the New Changes highlight.
@@ -328,7 +332,7 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
   // There's a version to save when this is your own tracked repo with uncommitted
   // changes. ⌘S opens the dialog (a missing git identity is surfaced there).
   const canSaveVersion =
-    !!info && info.available && info.isRepo && info.dirty && kind === "personal" && !info.inParentRepo;
+    !!info && info.available && info.isRepo && info.dirty && versionable && !info.inParentRepo;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
@@ -350,7 +354,7 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
   }
   if (err || !info) return <Notice>{err ?? "Couldn’t load version control."}</Notice>;
   if (!info.available) return <Notice>Git isn’t installed — install git to enable version history.</Notice>;
-  if (kind !== "personal")
+  if (!versionable)
     return (
       <Notice>
         Version history is for your own skills. This is a {KIND_TAG[kind].label.toLowerCase()} skill — use{" "}

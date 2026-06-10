@@ -99,7 +99,7 @@ pub fn run() {
                 // Prod: an ephemeral port, read back from the handle.
                 port: if tauri::is_dev() { 8765 } else { 0 },
                 dist,
-                bootstrap_skill: resource_dir.clone().map(|r| r.join("skills").join("skill-studio")),
+                bundled_skills: resource_dir.clone().map(|r| r.join("skills")),
                 examples_base: resource_dir, // resolve bundled examples by relative path
                 startup_maintenance: false,
                 // Plug the SSH connection manager into the local switchboard.

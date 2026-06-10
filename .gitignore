@@ -25,6 +25,9 @@
 # vendored on-device LLM engine (fetched by scripts/fetch-engine.sh; not committed)
 /client/desktop/binaries
 
+# python bytecode (the bundled skill-miner scripts regenerate it when run)
+__pycache__/
+
 # misc
 .DS_Store
 *.pem

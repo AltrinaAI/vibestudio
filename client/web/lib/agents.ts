@@ -104,16 +104,32 @@ export function skillKind(root: string): KindMeta {
   return official ? KIND_META.official : KIND_META.plugin;
 }
 
-// --- bootstrap activation skill ----------------------------------------
-// The "skill-studio" skill that this app installs into your shared skills dirs
-// (~/.agents/skills, ~/.claude/skills, …) to load the secrets you manage here.
-// It lands in a personal dir, so discovery would tag it "personal" and surface
-// it as one of your own — but you didn't author it, so we give it the "studio"
-// kind: it keeps its folder name but tucks into the bundled dropdown with a
-// "Skill Studio" tag instead of showing as one of your cards.
-export const BOOTSTRAP_SKILL_DIRNAME = "skill-studio";
+// --- bundled built-in skills --------------------------------------------
+// Skills this app ships and installs into your shared skills dirs
+// (~/.agents/skills, ~/.claude/skills, …): "load-secrets" (the secrets
+// activation fallback; formerly "skill-studio") and "skill-miner". They land in
+// personal dirs, so discovery would tag them "personal" and surface them as
+// your own — but you didn't author them, so we give them the "studio" kind:
+// they keep their folder names but tuck into the bundled dropdown with a
+// "Skill Studio" tag instead of showing as your cards.
+export const BUNDLED_SKILL_DIRNAMES = ["load-secrets", "skill-miner", "skill-studio"];
 
-/** True for the bundled activation skill, matched by its installed folder name. */
+// Bundled skills the user is meant to make their own after install: editable
+// and versionable in place (the quality bar, prompts and adapters are theirs to
+// tune; a reinstall restores the official version, and with a `.git` present
+// the update lands as reviewable uncommitted changes). The rest (load-secrets)
+// stay locked down — they're plumbing that terminals and rc-file wiring depend
+// on, with no customization upside.
+const EDITABLE_BUNDLED_DIRNAMES = ["skill-miner"];
+
+const lastSegment = (root: string) => root.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
+
+/** True for a bundled built-in skill, matched by its installed folder name. */
 export function isBootstrapSkill(root: string): boolean {
-  return root.replace(/\\/g, "/").split("/").filter(Boolean).pop() === BOOTSTRAP_SKILL_DIRNAME;
+  return BUNDLED_SKILL_DIRNAMES.includes(lastSegment(root));
+}
+
+/** True for a bundled skill the user may edit and version in place. */
+export function isEditableBundledSkill(root: string): boolean {
+  return EDITABLE_BUNDLED_DIRNAMES.includes(lastSegment(root));
 }

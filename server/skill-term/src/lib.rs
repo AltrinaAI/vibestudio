@@ -395,7 +395,7 @@ pub fn create_session(
         .collect::<Vec<_>>()
         .join(" ");
 
-    // Source the managed-secrets env file (the same one the `skill-studio`
+    // Source the managed-secrets env file (the same one the `load-secrets`
     // activation skill reads) before the agent starts, so skills that need
     // credentials find them in the environment without an activation step.
     // The `[ -f ]` guard makes a missing/empty store a silent no-op.

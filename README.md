@@ -30,7 +30,7 @@ box you drive from a browser (the VS Code-remote model — see [`design.md`](./d
   app inject the secrets into the agent's environment automatically; skills
   declare what they need (`metadata.required-env`, auto-detected on save) so
   exports can offer to bundle them and imports can show what's missing. The
-  bundled `skill-studio` activation skill covers agents started elsewhere.
+  bundled `load-secrets` activation skill covers agents started elsewhere.
 - **Run long-lived agents on remote machines** — start Claude Code, Codex, or a
   shell in tmux-backed sessions that survive UI disconnect, so you can close your
   laptop and come back to it later.

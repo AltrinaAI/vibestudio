@@ -9,6 +9,7 @@ import { armDiscardBypass, holdAutosave, releaseAutosave } from "@/lib/editorSta
 import TopBar from "./TopBar";
 import Sidebar from "./Sidebar";
 import PreviewBanner from "./PreviewBanner";
+import MinedBanner from "./MinedBanner";
 import DiffOverlays from "./DiffOverlays";
 import ManagePanel from "./ManagePanel";
 import ExportDialog from "./ExportDialog";
@@ -155,6 +156,7 @@ export default function StudioLayout() {
         onExport={onExport}
       />
       <PreviewBanner />
+      <MinedBanner />
       <div className="flex min-h-0 flex-1">
         <Sidebar data={data} selected={selected} onSelect={onSelect} onDelete={onDelete} />
         {/* The scroll pane (main) + the change overview ruler on its right edge.

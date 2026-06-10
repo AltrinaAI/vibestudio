@@ -1,19 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Spinner } from "@/components/ui";
+import { Spinner, btnPrimary } from "@/components/ui";
 import NavBar from "@/components/NavBar";
 import { FolderIcon } from "@/components/FileIcon";
 import FolderPicker from "@/components/FolderPicker";
 import NewSkillDialog from "./NewSkillDialog";
 import ImportSkillDialog from "./ImportSkillDialog";
+import MineDialog from "./MineDialog";
 import { useConfirm } from "@/components/useConfirm";
 import { useRecents, removeRecent, type Recent } from "@/lib/recents";
 import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO } from "@/lib/agents";
 import * as api from "@/lib/api";
-import type { AgentSkills, DiscoveredSkill } from "@/lib/api";
+import type { AgentSkills, DiscoveredSkill, MineState } from "@/lib/api";
+import { useMining, refreshMining } from "@/lib/mining";
 import { useNavigate } from "react-router-dom";
-import { studioPath, markdownPath } from "@/lib/routes";
+import { studioPath, markdownPath, terminalsPath } from "@/lib/routes";
 
 const EXAMPLES = [
   { name: "docx", path: "examples/docx", blurb: "Create & edit Word documents" },
@@ -280,12 +282,15 @@ function AgentSection({
 // container with its own controls.
 function ProposedCard({
   skill,
+  evidence,
   busy,
   onOpen,
   onAccept,
   onDiscard,
 }: {
   skill: DiscoveredSkill;
+  /** "seen in N sessions · M projects" from the mining run, when it staged this draft. */
+  evidence?: string;
   busy: boolean;
   onOpen: (p: string) => void;
   onAccept: (root: string) => void;
@@ -299,6 +304,7 @@ function ProposedCard({
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{name}</span>
         <ProposedTag />
       </div>
+      {evidence && <p className="text-[0.7rem] font-medium text-info">{evidence}</p>}
       {skill.description && <p className="line-clamp-2 text-xs leading-relaxed text-muted">{skill.description}</p>}
       <span className="truncate pt-0.5 font-mono text-[0.7rem] text-faint" title={skill.root}>
         {skill.root}
@@ -335,44 +341,170 @@ function ProposedCard({
   );
 }
 
+function PickaxeIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+      <path d="M14.531 12.469 6.619 20.38a1 1 0 1 1-3-3l7.912-7.912" />
+      <path d="M15.686 4.314A12.5 12.5 0 0 0 5.461 2.958 1 1 0 0 0 5.58 4.71a22 22 0 0 1 6.318 3.393" />
+      <path d="M17.7 3.7a1 1 0 0 0-1.4 0l-4.6 4.6a1 1 0 0 0 0 1.4l2.6 2.6a1 1 0 0 0 1.4 0l4.6-4.6a1 1 0 0 0 0-1.4z" />
+      <path d="M19.686 8.314a12.5 12.5 0 0 1 1.356 10.225 1 1 0 0 1-1.751-.119 22 22 0 0 0-3.393-6.319" />
+    </svg>
+  );
+}
+
+function timeAgo(unix: number): string {
+  const mins = Math.max(0, Math.round((Date.now() / 1000 - unix) / 60));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** Plain words for the run's current stage (the terminal has the detail). */
+function stageText(mining: MineState): string {
+  if (mining.stage === "analyzing")
+    return mining.found ? `Analyzing ${Math.min(mining.found, 100)} sessions…` : "Analyzing your sessions…";
+  if (mining.stage === "reviewing") return "Reading sessions & drafting skills…";
+  return "Scanning your sessions…";
+}
+
+// The mining anchor: proposals land here, and the section's empty state is the
+// invitation to mine. No NavBar entry, no dedicated route — the feature lives
+// where its results live.
 function ProposedSection({
   skills,
+  mining,
   busyRoot,
   error,
   onOpen,
+  onMine,
+  onStop,
+  onReport,
+  onWatch,
   onAccept,
   onDiscard,
 }: {
   skills: DiscoveredSkill[];
+  mining: MineState | null;
   busyRoot: string | null;
   error: string | null;
   onOpen: (p: string) => void;
+  onMine: () => void;
+  onStop: () => void;
+  onReport: (path: string) => void;
+  onWatch: () => void;
   onAccept: (root: string) => void;
   onDiscard: (root: string, name: string) => void;
 }) {
+  const running = mining?.status === "running";
+  const hasRun = mining != null && mining.status !== "idle";
+  // Evidence lines from the run's results, keyed by staged root (basename
+  // fallback — the agent writes the paths, so be tolerant of ~ vs absolute).
+  const evidenceFor = (root: string): string | undefined => {
+    const p = mining?.results?.proposals?.find(
+      (x) => x.root === root || baseName(x.root ?? "") === baseName(root),
+    );
+    if (!p?.sessions) return undefined;
+    return `Seen in ${p.sessions} session${p.sessions === 1 ? "" : "s"}${p.projects ? ` · ${p.projects} project${p.projects === 1 ? "" : "s"}` : ""}`;
+  };
+  const improved = mining?.improved ?? [];
+
   return (
     <section className="mt-12">
-      <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
-        Proposed skills <span className="text-faint">· {skills.length}</span>
-      </h2>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
+          Proposed skills {skills.length > 0 && <span className="text-faint">· {skills.length}</span>}
+        </h2>
+        {hasRun && !running && mining.startedUnix != null && (
+          <span className="text-xs text-faint">
+            · {mining.status === "stopped" ? "last run stopped" : `mined ${timeAgo(mining.startedUnix)}`}
+          </span>
+        )}
+        {!running && mining?.reportPath && (
+          <button type="button" onClick={() => onReport(mining.reportPath ?? "")} className="text-xs font-medium text-accent hover:opacity-80">
+            report
+          </button>
+        )}
+        {!running && hasRun && (
+          <button
+            type="button"
+            onClick={onMine}
+            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-muted hover:bg-panel hover:text-fg"
+          >
+            <PickaxeIcon />
+            Mine again
+          </button>
+        )}
+      </div>
       <p className="mb-4 mt-1.5 max-w-2xl text-sm text-muted">
-        Freshly generated drafts staged under{" "}
-        <code className="font-mono text-[0.8em]">generated-skills/</code> (e.g. by the skill-miner). Accept one to move
-        it into your skills home, or discard it.
+        Drafts staged under <code className="font-mono text-[0.8em]">generated-skills/</code>, mined from your agent
+        sessions. Accept one to move it into your skills home, or discard it.
       </p>
       {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-      <div className={gridCls}>
-        {skills.map((s) => (
-          <ProposedCard
-            key={s.root}
-            skill={s}
-            busy={busyRoot === s.root}
-            onOpen={onOpen}
-            onAccept={onAccept}
-            onDiscard={onDiscard}
-          />
-        ))}
-      </div>
+
+      {running && mining && (
+        <div className="mb-4 flex max-w-2xl items-center gap-2.5 rounded-xl border border-[color-mix(in_srgb,var(--info)_35%,transparent)] bg-surface px-3.5 py-2.5 text-sm">
+          <Spinner className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-muted">{stageText(mining)}</span>
+          <button type="button" onClick={onWatch} className="shrink-0 text-xs font-medium text-accent hover:opacity-80">
+            Watch
+          </button>
+          <button type="button" onClick={onStop} className="shrink-0 text-xs font-medium text-faint hover:text-danger">
+            Stop
+          </button>
+        </div>
+      )}
+
+      {!running && skills.length === 0 && (
+        <div className={`${proposedCardCls} max-w-2xl`}>
+          <p className="text-sm leading-relaxed text-muted">
+            Skill Studio can study your recent agent sessions and propose skills — new ones, and improvements to
+            ones you have. It runs on this machine, in a terminal you can watch.
+          </p>
+          <div className="mt-2">
+            <button type="button" onClick={onMine} className={`${btnPrimary} inline-flex items-center gap-1.5`}>
+              <PickaxeIcon />
+              Mine recent sessions
+            </button>
+          </div>
+        </div>
+      )}
+
+      {skills.length > 0 && (
+        <div className={gridCls}>
+          {skills.map((s) => (
+            <ProposedCard
+              key={s.root}
+              skill={s}
+              evidence={evidenceFor(s.root)}
+              busy={busyRoot === s.root}
+              onOpen={onOpen}
+              onAccept={onAccept}
+              onDiscard={onDiscard}
+            />
+          ))}
+        </div>
+      )}
+
+      {improved.length > 0 && (
+        <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+          <PickaxeIcon className="text-info" />
+          Mining proposed changes to {improved.length} existing skill{improved.length === 1 ? "" : "s"}:
+          {improved.map((root) => (
+            <button
+              key={root}
+              type="button"
+              onClick={() => onOpen(root)}
+              className="rounded-md bg-panel px-1.5 py-0.5 font-mono text-xs text-fg hover:text-accent"
+            >
+              {baseName(root)}
+            </button>
+          ))}
+          <span className="text-faint">— open to review &amp; save a version.</span>
+        </p>
+      )}
     </section>
   );
 }
@@ -388,6 +520,8 @@ export function Component() {
   const [path, setPath] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [mineOpen, setMineOpen] = useState(false);
+  const mining = useMining();
 
   const [discovered, setDiscovered] = useState<AgentSkills[]>([]);
   const [discovering, setDiscovering] = useState(true);
@@ -426,6 +560,33 @@ export function Component() {
   useEffect(() => {
     void runDiscovery();
   }, [runDiscovery]);
+
+  // When a mining run finishes (or is stopped), rescan: newly staged proposals
+  // and freshly dirtied skills should appear without a manual refresh.
+  const prevMineStatus = useRef<string | null>(null);
+  useEffect(() => {
+    const status = mining?.status ?? null;
+    if (prevMineStatus.current === "running" && status !== "running") void runDiscovery();
+    prevMineStatus.current = status;
+  }, [mining?.status, runDiscovery]);
+
+  const stopMining = useCallback(async () => {
+    if (
+      !(await confirm({
+        title: "Stop mining?",
+        body: "The agent session is interrupted. Anything already staged stays reviewable.",
+        confirmLabel: "Stop",
+        danger: true,
+      }))
+    )
+      return;
+    try {
+      await api.mineStop();
+    } catch {
+      // The state poll will reconcile either way.
+    }
+    void refreshMining();
+  }, [confirm]);
 
   const acceptProposed = useCallback(
     async (root: string) => {
@@ -602,12 +763,17 @@ export function Component() {
           </section>
         )}
 
-        {proposed.length > 0 && (
+        {(proposed.length > 0 || mining != null) && (
           <ProposedSection
             skills={proposed}
+            mining={mining}
             busyRoot={busyRoot}
             error={actionError}
             onOpen={onOpen}
+            onMine={() => setMineOpen(true)}
+            onStop={() => void stopMining()}
+            onReport={(p) => navigate(markdownPath(p))}
+            onWatch={() => navigate(terminalsPath())}
             onAccept={acceptProposed}
             onDiscard={discardProposed}
           />
@@ -701,6 +867,8 @@ export function Component() {
           }}
         />
       )}
+
+      {mineOpen && <MineDialog onClose={() => setMineOpen(false)} onStarted={() => setMineOpen(false)} />}
     </div>
   );
 }

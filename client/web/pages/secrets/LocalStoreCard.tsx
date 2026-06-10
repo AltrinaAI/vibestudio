@@ -326,7 +326,7 @@ export default function LocalStoreCard() {
               </button>
             </div>
             <p className="text-[0.7rem] text-muted">
-              Installs the <span className="font-mono">skill-studio</span> skill into the shared{" "}
+              Installs the <span className="font-mono">load-secrets</span> skill into the shared{" "}
               <span className="font-mono">~/.agents/skills</span> dir (and Claude Code’s own) so your agents can load these
               vars. Run again after installing a new agent.
             </p>

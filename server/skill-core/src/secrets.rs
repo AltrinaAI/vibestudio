@@ -1,5 +1,5 @@
 // Secret manager: a machine-local store of environment variables that skills
-// load at runtime via the bundled `skill-studio` activation skill. Values live
+// load at runtime via the bundled `load-secrets` activation skill. Values live
 // in a JSON store (the source of truth the UI edits) and are rendered to a
 // shell-sourceable env file (`export KEY=VALUE`) that `activate.sh` reads.
 //
@@ -14,7 +14,12 @@ use serde::Serialize;
 
 use crate::sync::copy_tree;
 
-const BOOTSTRAP_SKILL: &str = "skill-studio";
+const BOOTSTRAP_SKILL: &str = "load-secrets";
+
+/// Former names of the activation skill. Installed copies under an old name are
+/// removed wherever the current one gets installed, so they can't linger (or
+/// surface in the UI as the user's own "personal" skills).
+const LEGACY_SKILL_NAMES: [&str; 1] = ["skill-studio"];
 
 /// An agent and the skills dirs (relative to home) it reads. Cohort agents list
 /// the shared `.agents/skills` standard dir first, so one copy there reaches all
@@ -35,15 +40,17 @@ const AGENTS: [Agent; 5] = [
     Agent { name: "OpenClaw", home_dotdir: ".openclaw", skill_dirs: &[".openclaw/skills"] },
 ];
 
-/// Canonical locations the activation skill is installed into, each gated by the
+/// Canonical locations bundled skills are installed into, each gated by the
 /// presence of any "trigger" home dotdir. The shared `.agents/skills` dir covers
-/// the whole standard cohort in a single copy.
-struct InstallDest {
-    skills_rel: &'static str,
-    triggers: &'static [&'static str],
+/// the whole standard cohort in a single copy; Claude Code and OpenClaw read
+/// only their own folders. Shared with `mining` so skill-miner installs to the
+/// same set of places as the activation skill.
+pub(crate) struct InstallDest {
+    pub(crate) skills_rel: &'static str,
+    pub(crate) triggers: &'static [&'static str],
 }
 
-const INSTALL_DESTS: [InstallDest; 3] = [
+pub(crate) const INSTALL_DESTS: [InstallDest; 3] = [
     InstallDest { skills_rel: ".agents/skills", triggers: &[".agents", ".codex", ".cursor", ".gemini"] },
     InstallDest { skills_rel: ".claude/skills", triggers: &[".claude"] },
     InstallDest { skills_rel: ".openclaw/skills", triggers: &[".openclaw"] },
@@ -67,7 +74,7 @@ pub struct AgentInstall {
     agent: String,
     /// The agent's home dir exists on this machine.
     installed: bool,
-    /// The `skill-studio` activation skill is present for this agent.
+    /// The `load-secrets` activation skill is present for this agent.
     has_skill: bool,
 }
 
@@ -370,7 +377,7 @@ pub fn secrets_status() -> Result<SecretsStatus, String> {
     })
 }
 
-/// Install the bundled `skill-studio` activation skill into the canonical shared
+/// Install the bundled `load-secrets` activation skill into the canonical shared
 /// location (and the holdouts that don't read it), rather than duplicating it
 /// into every agent's private dir. Consolidates onto `.agents/skills` and clears
 /// stale per-agent copies. Returns the agents now covered.
@@ -380,7 +387,7 @@ pub fn install_bootstrap_skill(skill_src: &Path) -> Result<Vec<String>, String> 
 
 fn install_bootstrap_skill_in(home: &Path, skill_src: &Path) -> Result<Vec<String>, String> {
     if !skill_src.join("SKILL.md").exists() {
-        return Err("Bundled skill-studio skill not found.".into());
+        return Err("Bundled load-secrets skill not found.".into());
     }
     // Install into each canonical location whose cohort is present on this machine.
     for dest in &INSTALL_DESTS {
@@ -395,14 +402,23 @@ fn install_bootstrap_skill_in(home: &Path, skill_src: &Path) -> Result<Vec<Strin
         std::fs::create_dir_all(&skills_dir).map_err(|e| e.to_string())?;
         let mut total = 0;
         copy_tree(skill_src, &target, &mut total)?;
+        // Clear copies installed under a former name in the same location.
+        for old in LEGACY_SKILL_NAMES {
+            let stale = skills_dir.join(old);
+            if stale.exists() {
+                let _ = std::fs::remove_dir_all(&stale);
+            }
+        }
     }
     // Once the shared copy is in place, drop superseded per-agent copies so the
     // cohort doesn't see the skill twice (and no stale older copy lingers).
     if home.join(".agents/skills").join(BOOTSTRAP_SKILL).join("SKILL.md").exists() {
         for legacy in LEGACY_SUPERSEDED {
-            let stale = home.join(legacy).join(BOOTSTRAP_SKILL);
-            if stale.exists() {
-                let _ = std::fs::remove_dir_all(&stale);
+            for name in std::iter::once(BOOTSTRAP_SKILL).chain(LEGACY_SKILL_NAMES) {
+                let stale = home.join(legacy).join(name);
+                if stale.exists() {
+                    let _ = std::fs::remove_dir_all(&stale);
+                }
             }
         }
     }
@@ -415,7 +431,7 @@ fn install_bootstrap_skill_in(home: &Path, skill_src: &Path) -> Result<Vec<Strin
 
 /// First-run setup: materialize the store + env file and (re)install the
 /// activation skill into every installed agent. `skill_src` is the bundled
-/// `skill-studio` folder, resolved by the caller (Tauri resource / server path).
+/// `load-secrets` folder, resolved by the caller (Tauri resource / server path).
 pub fn secrets_setup(skill_src: Option<&Path>) -> Result<SetupResult, String> {
     let map = load_store()?;
     save_store(&map)?; // creates the store + env file if absent
@@ -460,22 +476,28 @@ mod tests {
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         // A stale per-agent copy from an older install lives in ~/.codex/skills.
-        let stale = home.join(".codex/skills/skill-studio");
+        let stale = home.join(".codex/skills/load-secrets");
         std::fs::create_dir_all(&stale).unwrap();
         std::fs::write(stale.join("SKILL.md"), "old").unwrap();
+        // A copy installed under the skill's former name lingers in a live dir.
+        let renamed = home.join(".claude/skills/skill-studio");
+        std::fs::create_dir_all(&renamed).unwrap();
+        std::fs::write(renamed.join("SKILL.md"), "pre-rename").unwrap();
         // Bundled source skill.
-        let src = base.join("src/skill-studio");
+        let src = base.join("src/load-secrets");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("SKILL.md"), "new").unwrap();
         std::fs::write(src.join("activate.sh"), "#!/usr/bin/env bash\n").unwrap();
 
         let covered = install_bootstrap_skill_in(&home, &src).unwrap();
 
-        // Shared dir gets the copy; Claude Code gets its own; stale legacy cleared.
-        assert!(home.join(".agents/skills/skill-studio/SKILL.md").exists());
-        assert!(home.join(".claude/skills/skill-studio/SKILL.md").exists());
+        // Shared dir gets the copy; Claude Code gets its own; stale copies under
+        // the current AND former names are cleared.
+        assert!(home.join(".agents/skills/load-secrets/SKILL.md").exists());
+        assert!(home.join(".claude/skills/load-secrets/SKILL.md").exists());
         assert!(!stale.exists(), "stale ~/.codex/skills copy must be cleared");
-        assert!(!home.join(".codex/skills/skill-studio").exists());
+        assert!(!home.join(".codex/skills/load-secrets").exists());
+        assert!(!renamed.exists(), "old-name skill-studio copy must be cleared");
         assert!(covered.iter().any(|a| a == "Codex"), "Codex covered via shared dir");
         assert!(covered.iter().any(|a| a == "Claude Code"));
         let _ = std::fs::remove_dir_all(&base);

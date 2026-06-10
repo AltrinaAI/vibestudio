@@ -10,6 +10,9 @@
 /** The dedicated secret-manager page (machine-local store + future providers). */
 export const secretsPath = () => "/secrets";
 
+/** The terminals workspace (always-mounted host; the URL just reveals it). */
+export const terminalsPath = () => "/terminals";
+
 export const studioPath = (root: string) => `/studio/${encodeURIComponent(root)}`;
 
 export const studioFilePath = (root: string, rel: string) =>

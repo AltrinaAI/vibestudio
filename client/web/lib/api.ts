@@ -77,10 +77,10 @@ const readImage = (root: string, rel: string) =>
 
 export async function discoverSkills(): Promise<AgentSkills[]> {
   const groups = await http<AgentSkills[]>("GET", "discover");
-  // The bundled "skill-studio" activation skill ships with the app and installs
-  // into a personal dir, so discovery tags it "personal". Re-tag it "studio" so
-  // it keeps its folder name but tucks into the bundled dropdown (with a "Skill
-  // Studio" tag) rather than showing as one of your own skills.
+  // The bundled built-in skills (load-secrets, skill-miner) ship with the app
+  // and install into personal dirs, so discovery tags them "personal". Re-tag
+  // them "studio" so they keep their folder names but tuck into the bundled
+  // dropdown (with a "Skill Studio" tag) rather than showing as your own skills.
   return groups.map((g) => ({
     ...g,
     skills: g.skills.map((s) => (isBootstrapSkill(s.root) ? { ...s, kind: "studio" } : s)),
@@ -608,7 +608,7 @@ export interface AgentInstall {
   agent: string;
   /** The agent's home dir exists on this machine. */
   installed: boolean;
-  /** The skill-studio activation skill is installed for this agent. */
+  /** The load-secrets activation skill is installed for this agent. */
   hasSkill: boolean;
 }
 export interface SecretsStatus {
@@ -676,6 +676,58 @@ export interface CreateTermArgs {
   autoMode: boolean;
   extraArgs: string[];
 }
+
+// --- skill mining (a skill-miner run in an agent terminal) ---
+
+/** A transcript source the miner can read, with its in-window session count. */
+export interface MineSource {
+  id: string;
+  label: string;
+  sessions: number;
+}
+
+/** One staged proposal from the run's results.json (agent-written). */
+export interface MineProposal {
+  name: string;
+  root: string;
+  sessions?: number;
+  projects?: number;
+}
+
+export interface MineResults {
+  proposals?: MineProposal[];
+  improved?: string[];
+  deferred?: string[];
+}
+
+export interface MineState {
+  /** "idle" (never ran) | "running" | "done" | "stopped". */
+  status: string;
+  /** While running: "scanning" | "analyzing" | "reviewing". */
+  stage?: string;
+  /** Sessions found by the discover step. */
+  found?: number;
+  startedUnix?: number;
+  terminalId?: string;
+  reportPath?: string;
+  results?: MineResults;
+  /** Existing skills the run dirtied — clears once committed or discarded. */
+  improved: string[];
+}
+
+export interface MineStartArgs {
+  days: number;
+  sources: string[];
+  /** An AgentOption.id (the agent that runs the mine). */
+  agent: string;
+  /** Allow in-place edits to existing skills (reviewed before saving). */
+  improve: boolean;
+}
+
+export const mineSources = (days: number) => http<MineSource[]>("GET", `mine/sources?days=${days}`);
+export const mineStart = (a: MineStartArgs) => http<MineState>("POST", "mine/start", { ...a });
+export const mineState = () => http<MineState>("GET", "mine/state");
+export const mineStop = () => http<{ ok: boolean }>("POST", "mine/stop").then(() => {});
 
 export const terminalAgents = () => http<AgentOption[]>("GET", "terminal/agents");
 export const terminalList = () => http<TermSession[]>("GET", "terminal/list");

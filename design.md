@@ -158,3 +158,15 @@ Provisioning downloads the matching `skill-server-<target>` from the GitHub rele
 tag matches the app version (CI builds static-musl + macOS binaries — see
 [.github/workflows/release.yml](.github/workflows/release.yml)). Override the source with
 `SKILL_STUDIO_SERVER_BASE_URL` / `SKILL_STUDIO_SERVER_VERSION`.
+
+## Roadmap
+
+- **Skill-usage feedback loop (mining, next stage).** The skill-miner parsers already
+  extract `skills_used` per session (with `[skill used: X]` markers interleaved in the
+  condensed transcript), and the distill stage summarizes each session's explicit user
+  feedback in natural language. Once mining runs recurrently, later runs can close the
+  loop on previously accepted skills: report "this skill triggered N times since you
+  accepted it / never triggered" and feed feedback about a skill falling short back as
+  improvement candidates. Undertriggering is the compounding risk — a skill that never
+  fires can't gather feedback or improve — so surfacing trigger counts is the first
+  health metric worth shipping.

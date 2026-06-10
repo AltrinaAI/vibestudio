@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useEditorStatus } from "@/lib/editorState";
-import { skillKind } from "@/lib/agents";
+import { skillKind, isEditableBundledSkill } from "@/lib/agents";
 import { generateCommitMessage } from "@/lib/api";
 
 /** How long edits must be settled (saved + untouched) before we draft a message
@@ -17,7 +17,8 @@ const IDLE_DELAY = 10_000;
  * peeks that cache) instead of waiting seconds for the model.
  *
  * Scope + safety:
- * - Only the user's own (personal) skills are versionable, so we skip the rest.
+ * - Only versionable skills draft: personal ones plus the editable bundled
+ *   skills (skill-miner) — matching the Source Control panel's gate.
  * - We only draft after a real edit has happened since the last draft, so a
  *   quiescent skill never triggers generation.
  * - Errors (no changes yet, model still downloading) are swallowed — the dialog's
@@ -31,7 +32,7 @@ export function useEagerCommitDraft(root: string) {
   const dirtySinceDraft = useRef(false);
 
   useEffect(() => {
-    if (skillKind(root).kind !== "personal") return;
+    if (skillKind(root).kind !== "personal" && !isEditableBundledSkill(root)) return;
     if (editor.dirty || editor.saving) dirtySinceDraft.current = true;
 
     // Idle = an editor is mounted, its buffer is on disk, and nothing's failing.

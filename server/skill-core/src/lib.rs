@@ -7,6 +7,7 @@ pub mod filetypes;
 pub mod github;
 pub mod gitops;
 pub mod gpu;
+pub mod mining;
 pub mod pathsafe;
 pub mod process;
 pub mod remotesync;

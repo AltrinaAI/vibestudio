@@ -9,7 +9,7 @@
 #   . "$HOME/.config/skill-studio/env" && your-command
 #
 # For a persistent shell, load them into the current shell via eval:
-#   eval "$(bash /path/to/skill-studio/activate.sh --print)"
+#   eval "$(bash /path/to/load-secrets/activate.sh --print)"
 #
 #   (no flag)   try to wire future shells to load the secrets; print a summary.
 #   --print     also emit `export KEY=VALUE` on stdout for eval to consume.
