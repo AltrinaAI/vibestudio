@@ -62,7 +62,7 @@ export default function NavBar({ breadcrumb, children }: { breadcrumb?: ReactNod
   const brand = (
     <span className="flex items-center gap-1.5 text-brand">
       <AltrinaMark className="h-5 w-auto" />
-      <span className="text-[0.95rem] font-semibold lowercase tracking-tight">skill studio</span>
+      <span className="text-[0.95rem] font-semibold tracking-tight">Skill Studio</span>
     </span>
   );
 
