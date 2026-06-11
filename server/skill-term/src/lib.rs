@@ -72,6 +72,9 @@ pub struct AgentOption {
     pub version: Option<String>,
     /// Whether this agent supports `--ide` (attach to a running editor extension).
     pub supports_ide: bool,
+    /// Whether the agent registry has a programmable (headless) trigger for
+    /// this family — the gate for unattended runs like skill mining.
+    pub can_mine: bool,
 }
 
 /// Metadata for one live tmux-backed terminal session.
@@ -302,28 +305,82 @@ fn gc_session_if_stale(id: &str, idle_secs: u64) -> bool {
     true
 }
 
-/// True when every pane's foreground command is a plain shell — i.e. the agent
-/// (and anything the user ran) has exited and only prompts remain.
+/// True when the session's agent has exited and only shell prompts remain.
+/// Used by mining to tell "the headless run ended" apart from "still working"
+/// (the launch line ends in `; exec bash -l`, so the session itself lives on).
+pub fn agent_exited(id: &str) -> bool {
+    all_panes_are_shells(id)
+}
+
+/// True when every pane is a plain shell at rest — i.e. the agent (and
+/// anything the user ran) has exited and only prompts remain.
+///
+/// tmux's `#{pane_current_command}` is not enough on its own: panes are
+/// spawned as `bash -lc "<agent>; exec bash -l"`, and a non-interactive bash
+/// has no job control, so the tty's foreground process group — which is what
+/// tmux reports — stays "bash" for the agent's whole lifetime. A pane only
+/// counts as at-rest when its process is a shell AND that shell has no
+/// non-shell descendants (the agent pipeline, a command the user typed, …).
 fn all_panes_are_shells(id: &str) -> bool {
-    const SHELLS: [&str; 8] = ["bash", "sh", "zsh", "fish", "dash", "ash", "ksh", "tcsh"];
-    let Ok(out) = tmux()
-        .args(["list-panes", "-s", "-t", id, "-F", "#{pane_current_command}"])
-        .output()
-    else {
+    let Ok(out) = tmux().args(["list-panes", "-s", "-t", id, "-F", "#{pane_pid}"]).output() else {
         return false;
     };
     if !out.status.success() {
         return false;
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut any = false;
-    for cmd in text.lines() {
-        any = true;
-        if !SHELLS.contains(&cmd.trim()) {
-            return false;
+    let pane_pids: Vec<u32> = text.split_whitespace().filter_map(|p| p.parse().ok()).collect();
+    if pane_pids.is_empty() {
+        return false;
+    }
+
+    // One snapshot of the process table (Linux and macOS both take -eo with
+    // empty headers). comm is a bare name on Linux and may be a full path on
+    // macOS; is_shell() compares the basename.
+    let Ok(ps) = Command::new("ps").args(["-eo", "pid=,ppid=,comm="]).output() else {
+        return false;
+    };
+    if !ps.status.success() {
+        return false;
+    }
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut comm: HashMap<u32, String> = HashMap::new();
+    for line in String::from_utf8_lossy(&ps.stdout).lines() {
+        let mut f = line.split_whitespace();
+        let (Some(pid), Some(ppid)) = (
+            f.next().and_then(|s| s.parse::<u32>().ok()),
+            f.next().and_then(|s| s.parse::<u32>().ok()),
+        ) else {
+            continue;
+        };
+        children.entry(ppid).or_default().push(pid);
+        comm.insert(pid, f.collect::<Vec<_>>().join(" "));
+    }
+
+    for pane in pane_pids {
+        let Some(name) = comm.get(&pane) else {
+            return false; // pane process vanished mid-probe; try again later
+        };
+        if !is_shell(name) {
+            return false; // the pane itself was exec'd into something else
+        }
+        let mut queue: Vec<u32> = children.get(&pane).cloned().unwrap_or_default();
+        while let Some(pid) = queue.pop() {
+            if !comm.get(&pid).map(|n| is_shell(n)).unwrap_or(true) {
+                return false; // a live non-shell descendant: the agent is working
+            }
+            queue.extend(children.get(&pid).cloned().unwrap_or_default());
         }
     }
-    any
+    true
+}
+
+/// Shell-name check for process `comm` values: basename'd (macOS reports full
+/// paths) and stripped of the login-shell `-` prefix.
+fn is_shell(comm: &str) -> bool {
+    const SHELLS: [&str; 8] = ["bash", "sh", "zsh", "fish", "dash", "ash", "ksh", "tcsh"];
+    let name = comm.trim().rsplit('/').next().unwrap_or("").trim_start_matches('-');
+    SHELLS.contains(&name)
 }
 
 /// Create a detached tmux session running the chosen agent in `cwd`, tagged so
@@ -344,27 +401,6 @@ pub fn create_session(
         .into_iter()
         .find(|a| a.id == agent_id)
         .ok_or_else(|| format!("Unknown agent option: {agent_id}"))?;
-
-    let cwd_resolved = if cwd.trim().is_empty() {
-        dirs::home_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "/".into())
-    } else {
-        skill_core::pathsafe::resolve_root(cwd)
-            .to_string_lossy()
-            .into_owned()
-    };
-
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let owner = std::process::id();
-    // The pid is part of the name because the seq counter is per-process: two
-    // backends creating a terminal in the same second would otherwise both
-    // mint `ass-<secs>-0` and the second create would fail.
-    let name = format!("{PREFIX}{owner}-{secs}-{seq}");
 
     // Build the agent argv (empty for a plain shell).
     let mut argv: Vec<String> = Vec::new();
@@ -394,6 +430,85 @@ pub fn create_session(
         .map(|a| shell_quote(a))
         .collect::<Vec<_>>()
         .join(" ");
+    create_session_inner(&opt, cwd, cols, rows, agent_cmd)
+}
+
+/// Create a session that RESUMES the agent's recorded conversation in `cwd`:
+/// the agent registry's resume line reads `<cwd>/session-id` (with the
+/// agent's own fallback, e.g. codex re-deriving the id from its rollout
+/// files). The programmatic counterpart of `create_session` — exposed on the
+/// terminal API as a `resume` flag with deliberately no dialog UI; skill
+/// mining's "continue the conversation" is the caller today.
+pub fn create_session_resume(
+    agent_id: &str,
+    cwd: &str,
+    cols: u16,
+    rows: u16,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Result<SessionInfo, String> {
+    let opt = detect_agents()
+        .into_iter()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| format!("Unknown agent option: {agent_id}"))?;
+    let resume = skill_core::agents::by_family(&opt.agent)
+        .and_then(|d| d.resume)
+        .ok_or_else(|| format!("{} can't resume a recorded session yet.", opt.label))?;
+    let resolved = skill_core::pathsafe::resolve_root(cwd);
+    let cmd = resume(&skill_core::agents::ResumeCtx {
+        bin: &opt.bin,
+        run_dir: &resolved,
+        model,
+        effort,
+    });
+    create_session_inner(&opt, cwd, cols, rows, cmd)
+}
+
+/// Create a session whose agent command is a caller-built shell LINE — e.g. a
+/// pipeline like `claude -p … | python3 watch.py` (skill mining's headless run
+/// with a live renderer). The caller is responsible for quoting; the secrets
+/// env sourcing and the keep-alive shell wrapper still apply.
+pub fn create_session_cmd(
+    agent_id: &str,
+    cwd: &str,
+    cols: u16,
+    rows: u16,
+    cmd: &str,
+) -> Result<SessionInfo, String> {
+    let opt = detect_agents()
+        .into_iter()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| format!("Unknown agent option: {agent_id}"))?;
+    create_session_inner(&opt, cwd, cols, rows, cmd.to_string())
+}
+
+fn create_session_inner(
+    opt: &AgentOption,
+    cwd: &str,
+    cols: u16,
+    rows: u16,
+    agent_cmd: String,
+) -> Result<SessionInfo, String> {
+    let cwd_resolved = if cwd.trim().is_empty() {
+        dirs::home_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/".into())
+    } else {
+        skill_core::pathsafe::resolve_root(cwd)
+            .to_string_lossy()
+            .into_owned()
+    };
+
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let owner = std::process::id();
+    // The pid is part of the name because the seq counter is per-process: two
+    // backends creating a terminal in the same second would otherwise both
+    // mint `ass-<secs>-0` and the second create would fail.
+    let name = format!("{PREFIX}{owner}-{secs}-{seq}");
 
     // Source the managed-secrets env file (the same one the `load-secrets`
     // activation skill reads) before the agent starts, so skills that need
@@ -469,7 +584,7 @@ pub fn create_session(
     Ok(SessionInfo {
         id: name,
         label,
-        agent: opt.agent,
+        agent: opt.agent.clone(),
         cwd: cwd_resolved,
         created: secs.to_string(),
     })
@@ -888,6 +1003,7 @@ fn compute_agents() -> Vec<AgentOption> {
         bin: which("bash").unwrap_or_else(|| "/bin/bash".to_string()),
         version: None,
         supports_ide: false,
+        can_mine: false,
     });
 
     for spec in agent_specs() {
@@ -901,6 +1017,7 @@ fn compute_agents() -> Vec<AgentOption> {
                 version: bin_version(&bin),
                 bin,
                 supports_ide: spec.supports_ide,
+                can_mine: skill_core::agents::can_trigger(spec.agent),
             });
         }
         for (editor, bin) in ext_finds(&spec) {
@@ -913,6 +1030,7 @@ fn compute_agents() -> Vec<AgentOption> {
                 version: bin_version(&bin),
                 bin,
                 supports_ide: spec.supports_ide,
+                can_mine: skill_core::agents::can_trigger(spec.agent),
             });
         }
     }
@@ -942,6 +1060,17 @@ mod tests {
     #[test]
     fn detect_includes_shell() {
         assert!(detect_agents().iter().any(|o| o.agent == "shell"));
+    }
+
+    #[test]
+    fn resume_requires_a_registry_resume_capability() {
+        // "shell" has no agent-registry entry, so the error comes before any
+        // tmux work — no session may be spawned for an unresumable agent.
+        let err = match create_session_resume("shell", "/tmp", 80, 24, None, None) {
+            Err(e) => e,
+            Ok(s) => panic!("expected an error, spawned {}", s.id),
+        };
+        assert!(err.contains("can't resume"), "got: {err}");
     }
 
     #[test]
@@ -1061,10 +1190,28 @@ mod tests {
         // A non-shell foreground process (stand-in for a running agent).
         let live = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
         let _ = tmux().args(["send-keys", "-t", &live.id, "exec sleep 300", "Enter"]).output();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while std::time::Instant::now() < deadline && all_panes_are_shells(&live.id) {
+        // Wait for the exec to land: the pane PROCESS becomes `sleep`. (Don't
+        // sample all_panes_are_shells for this — the keep-alive login shell's
+        // rc files spawn transient children right after creation, which make
+        // that probe flap during startup.)
+        let sleeping = |id: &str| {
+            let Ok(out) = tmux().args(["list-panes", "-s", "-t", id, "-F", "#{pane_pid}"]).output()
+            else {
+                return false;
+            };
+            let pid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            !pid.is_empty()
+                && Command::new("ps")
+                    .args(["-p", &pid, "-o", "comm="])
+                    .output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().ends_with("sleep"))
+                    .unwrap_or(false)
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline && !sleeping(&live.id) {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        assert!(sleeping(&live.id), "exec sleep should replace the pane shell");
         assert!(!all_panes_are_shells(&live.id), "sleep should be the foreground command");
         assert!(!gc_session_if_stale(&live.id, 0), "a live agent process is never GC'd");
         assert!(session_exists(&live.id));
@@ -1089,5 +1236,33 @@ mod tests {
         assert!(session_exists(&watched.id));
         drop(att);
         let _ = kill_session(&watched.id);
+    }
+
+    // tmux-gated regression: a caller-built line runs under a NON-interactive
+    // `bash -lc` wrapper (no job control), so `#{pane_current_command}` reports
+    // "bash" for the agent's whole lifetime. agent_exited must see through
+    // that to the process tree — a false "exited" here marked live mining
+    // runs as stopped.
+    #[test]
+    fn tmux_agent_exited_sees_through_the_bash_wrapper() {
+        if which("tmux").is_none() {
+            eprintln!("tmux not installed — skipping");
+            return;
+        }
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let s = create_session_cmd("shell", &cwd, 80, 24, "sleep 3").expect("create");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline && agent_exited(&s.id) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!agent_exited(&s.id), "a command under the bash -lc wrapper is not 'exited'");
+        // When it finishes the pane execs into the keep-alive `bash -l` and
+        // counts as at rest again.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline && !agent_exited(&s.id) {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        assert!(agent_exited(&s.id), "after the command ends only the keep-alive shell remains");
+        let _ = kill_session(&s.id);
     }
 }

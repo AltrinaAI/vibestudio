@@ -619,16 +619,31 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 .and_then(|x| x.as_array())
                 .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
                 .unwrap_or_default();
-            json_reply(skill_term::create_session(
-                &s("agent"),
-                &s("cwd"),
-                u16f("cols", 80),
-                u16f("rows", 24),
-                boolf("ide"),
-                boolf("skipPermissions"),
-                boolf("autoMode"),
-                &extra,
-            ))
+            // `resume` (API-only, no dialog control): reopen the agent's
+            // recorded session in cwd instead of starting a fresh one.
+            if boolf("resume") {
+                let model = s("model");
+                let effort = s("effort");
+                json_reply(skill_term::create_session_resume(
+                    &s("agent"),
+                    &s("cwd"),
+                    u16f("cols", 80),
+                    u16f("rows", 24),
+                    Some(model.trim()).filter(|m| !m.is_empty()),
+                    Some(effort.trim()).filter(|e| !e.is_empty()),
+                ))
+            } else {
+                json_reply(skill_term::create_session(
+                    &s("agent"),
+                    &s("cwd"),
+                    u16f("cols", 80),
+                    u16f("rows", 24),
+                    boolf("ide"),
+                    boolf("skipPermissions"),
+                    boolf("autoMode"),
+                    &extra,
+                ))
+            }
         }
         (Method::Post, "/api/terminal/kill") => {
             json_reply(skill_term::kill_session(&s("id")).map(|_| json!({ "ok": true })))
@@ -663,26 +678,58 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 .unwrap_or_default();
             let improve = v.get("improve").and_then(|x| x.as_bool()).unwrap_or(true);
             let agent = s("agent");
+            let model = s("model");
+            let effort = s("effort");
             let bundled = bundled_skill(ctx, "skill-miner");
             json_reply((|| {
-                let prep = mining::prepare_run(days, &sources, improve, bundled.as_deref())?;
-                // Claude's auto mode lets the run proceed without permission
-                // prompts nobody is watching for; other agents take no flag.
-                let auto = agent.starts_with("claude");
-                let sess = skill_term::create_session(
-                    &agent, &prep.run_dir, 200, 50, false, false, auto,
-                    &[prep.prompt.clone()],
-                )?;
-                mining::record_run(prep, &agent, &sess.id)
+                let opt = skill_term::detect_agents()
+                    .into_iter()
+                    .find(|a| a.id == agent)
+                    .ok_or_else(|| format!("Unknown agent option: {agent}"))?;
+                let prep =
+                    mining::prepare_run(&opt.agent, days, &sources, improve, bundled.as_deref())?;
+                // Headless launch via the agent registry's trigger: the
+                // documented zero-interaction path — no trust dialog, no
+                // approval prompts nobody is watching for. The pane still
+                // streams the run live.
+                let cmd = mining::launch_cmd(
+                    &opt.agent,
+                    &opt.bin,
+                    Path::new(&prep.run_dir),
+                    &prep.prompt,
+                    Some(model.trim()).filter(|m| !m.is_empty()),
+                    Some(effort.trim()).filter(|e| !e.is_empty()),
+                )
+                .ok_or_else(|| format!("{} can't run mining unattended.", opt.label))?;
+                let sess = skill_term::create_session_cmd(&agent, &prep.run_dir, 200, 50, &cmd)?;
+                mining::record_run(prep, &agent, model.trim(), effort.trim(), &sess.id)
             })())
         }
-        (Method::Get, "/api/mine/state") => {
-            let alive = |id: &str| {
+        // The run's conversation, revived if its terminal is gone — via the
+        // terminal API's resume path (create_session_resume), the same one
+        // `terminal/create {resume:true}` takes.
+        (Method::Post, "/api/mine/continue") => {
+            let exists = |id: &str| {
                 skill_term::list_sessions()
                     .map(|ss| ss.iter().any(|s| s.id == id))
                     .unwrap_or(false)
             };
-            json_reply(mining::state(alive))
+            let spawn = |agent_id: &str, cwd: &str, model: Option<&str>, effort: Option<&str>| {
+                skill_term::create_session_resume(agent_id, cwd, 200, 50, model, effort)
+                    .map(|s| s.id)
+            };
+            json_reply(
+                mining::continue_run(exists, spawn).map(|id| json!({ "terminalId": id })),
+            )
+        }
+        (Method::Get, "/api/mine/state") => {
+            let exists = |id: &str| {
+                skill_term::list_sessions()
+                    .map(|ss| ss.iter().any(|s| s.id == id))
+                    .unwrap_or(false)
+            };
+            let running = |id: &str| !skill_term::agent_exited(id);
+            json_reply(mining::state(exists, running))
         }
         (Method::Post, "/api/mine/stop") => {
             json_reply(mining::stop(skill_term::kill_session).map(|_| json!({ "ok": true })))

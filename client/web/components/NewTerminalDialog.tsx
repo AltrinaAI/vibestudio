@@ -54,9 +54,13 @@ function tokenizeArgs(input: string): string[] {
 export default function NewTerminalDialog({
   onClose,
   onCreated,
+  defaultCwd,
 }: {
   onClose: () => void;
   onCreated: (s: api.TermSession) => void;
+  /** Initial working directory (e.g. the open skill's folder when the dialog
+   *  is reached from the studio's Agent panel); overrides remembered prefs. */
+  defaultCwd?: string;
 }) {
   const [agents, setAgents] = useState<AgentOption[] | null>(null);
   const [agentId, setAgentId] = useState("");
@@ -85,14 +89,14 @@ export default function NewTerminalDialog({
     if (!agentId) return;
     const p = loadTerminalPrefs(agentId);
     const wantAuto = p?.auto ?? false;
-    setCwd(p?.cwd ?? "");
+    setCwd(defaultCwd ?? p?.cwd ?? "");
     setIde(p?.ide ?? false);
     setAuto(wantAuto);
     // auto and skip are mutually exclusive; auto wins, matching the checkbox
     // handlers and the create() gating, in case stored prefs ever have both.
     setSkip((p?.skip ?? false) && !wantAuto);
     setExtra(p?.extra ?? "");
-  }, [agentId]);
+  }, [agentId, defaultCwd]);
 
   const selected = useMemo(() => agents?.find((a) => a.id === agentId), [agents, agentId]);
 

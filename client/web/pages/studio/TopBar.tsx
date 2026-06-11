@@ -28,7 +28,9 @@ export default function TopBar({
   reviewMode,
   showReview,
   previewing,
+  terminalsOpen,
   onToggleReview,
+  onTerminals,
   onManage,
   onExport,
 }: {
@@ -40,12 +42,19 @@ export default function TopBar({
   showReview: boolean;
   /** Viewing a past version: review shows what THAT version changed, not working-tree edits. */
   previewing: boolean;
+  /** The embedded terminals side panel is open — the nav's Terminals link
+   *  toggles it here instead of leaving the skill (one entry point per
+   *  context; the full page is reachable from the panel's expand button). */
+  terminalsOpen: boolean;
   onToggleReview: () => void;
+  onTerminals: () => void;
   onManage: () => void;
   onExport: () => void;
 }) {
   return (
     <NavBar
+      onTerminals={onTerminals}
+      terminalsOpen={terminalsOpen}
       breadcrumb={
         <>
           <span className="text-faint" aria-hidden>

@@ -115,6 +115,31 @@ dev server, or a test instance on another port): they share the tmux namespace
 safely, and the on-device inference engine reaper only kills *orphaned*
 engines (reparented to init) — never a sibling backend's live child.
 
+## The agent interface (`skill-core/src/agents.rs`)
+
+Skill Studio is agent-agnostic: nothing outside the **agent registry** may
+match on a family name. Every supported agent CLI is one `AgentDef` entry
+declaring the shared properties an integration needs:
+
+- **skills_dirs / reads_shared** — where the agent discovers skills (its own
+  folders + the shared `~/.agents/skills` standard),
+- **trigger** — how to run it *programmatically*: a zero-interaction headless
+  command line (no trust dialog, no approval prompts) that narrates progress
+  to the pane and records its session id to `<run_dir>/session-id`
+  (`prepare` drops helper files it needs, e.g. claude's stream-json renderer),
+- **resume** — how to reopen that recorded session as the interactive TUI
+  (this is what makes a finished run's conversation continuable even after
+  its terminal is gone).
+
+Features consume capabilities, not names: mining composes
+`trigger; [ -f results.json ] && { resume; }`, terminal options carry a
+`canMine` flag (`agents::can_trigger`), and the UI degrades when a capability
+is `None` — a discovery-only agent (Cursor, Gemini CLI today) simply isn't
+offered for unattended runs. **Supporting a new agent = filling in one entry**;
+if its capability can't be expressed (no documented headless mode), leave it
+`None` rather than wiring an interactive command that can block on a prompt
+nobody will see.
+
 ## The connection manager (VS Code "Remote - SSH")
 
 Implemented as a **local proxy switchboard** — the realization of "local is just remote

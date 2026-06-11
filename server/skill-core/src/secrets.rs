@@ -149,7 +149,7 @@ fn save_store(map: &BTreeMap<String, String>) -> Result<(), String> {
 }
 
 /// Single-quote a value for a POSIX shell, escaping embedded single quotes.
-fn sh_quote(s: &str) -> String {
+pub(crate) fn sh_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for c in s.chars() {

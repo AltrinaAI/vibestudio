@@ -9,6 +9,18 @@ import { refreshMining } from "@/lib/mining";
 
 const WINDOWS = [7, 14, 35, 90];
 
+// Per agent family: effort levels the CLI accepts (claude --effort / codex
+// model_reasoning_effort) and model suggestions (free text — full model names
+// work too). Empty selection = the user's own CLI defaults.
+const EFFORTS: Record<string, string[]> = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh"],
+};
+const MODEL_SUGGESTIONS: Record<string, string[]> = {
+  claude: ["fable", "opus", "sonnet", "haiku"],
+  codex: ["gpt-5.5"],
+};
+
 /**
  * Source sheet for a mining run: which transcript stores to read, how far back,
  * and which agent runs the mine. Doubles as the consent surface — the caption
@@ -21,9 +33,19 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
   const [enabled, setEnabled] = useState<Set<string>>(new Set());
   const [agents, setAgents] = useState<AgentOption[] | null>(null);
   const [agent, setAgent] = useState("");
+  const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
   const [improve, setImprove] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // The agent FAMILY drives which models/efforts make sense; a codex model
+  // string is meaningless to claude, so switching family resets both.
+  const family = agents?.find((a) => a.id === agent)?.agent ?? "";
+  useEffect(() => {
+    setModel("");
+    setEffort("");
+  }, [family]);
 
   // Re-count whenever the window changes; default every non-empty source on.
   useEffect(() => {
@@ -42,14 +64,15 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
     };
   }, [days]);
 
-  // The mine runs inside an agent session — a plain shell can't do the judging.
+  // The mine needs an agent the server's registry can run unattended
+  // (headless trigger + resumable session) — capability, not family names.
   useEffect(() => {
     api
       .terminalAgents()
       .then((all) => {
-        const usable = all.filter((a) => a.agent !== "shell");
+        const usable = all.filter((a) => a.canMine);
         setAgents(usable);
-        setAgent((cur) => cur || usable.find((a) => a.agent === "claude")?.id || usable[0]?.id || "");
+        setAgent((cur) => cur || usable[0]?.id || "");
       })
       .catch(() => setAgents([]));
   }, []);
@@ -65,7 +88,7 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
     setBusy(true);
     setErr(null);
     try {
-      await api.mineStart({ days, sources: [...enabled], agent, improve });
+      await api.mineStart({ days, sources: [...enabled], agent, improve, model: model.trim(), effort });
       await refreshMining();
       onStarted();
     } catch (e) {
@@ -115,7 +138,7 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
                       checked={enabled.has(s.id)}
                       onChange={() => toggle(s.id)}
                       disabled={s.sessions === 0}
-                      className="accent-[var(--accent)]"
+                      className="accent-accent"
                     />
                     <span className={s.sessions === 0 ? "text-faint" : ""}>{s.label}</span>
                     <span className="ml-auto text-xs text-faint">
@@ -167,12 +190,48 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
           </div>
         </div>
 
+        {family && (
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-muted">Model</label>
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="Default"
+                spellCheck={false}
+                list="mine-model-suggestions"
+                className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-sm text-fg outline-none placeholder:font-sans focus:border-accent"
+              />
+              <datalist id="mine-model-suggestions">
+                {(MODEL_SUGGESTIONS[family] ?? []).map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </div>
+            <div className="flex-1">
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-muted">Effort</label>
+              <select
+                value={effort}
+                onChange={(e) => setEffort(e.target.value)}
+                className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-fg outline-none focus:border-accent"
+              >
+                <option value="">Default</option>
+                {(EFFORTS[family] ?? []).map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
         <label className="flex cursor-pointer items-start gap-2 text-sm text-fg">
           <input
             type="checkbox"
             checked={improve}
             onChange={(e) => setImprove(e.target.checked)}
-            className="mt-0.5 accent-[var(--accent)]"
+            className="mt-0.5 accent-accent"
           />
           <span>
             Also improve existing skills

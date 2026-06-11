@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Spinner } from "@/components/ui";
+import { StackSection, StackSash } from "@/components/SplitStack";
 import { skillKind, isEditableBundledSkill, KIND_TAG } from "@/lib/agents";
+import { loadStudioLayout, saveStudioLayout } from "@/lib/studioLayout";
 import { useEditorStatus } from "@/lib/editorState";
 import { useConfirm } from "@/components/useConfirm";
 import { useStudio } from "./StudioContext";
@@ -26,6 +28,16 @@ const KIND_BADGE: Record<string, { letter: string; cls: string }> = {
 
 function Notice({ children }: { children: React.ReactNode }) {
   return <p className="px-3 py-4 text-xs leading-relaxed text-muted">{children}</p>;
+}
+
+/** Guard/notice content in place of the git sections, as a stack section so
+ *  the sidebar solver accounts for its height (Files absorbs the rest). */
+function StatusSection({ children }: { children: React.ReactNode }) {
+  return (
+    <StackSection id="vc-status" order={1} open minBody={0}>
+      {children}
+    </StackSection>
+  );
 }
 
 /** VS Code-style collapsible section header: a chevron + title that toggles the
@@ -74,46 +86,11 @@ function PanelHeader({
   );
 }
 
-/** Thin draggable divider between sections (same pattern as the Sidebar's
- *  Files/Versions divider). When there's nothing resizable next to it, it
- *  renders as a plain separator line. */
-function RowResizeHandle({ onDragTo, active }: { onDragTo: (clientY: number) => void; active: boolean }) {
-  const stopRef = useRef<(() => void) | null>(null);
-  useEffect(() => () => stopRef.current?.(), []); // tear down listeners if unmounted mid-drag
-  const start = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const move = (ev: PointerEvent) => onDragTo(ev.clientY);
-    const stop = () => {
-      stopRef.current = null;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-    };
-    stopRef.current = stop;
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop);
-  };
-  if (!active) return <div className="h-px shrink-0 bg-border" />;
-  return (
-    <div
-      role="separator"
-      aria-orientation="horizontal"
-      onPointerDown={start}
-      title="Drag to resize"
-      className="group relative h-px shrink-0 cursor-row-resize bg-border"
-    >
-      <div className="absolute inset-x-0 -top-1 -bottom-1 z-10" />
-      <div className="absolute inset-x-0 top-0 h-px bg-transparent group-hover:bg-accent" />
-    </div>
-  );
-}
-
 /** VS Code-style Source Control panel: working-tree changes + commit history,
  *  living in the left sidebar. Clicking a changed file opens it with the inline
- *  diff overlay; clicking a commit opens its read-only diff in the main pane. */
+ *  diff overlay; clicking a commit opens its read-only diff in the main pane.
+ *  Renders its sections as direct flex children of the sidebar column (fragment
+ *  root), so expanding one pushes the others instead of expanding in place. */
 export default function SourceControl({ root, dirName }: { root: string; dirName: string }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -144,24 +121,20 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
 
   // VS Code-style accordion: each section collapses independently, but its header
   // stays visible — so the Remote panel is always reachable even under a long log.
-  const [open, setOpen] = useState({ changes: true, versions: true, github: true });
-  const toggle = (k: "changes" | "versions" | "github") => setOpen((o) => ({ ...o, [k]: !o[k] }));
+  // The collapse states persist across skills (studioLayout); Remote starts closed.
+  const [open, setOpen] = useState(() => loadStudioLayout().open);
+  const toggle = (k: "changes" | "versions" | "github") =>
+    setOpen((o) => {
+      const next = { ...o, [k]: !o[k] };
+      saveStudioLayout({ open: next });
+      return next;
+    });
 
-  // Per-section resize: the dividers between sections drag like the Sidebar's
-  // Files/Versions one (VS Code sashes). Until dragged (null), New Changes and
-  // GitHub are content-sized up to a default cap — no blank space; after a drag
-  // they hold the exact height the user set. Versions flexes into what's left.
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [changesH, setChangesH] = useState<number | null>(null);
-  const [githubH, setGithubH] = useState<number | null>(null);
-  const dragChanges = useCallback((clientY: number) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect) setChangesH(Math.max(80, Math.min(rect.height - 180, clientY - rect.top)));
-  }, []);
-  const dragGithub = useCallback((clientY: number) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect) setGithubH(Math.max(100, Math.min(rect.height - 180, rect.bottom - clientY)));
-  }, []);
+  // Pinned heights for New Changes and Remote (set by dragging their sashes;
+  // null = size to content). The sash drag itself is the SplitStack's business;
+  // these just remember the result.
+  const [changesH, setChangesH] = useState<number | null>(() => loadStudioLayout().changesH);
+  const [remoteH, setRemoteH] = useState<number | null>(() => loadStudioLayout().remoteH);
 
   // "Save a version" (the deliberate checkpoint, a git commit) — moved here from
   // the top bar since it's a version action, not a file-level save.
@@ -347,67 +320,110 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
   // ---- guard states -------------------------------------------------------
   if (!loaded) {
     return (
-      <p className="flex items-center gap-2 px-3 py-4 text-xs text-muted">
-        <Spinner className="h-3.5 w-3.5" /> Checking…
-      </p>
+      <StatusSection>
+        <p className="flex items-center gap-2 px-3 py-4 text-xs text-muted">
+          <Spinner className="h-3.5 w-3.5" /> Checking…
+        </p>
+      </StatusSection>
     );
   }
-  if (err || !info) return <Notice>{err ?? "Couldn’t load version control."}</Notice>;
-  if (!info.available) return <Notice>Git isn’t installed — install git to enable version history.</Notice>;
+  if (err || !info)
+    return (
+      <StatusSection>
+        <Notice>{err ?? "Couldn’t load version control."}</Notice>
+      </StatusSection>
+    );
+  if (!info.available)
+    return (
+      <StatusSection>
+        <Notice>Git isn’t installed — install git to enable version history.</Notice>
+      </StatusSection>
+    );
   if (!versionable)
     return (
-      <Notice>
-        Version history is for your own skills. This is a {KIND_TAG[kind].label.toLowerCase()} skill — use{" "}
-        <span className="font-medium text-fg">Manage → Sync</span> to make an editable copy you can version.
-      </Notice>
+      <StatusSection>
+        <Notice>
+          Version history is for your own skills. This is a {KIND_TAG[kind].label.toLowerCase()} skill — use{" "}
+          <span className="font-medium text-fg">Manage → Sync</span> to make an editable copy you can version.
+        </Notice>
+      </StatusSection>
     );
   if (!info.isRepo && !info.inParentRepo)
     return (
-      <div className="px-3 py-4">
-        <p className="mb-3 text-xs text-muted">Not version-tracked yet. Start a history for this skill.</p>
-        <button
-          type="button"
-          onClick={startTracking}
-          disabled={busy}
-          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-40"
-        >
-          {busy ? "Starting…" : "Start tracking"}
-        </button>
-        {actionErr && <p className="mt-2 text-xs text-danger">{actionErr}</p>}
-      </div>
+      <StatusSection>
+        <div className="px-3 py-4">
+          <p className="mb-3 text-xs text-muted">Not version-tracked yet. Start a history for this skill.</p>
+          <button
+            type="button"
+            onClick={startTracking}
+            disabled={busy}
+            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-40"
+          >
+            {busy ? "Starting…" : "Start tracking"}
+          </button>
+          {actionErr && <p className="mt-2 text-xs text-danger">{actionErr}</p>}
+        </div>
+      </StatusSection>
     );
 
   return (
-    <div ref={containerRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {actionErr && <p className="px-3 pt-2 text-[0.7rem] text-danger">{actionErr}</p>}
-
+    <>
       {/* New Changes — working-tree changes, scoped to this folder for your own repo
           AND for a skill nested in a parent repo. Header stays visible even when
-          the tree is clean. Content-sized up to its adjustable cap. */}
-      <section
-        className="flex min-h-0 flex-col overflow-hidden"
-        style={
-          open.changes && changes.length > 0 && info.isRepo && (open.versions || open.github)
-            ? changesH != null
-              ? { height: changesH }
-              : { maxHeight: 240 }
-            : undefined
+          the tree is clean. Content-sized (fully visible) until pinned by a drag. */}
+      <StackSection
+        id="changes"
+        order={1}
+        open={open.changes}
+        minBody={28}
+        pin={changes.length > 0 ? changesH : null}
+        header={
+          <>
+            {actionErr && <p className="px-3 pt-2 text-[0.7rem] text-danger">{actionErr}</p>}
+            <PanelHeader title="New Changes" count={changes.length} open={open.changes} onToggle={() => toggle("changes")}>
+              {changes.length > 0 && (
+                <button type="button" onClick={discardAll} disabled={busy} title="Discard all changes" className="ml-auto text-faint hover:text-danger disabled:opacity-40">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  </svg>
+                </button>
+              )}
+            </PanelHeader>
+          </>
+        }
+        footer={
+          /* Save a version — the deliberate checkpoint that commits these changes.
+             Your own repo only (a skill nested in a parent repo is versioned there).
+             Stays put below the scrolling list; ⌘S opens the same dialog even
+             while this section is collapsed. */
+          info.isRepo && changes.length > 0 ? (
+            <div className="px-3 pb-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setSaveOpen(true)}
+                disabled={busy}
+                title={
+                  !info.hasIdentity
+                    ? "Set a git identity first"
+                    : preview
+                      ? "Save these edits as a new version (⌘S)"
+                      : "Save a version (⌘S)"
+                }
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-accent/50 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent-soft disabled:opacity-40"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                {preview ? "Save as new version" : "Save version"}
+              </button>
+            </div>
+          ) : undefined
         }
       >
-        <PanelHeader title="New Changes" count={changes.length} open={open.changes} onToggle={() => toggle("changes")}>
-          {changes.length > 0 && (
-            <button type="button" onClick={discardAll} disabled={busy} title="Discard all changes" className="ml-auto text-faint hover:text-danger disabled:opacity-40">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-              </svg>
-            </button>
-          )}
-        </PanelHeader>
-        {open.changes &&
-          (changes.length === 0 ? (
-            <p className="px-3 pb-2 text-xs text-faint">No changes since your last version.</p>
-          ) : (
-            <ul className="min-h-0 flex-1 overflow-auto">
+        {changes.length === 0 ? (
+          <p className="px-3 pb-2 text-xs text-faint">No changes since your last version.</p>
+        ) : (
+          <ul>
               {changes.map((f) => {
                 const badge = KIND_BADGE[f.kind] ?? { letter: "?", cls: "text-muted" };
                 const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "";
@@ -439,52 +455,36 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
                   </li>
                 );
               })}
-            </ul>
-          ))}
-
-        {/* Save a version — the deliberate checkpoint that commits these changes.
-            Your own repo only (a skill nested in a parent repo is versioned there).
-            ⌘S opens the same dialog even while this section is collapsed. */}
-        {open.changes && info.isRepo && changes.length > 0 && (
-          <div className="shrink-0 px-3 pb-3 pt-2">
-            <button
-              type="button"
-              onClick={() => setSaveOpen(true)}
-              disabled={busy}
-              title={
-                !info.hasIdentity
-                  ? "Set a git identity first"
-                  : preview
-                    ? "Save these edits as a new version (⌘S)"
-                    : "Save a version (⌘S)"
-              }
-              className="flex w-full items-center justify-center gap-1.5 rounded-md border border-accent/50 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent-soft disabled:opacity-40"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              {preview ? "Save as new version" : "Save version"}
-            </button>
-          </div>
+          </ul>
         )}
-      </section>
+      </StackSection>
 
       {/* Versions (commit history) + GitHub (its remote) — your own repo only. A
           skill nested in a parent repo is versioned there, so we point to it. */}
       {info.isRepo ? (
         <>
-          <RowResizeHandle
-            onDragTo={dragChanges}
-            active={open.changes && changes.length > 0 && (open.versions || open.github)}
+          <StackSash
+            after="changes"
+            resize="changes"
+            onPin={(px) => {
+              setChangesH(px);
+              saveStudioLayout({ changesH: px });
+            }}
           />
-          <section className={`flex flex-col ${open.versions ? "min-h-0 flex-1" : "flex-none"}`}>
-            <PanelHeader title="Versions" count={log.length} open={open.versions} onToggle={() => toggle("versions")} />
-            {open.versions && (
-              <div className="min-h-0 flex-1 overflow-auto">
-                {log.length === 0 ? (
-                  <p className="px-3 pb-3 text-xs text-faint">No versions yet.</p>
-                ) : (
-                  <ul className="pb-3">
+          {/* Versions — the flexible list: it soaks up the leftover space and is
+              the first to give way when a content-sized neighbor opens. */}
+          <StackSection
+            id="versions"
+            order={2}
+            open={open.versions}
+            fill
+            minBody={64}
+            header={<PanelHeader title="Versions" count={log.length} open={open.versions} onToggle={() => toggle("versions")} />}
+          >
+            {log.length === 0 ? (
+              <p className="px-3 pb-3 text-xs text-faint">No versions yet.</p>
+            ) : (
+              <ul className="pb-3">
                     {log.map((c) => {
                       const active = c.sha === selectedSha;
                       return (
@@ -517,42 +517,43 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
                         </li>
                       );
                     })}
-                  </ul>
-                )}
-              </div>
+              </ul>
             )}
-          </section>
+          </StackSection>
 
           {/* Remote — the remote half of version history (publish / sync / disconnect),
               named platform-neutrally since GitHub is just one of several git hosts
-              it connects to. Content-sized up to its adjustable cap while Versions is
-              open; free to use the remaining space when Versions is collapsed. */}
-          <RowResizeHandle onDragTo={dragGithub} active={open.github && open.versions} />
-          <section
-            className="flex min-h-0 flex-col overflow-hidden"
-            style={
-              open.github && open.versions
-                ? githubH != null
-                  ? { height: githubH }
-                  : { maxHeight: 360 }
-                : undefined
-            }
+              it connects to. Collapsed by default; opening it sizes to exactly its
+              content (pushing the lists above up) until pinned by a drag. */}
+          <StackSash
+            after="versions"
+            resize="remote"
+            onPin={(px) => {
+              setRemoteH(px);
+              saveStudioLayout({ remoteH: px });
+            }}
+          />
+          <StackSection
+            id="remote"
+            order={3}
+            open={open.github}
+            minBody={48}
+            pin={remoteH}
+            bodyClassName="px-3 pb-3 pt-1"
+            header={<PanelHeader title="Remote" open={open.github} onToggle={() => toggle("github")} />}
           >
-            <PanelHeader title="Remote" open={open.github} onToggle={() => toggle("github")} />
-            {open.github && (
-              <div className="min-h-0 flex-1 overflow-auto px-3 pb-3 pt-1">
-                <GitHubSection root={root} dirName={dirName} />
-              </div>
-            )}
-          </section>
+            <GitHubSection root={root} dirName={dirName} />
+          </StackSection>
         </>
       ) : (
-        <Notice>
-          {changes.length === 0 ? "No changes since the parent repository’s last commit. " : null}
-          Tracked by a parent repository
-          {info.toplevel ? <> (<span className="font-mono text-faint">{info.toplevel}</span>)</> : null}. Save
-          versions there.
-        </Notice>
+        <StackSection id="vc-note" order={2} open minBody={0}>
+          <Notice>
+            {changes.length === 0 ? "No changes since the parent repository’s last commit. " : null}
+            Tracked by a parent repository
+            {info.toplevel ? <> (<span className="font-mono text-faint">{info.toplevel}</span>)</> : null}. Save
+            versions there.
+          </Notice>
+        </StackSection>
       )}
 
       {saveOpen && (
@@ -570,6 +571,6 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
           }}
         />
       )}
-    </div>
+    </>
   );
 }

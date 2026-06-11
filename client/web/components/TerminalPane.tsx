@@ -150,13 +150,30 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     });
     themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
-    const handle = api.attachTerminal(id, {
-      cols: term.cols,
-      rows: term.rows,
-      onData: (bytes) => term.write(bytes),
-      onClose: () => term.write("\r\n\x1b[2m[disconnected — the session may have ended]\x1b[0m\r\n"),
-    });
-    const dataSub = term.onData((d) => handle.write(d));
+    // Attach only once the host has a real layout size. A mid-mount measure of
+    // a few px (the studio side panel while its width style lands, a dialog
+    // mid-open) would create the pty — and, with tmux's `window-size latest`,
+    // clamp the whole window — at postage-stamp size; if the correcting resize
+    // is ever lost, every other viewer of the session sees a dotted stamp.
+    let handle: api.TerminalHandle | null = null;
+    let dataSub: { dispose: () => void } | null = null;
+    const hostIsReal = () => host.clientWidth >= 120 && host.clientHeight >= 80;
+    const attach = () => {
+      if (handle) return;
+      try {
+        fit.fit();
+      } catch {
+        /* not laid out yet */
+      }
+      handle = api.attachTerminal(id, {
+        cols: term.cols,
+        rows: term.rows,
+        onData: (bytes) => term.write(bytes),
+        onClose: () => term.write("\r\n\x1b[2m[disconnected — the session may have ended]\x1b[0m\r\n"),
+      });
+      dataSub = term.onData((d) => handle!.write(d));
+    };
+    if (hostIsReal()) attach();
 
     // Images can't ride the text paste path: ship the bytes to the backend
     // (where the agent runs — possibly a remote host with no access to this
@@ -203,6 +220,11 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     const ro = new ResizeObserver(() => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
+        if (!handle) {
+          // Deferred attach: start once the host first reaches a real size.
+          if (hostIsReal()) attach();
+          return;
+        }
         try {
           fit.fit();
           handle.resize(term.cols, term.rows);
@@ -215,6 +237,10 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     term.focus();
 
     refitRef.current = () => {
+      if (!handle) {
+        if (hostIsReal()) attach();
+        return;
+      }
       try {
         fit.fit();
         handle.resize(term.cols, term.rows);
@@ -229,8 +255,8 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       cancelAnimationFrame(raf);
       themeObs.disconnect();
       ro.disconnect();
-      dataSub.dispose();
-      handle.detach();
+      dataSub?.dispose();
+      handle?.detach();
       term.dispose();
       refitRef.current = () => {};
     };

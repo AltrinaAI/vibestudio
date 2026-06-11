@@ -4,7 +4,7 @@ import { Spinner } from "@/components/ui";
 // Lazy so the @xterm bundle only loads on the first Terminals visit; sticky so the
 // live ptys survive navigation thereafter. Mounted once, then hidden via CSS — a
 // route swap or unmount would detach/dispose every pty (see TerminalPane cleanup).
-const TerminalsWorkspace = lazy(() => import("./TerminalsWorkspace"));
+const TerminalsWorkspace = lazy(() => import("@/components/TerminalsWorkspace"));
 
 export default function TerminalsHost({ active }: { active: boolean }) {
   const [everVisited, setEverVisited] = useState(active);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { ReviewToggleContext } from "@/components/reviewContext";
 import { skillKind } from "@/lib/agents";
@@ -10,6 +10,8 @@ import TopBar from "./TopBar";
 import Sidebar from "./Sidebar";
 import PreviewBanner from "./PreviewBanner";
 import MinedBanner from "./MinedBanner";
+import AgentPanel from "./AgentPanel";
+import { useMining } from "@/lib/mining";
 import DiffOverlays from "./DiffOverlays";
 import ManagePanel from "./ManagePanel";
 import ExportDialog from "./ExportDialog";
@@ -78,6 +80,23 @@ export default function StudioLayout() {
   const [manageOpen, setManageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
+
+  // The side-panel agent conversation. Skills that came out of the last mining
+  // run open with the panel already showing — the conversation that proposed
+  // them is the natural companion for reviewing. Manual close is respected for
+  // the rest of the visit (the ref gates the auto-open to once per mount).
+  const [agentOpen, setAgentOpen] = useState(false);
+  const mining = useMining();
+  const autoOpenedAgent = useRef(false);
+  useEffect(() => {
+    if (autoOpenedAgent.current || !mining?.terminalId) return;
+    const fromMining =
+      data.root.includes("/generated-skills/") || (mining.improved ?? []).includes(data.root);
+    if (fromMining) {
+      autoOpenedAgent.current = true;
+      setAgentOpen(true);
+    }
+  }, [mining, data.root]);
 
   const onSelect = (rel: string) => {
     if (rel === selected) return; // no-op re-select; avoid a spurious discard prompt
@@ -151,7 +170,9 @@ export default function StudioLayout() {
         reviewMode={reviewMode}
         showReview={showReview}
         previewing={preview != null}
+        terminalsOpen={agentOpen}
         onToggleReview={toggleReview}
+        onTerminals={() => setAgentOpen((o) => !o)}
         onManage={() => setManageOpen(true)}
         onExport={onExport}
       />
@@ -172,6 +193,7 @@ export default function StudioLayout() {
           </main>
           <DiffOverlays scrollEl={scrollEl} />
         </div>
+        {agentOpen && <AgentPanel onClose={() => setAgentOpen(false)} />}
       </div>
       {manageOpen && (
         <ManagePanel

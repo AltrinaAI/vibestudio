@@ -652,6 +652,9 @@ export interface AgentOption {
   version: string | null;
   /** Whether this agent supports `--ide` (attach to a running editor extension). */
   supportsIde: boolean;
+  /** Whether the server's agent registry can run this family unattended
+   *  (headless trigger + resumable session) — the gate for mining runs. */
+  canMine: boolean;
 }
 
 /** One live tmux-backed terminal session. */
@@ -675,6 +678,10 @@ export interface CreateTermArgs {
    *  exclusive with skipPermissions. */
   autoMode: boolean;
   extraArgs: string[];
+  /** API-only (no dialog control): reopen the agent's recorded session in
+   *  `cwd` — the server's agent registry builds the resume line — instead of
+   *  starting fresh. The other launch flags are ignored. */
+  resume?: boolean;
 }
 
 // --- skill mining (a skill-miner run in an agent terminal) ---
@@ -709,7 +716,6 @@ export interface MineState {
   found?: number;
   startedUnix?: number;
   terminalId?: string;
-  reportPath?: string;
   results?: MineResults;
   /** Existing skills the run dirtied — clears once committed or discarded. */
   improved: string[];
@@ -722,12 +728,19 @@ export interface MineStartArgs {
   agent: string;
   /** Allow in-place edits to existing skills (reviewed before saving). */
   improve: boolean;
+  /** Model for the run ("" = the agent CLI's default). */
+  model?: string;
+  /** Effort / reasoning level for the run ("" = the agent CLI's default). */
+  effort?: string;
 }
 
 export const mineSources = (days: number) => http<MineSource[]>("GET", `mine/sources?days=${days}`);
 export const mineStart = (a: MineStartArgs) => http<MineState>("POST", "mine/start", { ...a });
 export const mineState = () => http<MineState>("GET", "mine/state");
 export const mineStop = () => http<{ ok: boolean }>("POST", "mine/stop").then(() => {});
+/** The run's conversation: returns its live terminal, or revives the recorded
+ *  agent session in a fresh one (works after the original pane was closed). */
+export const mineContinue = () => http<{ terminalId: string }>("POST", "mine/continue");
 
 export const terminalAgents = () => http<AgentOption[]>("GET", "terminal/agents");
 export const terminalList = () => http<TermSession[]>("GET", "terminal/list");

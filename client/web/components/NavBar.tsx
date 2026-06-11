@@ -54,7 +54,20 @@ function NavLink({ icon, label, active, onClick }: { icon: ReactNode; label: str
  * page with the current page marked active. Self-routes via the router, so callers
  * pass only their breadcrumb and contextual actions.
  */
-export default function NavBar({ breadcrumb, children }: { breadcrumb?: ReactNode; children?: ReactNode }) {
+export default function NavBar({
+  breadcrumb,
+  children,
+  onTerminals,
+  terminalsOpen,
+}: {
+  breadcrumb?: ReactNode;
+  children?: ReactNode;
+  /** Pages with their own embedded terminals surface (the studio's side panel)
+   *  override the Terminals link to toggle it instead of navigating; the full
+   *  page stays reachable from inside that surface (its expand button). */
+  onTerminals?: () => void;
+  terminalsOpen?: boolean;
+}) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const atHome = pathname === "/";
@@ -85,7 +98,12 @@ export default function NavBar({ breadcrumb, children }: { breadcrumb?: ReactNod
         {children}
         {children && <span className="mx-1 h-5 w-px bg-border" aria-hidden />}
         <RemoteMenu />
-        <NavLink icon={<TerminalIcon />} label="Terminals" active={pathname === "/terminals"} onClick={() => navigate("/terminals")} />
+        <NavLink
+          icon={<TerminalIcon />}
+          label="Terminals"
+          active={onTerminals ? !!terminalsOpen : pathname === "/terminals"}
+          onClick={onTerminals ?? (() => navigate("/terminals"))}
+        />
         <NavLink icon={<KeyIcon />} label="Secrets" active={pathname === "/secrets"} onClick={() => navigate(secretsPath())} />
         <ThemeToggle onClick={toggleTheme} />
       </div>

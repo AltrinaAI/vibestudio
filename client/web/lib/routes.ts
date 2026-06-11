@@ -10,8 +10,11 @@
 /** The dedicated secret-manager page (machine-local store + future providers). */
 export const secretsPath = () => "/secrets";
 
-/** The terminals workspace (always-mounted host; the URL just reveals it). */
-export const terminalsPath = () => "/terminals";
+/** The terminals workspace (always-mounted host; the URL just reveals it).
+ *  Pass a session id to land with that terminal selected (e.g. jumping into
+ *  the mining run's conversation); the workspace consumes the param. */
+export const terminalsPath = (id?: string) =>
+  id ? `/terminals?id=${encodeURIComponent(id)}` : "/terminals";
 
 export const studioPath = (root: string) => `/studio/${encodeURIComponent(root)}`;
 
