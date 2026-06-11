@@ -83,9 +83,6 @@ pub struct MineState {
     pub started_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_id: Option<String>,
-    /// The agent-written results.json, verbatim (proposals with evidence).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub results: Option<serde_json::Value>,
     /// Existing skills the run dirtied (clean at start, dirty now). Self-
     /// clearing: once the user saves a version or discards, the root drops out.
     pub improved: Vec<String>,
@@ -316,22 +313,20 @@ fn compose_prompt(
     } else {
         lines.push("- Do not edit any existing skill in place; only stage brand-new skills.".into());
     }
-    lines.push("- Never copy secrets, tokens, or personal data into anything you write; paraphrase evidence.".into());
     lines.push(String::new());
     // No report file: the skill's own report step is the final message (visible
     // in the terminal, and the conversation stays resumable for follow-ups).
-    lines.push(format!(
-        "When finished, write {rd}/results.json — last, as the completion signal — exactly: \
-         {{\"proposals\": [{{\"name\": \"<skill name>\", \"root\": \"<absolute staged path>\", \"sessions\": <count>, \"projects\": <count>}}], \
-         \"improved\": [\"<absolute path of each skill edited in place>\"], \"deferred\": [\"<short description>\"]}}"
-    ));
+    // No structured results either — staged proposals surface via the skills
+    // scan and in-place edits via git dirty tracking, so the run's only output
+    // contract is the completion sentinel.
+    lines.push(format!("When finished, create an empty file at {rd}/done — last, as the completion signal."));
     lines.join("\n")
 }
 
 /// The full shell line for a mining run: the agent's headless TRIGGER (from
 /// the agent registry — zero-interaction, narrated live in the pane, session
-/// id recorded), chained — only after a SUCCESSFUL run (results.json written)
-/// — into the agent's RESUME line, so opening the terminal afterwards lands
+/// id recorded), chained — only after a SUCCESSFUL run (the done sentinel
+/// written) — into the agent's RESUME line, so opening the terminal afterwards lands
 /// in the very conversation that did the mining: ask it why it proposed
 /// something, or steer a refinement. (Interactive mode may show the agent's
 /// own one-time per-directory trust prompt there; nothing is blocked — the
@@ -352,8 +347,8 @@ pub fn launch_cmd(
     let trigger = (def.trigger?)(&TriggerCtx { bin, run_dir, prompt, model, effort });
     let Some(resume) = def.resume else { return Some(trigger) };
     let resume = resume(&ResumeCtx { bin, run_dir, model, effort });
-    let results = secrets::sh_quote(&run_dir.join("results.json").to_string_lossy());
-    Some(format!("{trigger}; [ -f {results} ] && {{ {resume}; }}"))
+    let done = secrets::sh_quote(&run_dir.join("done").to_string_lossy());
+    Some(format!("{trigger}; [ -f {done} ] && {{ {resume}; }}"))
 }
 
 /// Persist the run record once the terminal is up.
@@ -411,7 +406,7 @@ pub fn continue_run(
 /// skill-term) and only consulted while the record still says "running":
 /// `session_exists` = the tmux session is listed; `agent_running` = its
 /// foreground command isn't back to a plain shell. Headless runs exit when
-/// done, so "agent gone but no results.json" means the run ended without
+/// done, so "agent gone but no done sentinel" means the run ended without
 /// completing — surfaced as "stopped". A startup grace period covers the
 /// moment the launch line is still spinning up under the pane's shell.
 pub fn state(
@@ -425,21 +420,15 @@ pub fn state(
             found: None,
             started_unix: None,
             terminal_id: None,
-            results: None,
             improved: Vec::new(),
         });
     };
     let rdir = run_dir()?;
-    let results_path = rdir.join("results.json");
 
-    let results: Option<serde_json::Value> = std::fs::read_to_string(&results_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok());
-
-    // results.json is the completion signal and outranks liveness probes: it
-    // also recovers a record a flaky probe wrongly marked "stopped" while the
-    // agent was in fact still working.
-    if results.is_some() && (rec.status == "running" || rec.status == "stopped") {
+    // The done sentinel is the completion signal and outranks liveness probes:
+    // it also recovers a record a flaky probe wrongly marked "stopped" while
+    // the agent was in fact still working.
+    if rdir.join("done").exists() && (rec.status == "running" || rec.status == "stopped") {
         rec.status = "done".into();
         let _ = save_run(&rec);
     } else if rec.status == "running" {
@@ -481,7 +470,6 @@ pub fn state(
         found,
         started_unix: Some(rec.started_unix),
         terminal_id: Some(rec.terminal_id.clone()),
-        results,
         improved,
     })
 }
@@ -540,7 +528,7 @@ mod tests {
         assert!(c.contains("| python3 -u '/tmp/run/watch.py' '/tmp/run/session-id'"));
         // A successful run chains into the resumed interactive session, with
         // the same model/effort tuning.
-        assert!(c.contains("[ -f '/tmp/run/results.json' ] && {"));
+        assert!(c.contains("[ -f '/tmp/run/done' ] && {"));
         assert!(c.contains("--resume \"$(cat '/tmp/run/session-id')\" --model 'opus' --effort 'max'"));
         // model/effort omitted entirely when unset.
         let c2 = launch_cmd("claude", "/bin/claude", rd, "p", None, None).unwrap();
@@ -554,7 +542,7 @@ mod tests {
         assert!(x.contains("'approval_policy=\"never\"'"));
         assert!(x.contains("-m 'gpt-5.5'"));
         assert!(x.contains("'model_reasoning_effort=\"xhigh\"'"));
-        assert!(x.contains("[ -f '/tmp/run/results.json' ] && {"));
+        assert!(x.contains("[ -f '/tmp/run/done' ] && {"));
         assert!(x.contains("resume \"$(cat '/tmp/run/session-id')\""));
         // No headless trigger (discovery-only or unknown family) ⇒ no line.
         assert!(launch_cmd("cursor", "/bin/c", rd, "p", None, None).is_none());

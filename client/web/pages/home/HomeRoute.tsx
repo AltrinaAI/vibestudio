@@ -191,7 +191,6 @@ function AgentSection({
   dirtyRoots,
   deletingRoot,
   busyRoot,
-  evidenceFor,
   onOpen,
   onDelete,
   onAccept,
@@ -201,7 +200,6 @@ function AgentSection({
   dirtyRoots: Set<string>;
   deletingRoot: string | null;
   busyRoot: string | null;
-  evidenceFor: (root: string) => string | undefined;
   onOpen: (p: string) => void;
   onDelete: (skill: DiscoveredSkill) => void;
   onAccept: (root: string) => void;
@@ -277,7 +275,6 @@ function AgentSection({
             <ProposedCard
               key={s.root}
               skill={s}
-              evidence={evidenceFor(s.root)}
               busy={busyRoot === s.root}
               onOpen={onOpen}
               onAccept={onAccept}
@@ -314,15 +311,12 @@ function AgentSection({
 // container with its own controls.
 function ProposedCard({
   skill,
-  evidence,
   busy,
   onOpen,
   onAccept,
   onDiscard,
 }: {
   skill: DiscoveredSkill;
-  /** "seen in N sessions · M projects" from the mining run, when it staged this draft. */
-  evidence?: string;
   busy: boolean;
   onOpen: (p: string) => void;
   onAccept: (root: string) => void;
@@ -336,7 +330,6 @@ function ProposedCard({
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{name}</span>
         <ProposedTag />
       </div>
-      {evidence && <p className="text-xs font-medium text-info">{evidence}</p>}
       {skill.description && <p className="line-clamp-2 text-xs leading-relaxed text-muted">{skill.description}</p>}
       <span className="truncate pt-0.5 font-mono text-[0.7rem] text-faint" title={skill.root}>
         {skill.root}
@@ -567,19 +560,6 @@ export function Component() {
   const [importOpen, setImportOpen] = useState(false);
   const [mineOpen, setMineOpen] = useState(false);
   const mining = useMining();
-
-  // Evidence lines from the run's results, keyed by staged root (basename
-  // fallback — the agent writes the paths, so be tolerant of ~ vs absolute).
-  const evidenceFor = useCallback(
-    (root: string): string | undefined => {
-      const p = mining?.results?.proposals?.find(
-        (x) => x.root === root || baseName(x.root ?? "") === baseName(root),
-      );
-      if (!p?.sessions) return undefined;
-      return `Seen in ${p.sessions} session${p.sessions === 1 ? "" : "s"}${p.projects ? ` · ${p.projects} project${p.projects === 1 ? "" : "s"}` : ""}`;
-    },
-    [mining?.results],
-  );
 
   const [discovered, setDiscovered] = useState<AgentSkills[]>([]);
   const [discovering, setDiscovering] = useState(true);
@@ -856,7 +836,6 @@ export function Component() {
                   dirtyRoots={dirtyRoots}
                   deletingRoot={busyRoot}
                   busyRoot={busyRoot}
-                  evidenceFor={evidenceFor}
                   onOpen={onOpen}
                   onDelete={doDelete}
                   onAccept={acceptProposed}

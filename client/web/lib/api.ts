@@ -693,20 +693,6 @@ export interface MineSource {
   sessions: number;
 }
 
-/** One staged proposal from the run's results.json (agent-written). */
-export interface MineProposal {
-  name: string;
-  root: string;
-  sessions?: number;
-  projects?: number;
-}
-
-export interface MineResults {
-  proposals?: MineProposal[];
-  improved?: string[];
-  deferred?: string[];
-}
-
 export interface MineState {
   /** "idle" (never ran) | "running" | "done" | "stopped". */
   status: string;
@@ -716,7 +702,6 @@ export interface MineState {
   found?: number;
   startedUnix?: number;
   terminalId?: string;
-  results?: MineResults;
   /** Existing skills the run dirtied — clears once committed or discarded. */
   improved: string[];
 }
