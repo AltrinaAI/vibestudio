@@ -168,8 +168,18 @@ fn claude_prepare(run_dir: &Path) -> Result<(), String> {
 /// through the watcher `claude_prepare` dropped into the run dir, which
 /// narrates live and records the session id. `</dev/null`: the CLI otherwise
 /// waits on stdin.
+/// Appended to every `-p` prompt: in print mode the run ends the moment the
+/// agent ends its turn, and the harness's background-task re-invocation never
+/// fires — an agent that backgrounds long work and "stands by" produces a
+/// false-success run with no output.
+const CLAUDE_HEADLESS_CAVEAT: &str = "\n\nThis is a headless print-mode run: the run ends \
+permanently the moment you end your turn, and background tasks will NOT re-invoke you. \
+Never end your turn to wait — wait on long-running work with foreground commands \
+(re-running a bounded polling loop as many times as needed).";
+
 fn claude_trigger(c: &TriggerCtx) -> String {
-    let mut cmd = format!("{} -p {} --permission-mode auto", q(c.bin), q(c.prompt));
+    let prompt = format!("{}{}", c.prompt, CLAUDE_HEADLESS_CAVEAT);
+    let mut cmd = format!("{} -p {} --permission-mode auto", q(c.bin), q(&prompt));
     if let Some(home) = dirs::home_dir() {
         for rel in all_skills_dirs() {
             let dir = home.join(rel);

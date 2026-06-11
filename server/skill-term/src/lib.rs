@@ -1195,7 +1195,15 @@ mod tests {
         assert!(session_exists(&s.id), "a fresh session survives the real sweep");
         // …and with a zero cutoff a detached, shell-only session is collected.
         // (Targeted per-id so this test can't reap a developer's real terminals.)
-        assert!(gc_session_if_stale(&s.id, 0), "detached + agent-exited + past cutoff ⇒ reaped");
+        // Poll: right after creation the login shell's rc files spawn transient
+        // children, which make the all-panes-are-shells probe flap (see below).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut reaped = gc_session_if_stale(&s.id, 0);
+        while !reaped && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            reaped = gc_session_if_stale(&s.id, 0);
+        }
+        assert!(reaped, "detached + agent-exited + past cutoff ⇒ reaped");
         assert!(!session_exists(&s.id));
     }
 
