@@ -45,6 +45,22 @@ const PREFIX: &str = "ass-";
 /// fields — name, label, agent, cwd, created — realistically contains one.
 const SEP: char = '\t';
 
+/// Floor for client-reported terminal sizes — below it is a browser layout
+/// glitch, never a real pane. Honoring one is destructive: tmux
+/// (`window-size latest`) clamps the whole window to our pty, a TUI repaints
+/// at that width, and the repaint is baked into scrollback for every viewer.
+/// Resizes below the floor are rejected (the window keeps its last good
+/// size); create/attach are clamped up (a wrong-sized viewer beats none).
+const MIN_COLS: u16 = 20;
+const MIN_ROWS: u16 = 5;
+
+fn size_floor(what: &str, id: &str, cols: u16, rows: u16) -> (u16, u16) {
+    if cols < MIN_COLS || rows < MIN_ROWS {
+        log::warn!("implausible {what} size {cols}x{rows} (id={id}) — clamping to {MIN_COLS}x{MIN_ROWS} floor");
+    }
+    (cols.max(MIN_COLS), rows.max(MIN_ROWS))
+}
+
 static SEQ: AtomicU64 = AtomicU64::new(0);
 static ATTACH_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -530,8 +546,9 @@ fn create_session_inner(
         format!("{env_source}{agent_cmd}; exec bash -l")
     };
 
-    let cols_s = cols.max(2).to_string();
-    let rows_s = rows.max(2).to_string();
+    let (cols, rows) = size_floor("create", &name, cols, rows);
+    let cols_s = cols.to_string();
+    let rows_s = rows.to_string();
     // Create the session around a short-lived stub window first: `history-limit`
     // is captured per-window at creation time, so the session options must be in
     // place *before* the real agent window exists. `-P -F` prints the stub's
@@ -610,10 +627,14 @@ impl Attachment {
         w.write_all(data).and_then(|_| w.flush()).map_err(|e| e.to_string())
     }
     fn resize_to(&self, cols: u16, rows: u16) -> Result<(), String> {
+        if cols < MIN_COLS || rows < MIN_ROWS {
+            log::warn!("refused implausible resize {cols}x{rows} (id={})", self.id);
+            return Err(format!("implausible terminal size {cols}x{rows} — refused"));
+        }
         let m = self.master.lock().map_err(|_| "terminal is unavailable".to_string())?;
         m.resize(PtySize {
-            rows: rows.max(2),
-            cols: cols.max(2),
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -653,11 +674,12 @@ pub fn attach(id: &str, cols: u16, rows: u16) -> Result<(Arc<Attachment>, Receiv
         return Err("That terminal session no longer exists.".into());
     }
 
+    let (cols, rows) = size_floor("attach", id, cols, rows);
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
-            rows: rows.max(2),
-            cols: cols.max(2),
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         })

@@ -197,6 +197,33 @@ fn ensure_installed_in(home: &Path, bundled: Option<&Path>) -> Result<PathBuf, S
     }
 }
 
+/// Force-reinstall the bundled skill-miner into every canonical location a
+/// run would use — the mine dialog's explicit "reinstall official version"
+/// action, for when an installed copy has drifted or broken. Same destination
+/// walk as [`ensure_installed_in`], but unconditional. Returns the restored
+/// roots.
+pub fn reinstall_miner(bundled: Option<&Path>) -> Result<Vec<String>, String> {
+    let bundled = bundled
+        .filter(|s| s.join("SKILL.md").exists())
+        .ok_or_else(|| "Bundled skill-miner skill not found.".to_string())?;
+    let home = dirs::home_dir().ok_or_else(|| "Cannot locate home directory.".to_string())?;
+    let mut restored = Vec::new();
+    for dest in &secrets::INSTALL_DESTS {
+        if !dest.triggers.iter().any(|t| home.join(t).exists()) {
+            continue;
+        }
+        let target = home.join(dest.skills_rel).join(MINER_SKILL);
+        install_skill(bundled, &target)?;
+        restored.push(target.to_string_lossy().into_owned());
+    }
+    if restored.is_empty() {
+        let target = home.join(".agents/skills").join(MINER_SKILL);
+        install_skill(bundled, &target)?;
+        restored.push(target.to_string_lossy().into_owned());
+    }
+    Ok(restored)
+}
+
 /// Install (or reinstall) a bundled skill into `dest`, replacing its content
 /// while preserving any `.git` the user created there. A versioned copy thus
 /// receives an official update as ordinary uncommitted changes — reviewable
@@ -227,14 +254,42 @@ pub struct PreparedRun {
     candidates: Vec<Candidate>,
 }
 
-/// Set up a run: refresh the installed skill-miner from the bundled copy,
-/// snapshot the dirty set, reset the run dir, and compose the agent prompt.
-/// The caller spawns the terminal and then calls [`record_run`].
+/// Snapshot the dirty flag of every personal skill: dirty ones are off-limits
+/// to the run (user WIP), and clean ones that turn dirty are the run's edits.
+fn dirty_candidates() -> Vec<Candidate> {
+    let roots = discover::personal_roots();
+    gitops::git_dirty_many(&roots)
+        .into_iter()
+        .map(|d| Candidate { root: d.root, dirty: d.dirty })
+        .collect()
+}
+
+fn default_sources(sources: &[String]) -> Vec<String> {
+    if sources.is_empty() {
+        SOURCES.iter().map(|(id, _)| (*id).to_string()).collect()
+    } else {
+        sources.to_vec()
+    }
+}
+
+/// The prompt a run with these settings would send — the dialog's editable
+/// preview. Pure read: no run-dir reset, no skill install, no record. The
+/// dirty set is re-snapshotted at start, so an unedited preview and the real
+/// prompt can only differ if a skill's dirtiness changed in between.
+pub fn preview_prompt(days: u64, sources: &[String], improve: bool) -> Result<String, String> {
+    Ok(compose_prompt(&run_dir()?, days, &default_sources(sources), improve, &dirty_candidates()))
+}
+
+/// Set up a run: install the skill-miner where missing, snapshot the dirty
+/// set, reset the run dir, and compose the agent prompt (or take the dialog's
+/// edited `prompt_override` verbatim). The caller spawns the terminal and then
+/// calls [`record_run`].
 pub fn prepare_run(
     agent_family: &str,
     days: u64,
     sources: &[String],
     improve: bool,
+    prompt_override: Option<&str>,
     bundled_miner: Option<&Path>,
 ) -> Result<PreparedRun, String> {
     if load_run().map(|r| r.status == "running").unwrap_or(false) {
@@ -247,13 +302,7 @@ pub fn prepare_run(
 
     ensure_installed_in(&home, bundled_miner)?;
 
-    // Snapshot the dirty flag of every personal skill: dirty ones are off-limits
-    // to the run (user WIP), and clean ones that turn dirty are the run's edits.
-    let roots = discover::personal_roots();
-    let candidates: Vec<Candidate> = gitops::git_dirty_many(&roots)
-        .into_iter()
-        .map(|d| Candidate { root: d.root, dirty: d.dirty })
-        .collect();
+    let candidates = dirty_candidates();
 
     // Reset the single retained run dir.
     let rdir = run_dir()?;
@@ -266,12 +315,11 @@ pub fn prepare_run(
         prep(&rdir)?;
     }
 
-    let sources = if sources.is_empty() {
-        SOURCES.iter().map(|(id, _)| (*id).to_string()).collect()
-    } else {
-        sources.to_vec()
+    let sources = default_sources(sources);
+    let prompt = match prompt_override.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => p.to_string(),
+        None => compose_prompt(&rdir, days, &sources, improve, &candidates),
     };
-    let prompt = compose_prompt(&rdir, days, &sources, improve, &candidates);
     Ok(PreparedRun {
         run_dir: rdir.to_string_lossy().into_owned(),
         prompt,
@@ -296,7 +344,7 @@ fn compose_prompt(
     // name: ensure_installed_in put it in the agent's skills dir, so it's
     // already in the agent's available-skills list.
     let mut lines = vec![
-        "Use your skill-miner skill and follow it.".to_string(),
+        "Use skill-miner to analyze conversations on this machine for skills to create / update".to_string(),
         String::new(),
         "Run settings:".to_string(),
         format!("- Window: last {days} days; sources: {}.", sources.join(", ")),

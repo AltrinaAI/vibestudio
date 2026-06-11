@@ -669,6 +669,25 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let days = query_param(url, "days").and_then(|d| d.parse().ok()).unwrap_or(35);
             json_reply(Ok(mining::sources(days)))
         }
+        // Restore every installed copy of the skill-miner to the official
+        // bundled version (any .git the user created is preserved, so the
+        // refresh lands as ordinary reviewable uncommitted changes).
+        (Method::Post, "/api/mine/reinstall-miner") => {
+            let bundled = bundled_skill(ctx, "skill-miner");
+            json_reply(mining::reinstall_miner(bundled.as_deref()).map(|roots| json!({ "roots": roots })))
+        }
+        // The prompt a run with these settings would send — the dialog shows
+        // it for review/editing; an edited prompt comes back via mine/start.
+        (Method::Post, "/api/mine/prompt") => {
+            let days = v.get("days").and_then(|x| x.as_u64()).unwrap_or(35);
+            let sources: Vec<String> = v
+                .get("sources")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let improve = v.get("improve").and_then(|x| x.as_bool()).unwrap_or(true);
+            json_reply(mining::preview_prompt(days, &sources, improve).map(|p| json!({ "prompt": p })))
+        }
         (Method::Post, "/api/mine/start") => {
             let days = v.get("days").and_then(|x| x.as_u64()).unwrap_or(35);
             let sources: Vec<String> = v
@@ -680,14 +699,22 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let agent = s("agent");
             let model = s("model");
             let effort = s("effort");
+            let prompt = s("prompt");
             let bundled = bundled_skill(ctx, "skill-miner");
             json_reply((|| {
                 let opt = skill_term::detect_agents()
                     .into_iter()
                     .find(|a| a.id == agent)
                     .ok_or_else(|| format!("Unknown agent option: {agent}"))?;
-                let prep =
-                    mining::prepare_run(&opt.agent, days, &sources, improve, bundled.as_deref())?;
+                let prompt_override = Some(prompt.trim()).filter(|p| !p.is_empty());
+                let prep = mining::prepare_run(
+                    &opt.agent,
+                    days,
+                    &sources,
+                    improve,
+                    prompt_override,
+                    bundled.as_deref(),
+                )?;
                 // Headless launch via the agent registry's trigger: the
                 // documented zero-interaction path — no trust dialog, no
                 // approval prompts nobody is watching for. The pane still

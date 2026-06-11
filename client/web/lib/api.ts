@@ -711,16 +711,25 @@ export interface MineStartArgs {
   sources: string[];
   /** An AgentOption.id (the agent that runs the mine). */
   agent: string;
-  /** Allow in-place edits to existing skills (reviewed before saving). */
-  improve: boolean;
+  /** Allow in-place edits to existing skills (default true; reviewed before saving). */
+  improve?: boolean;
   /** Model for the run ("" = the agent CLI's default). */
   model?: string;
   /** Effort / reasoning level for the run ("" = the agent CLI's default). */
   effort?: string;
+  /** The run prompt as shown (and possibly edited) in the dialog ("" = compose server-side). */
+  prompt?: string;
 }
 
 export const mineSources = (days: number) => http<MineSource[]>("GET", `mine/sources?days=${days}`);
+/** The prompt a run with these settings would send — shown in the dialog for review/editing. */
+export const minePrompt = (args: { days: number; sources?: string[]; improve?: boolean }) =>
+  http<{ prompt: string }>("POST", "mine/prompt", { ...args });
 export const mineStart = (a: MineStartArgs) => http<MineState>("POST", "mine/start", { ...a });
+/** Restore every installed copy of the skill-miner to the official bundled
+ *  version (versioned copies keep their .git — the refresh shows as
+ *  uncommitted changes). Returns the restored roots. */
+export const mineReinstallMiner = () => http<{ roots: string[] }>("POST", "mine/reinstall-miner");
 export const mineState = () => http<MineState>("GET", "mine/state");
 export const mineStop = () => http<{ ok: boolean }>("POST", "mine/stop").then(() => {});
 /** The run's conversation: returns its live terminal, or revives the recorded

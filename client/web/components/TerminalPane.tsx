@@ -18,6 +18,11 @@ const COPY_STASH_MS = 60_000;
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
+/** No real pane is ever this small — below it is a transient layout artifact.
+ *  skill-term enforces the same floor as a backstop. */
+const MIN_COLS = 20;
+const MIN_ROWS = 5;
+
 /** Write to the system clipboard from inside a user gesture. The async API first;
  *  if it's denied or missing (insecure-context LAN origins have no
  *  navigator.clipboard at all), fall back to a hidden-textarea execCommand copy,
@@ -134,11 +139,6 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       return false;
     });
     term.open(host);
-    try {
-      fit.fit();
-    } catch {
-      /* host not laid out yet */
-    }
 
     // xterm captures its colors at construction and renders to a canvas, so it
     // can't follow CSS the way the rest of the UI does — without this it keeps
@@ -150,30 +150,49 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     });
     themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
-    // Attach only once the host has a real layout size. A mid-mount measure of
-    // a few px (the studio side panel while its width style lands, a dialog
-    // mid-open) would create the pty — and, with tmux's `window-size latest`,
-    // clamp the whole window — at postage-stamp size; if the correcting resize
-    // is ever lost, every other viewer of the session sees a dotted stamp.
+    // The single gate for every size reported to the backend (attach + resize).
+    // tmux sizes the whole window to our pty (`window-size latest`) and a TUI
+    // repaints on SIGWINCH, so one transient postage-stamp measurement (a side
+    // panel mid-layout, a display:none flip) gets baked into the scrollback for
+    // every viewer. Refuse implausible sizes; log every attempt (refusals at
+    // warn → forwarded to the server log).
     let handle: api.TerminalHandle | null = null;
     let dataSub: { dispose: () => void } | null = null;
-    const hostIsReal = () => host.clientWidth >= 120 && host.clientHeight >= 80;
-    const attach = () => {
-      if (handle) return;
+    let sent = { cols: 0, rows: 0 };
+    const syncSize = (why: string) => {
+      const w = host.clientWidth;
+      const h = host.clientHeight;
+      if (w < 120 || h < 80) {
+        log.debug("term-size", `skip (${why}): host ${w}×${h}px, id=${id}`);
+        return;
+      }
       try {
         fit.fit();
       } catch {
-        /* not laid out yet */
+        return; // not laid out yet
       }
-      handle = api.attachTerminal(id, {
-        cols: term.cols,
-        rows: term.rows,
-        onData: (bytes) => term.write(bytes),
-        onClose: () => term.write("\r\n\x1b[2m[disconnected — the session may have ended]\x1b[0m\r\n"),
-      });
-      dataSub = term.onData((d) => handle!.write(d));
+      if (term.cols < MIN_COLS || term.rows < MIN_ROWS) {
+        log.warn("term-size", `refused ${term.cols}×${term.rows} (${why}): host ${w}×${h}px, id=${id}`);
+        return;
+      }
+      if (!handle) {
+        handle = api.attachTerminal(id, {
+          cols: term.cols,
+          rows: term.rows,
+          onData: (bytes) => term.write(bytes),
+          onClose: () => term.write("\r\n\x1b[2m[disconnected — the session may have ended]\x1b[0m\r\n"),
+        });
+        dataSub = term.onData((d) => handle!.write(d));
+        log.debug("term-size", `attach ${term.cols}×${term.rows} (${why}), id=${id}`);
+      } else if (term.cols !== sent.cols || term.rows !== sent.rows) {
+        handle.resize(term.cols, term.rows);
+        log.debug("term-size", `resize ${term.cols}×${term.rows} (${why}), id=${id}`);
+      } else {
+        return; // unchanged — nothing to report
+      }
+      sent = { cols: term.cols, rows: term.rows };
     };
-    if (hostIsReal()) attach();
+    syncSize("mount");
 
     // Images can't ride the text paste path: ship the bytes to the backend
     // (where the agent runs — possibly a remote host with no access to this
@@ -219,35 +238,12 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     let raf = 0;
     const ro = new ResizeObserver(() => {
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        if (!handle) {
-          // Deferred attach: start once the host first reaches a real size.
-          if (hostIsReal()) attach();
-          return;
-        }
-        try {
-          fit.fit();
-          handle.resize(term.cols, term.rows);
-        } catch {
-          /* transient zero-size during layout */
-        }
-      });
+      raf = requestAnimationFrame(() => syncSize("resize"));
     });
     ro.observe(host);
     term.focus();
 
-    refitRef.current = () => {
-      if (!handle) {
-        if (hostIsReal()) attach();
-        return;
-      }
-      try {
-        fit.fit();
-        handle.resize(term.cols, term.rows);
-      } catch {
-        /* transient zero-size during layout */
-      }
-    };
+    refitRef.current = () => syncSize("shown");
 
     return () => {
       gone = true;
