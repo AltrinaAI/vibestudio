@@ -1283,8 +1283,10 @@ mod tests {
         }
         assert!(!agent_exited(&s.id), "a command under the bash -lc wrapper is not 'exited'");
         // When it finishes the pane execs into the keep-alive `bash -l` and
-        // counts as at rest again.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // counts as at rest again. Generous deadline: the probe forks `ps`/`tmux`
+        // each poll, and on a loaded CI runner those can be starved well past a
+        // tight window — the property is eventually-true, so wait, don't race it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while std::time::Instant::now() < deadline && !agent_exited(&s.id) {
             std::thread::sleep(std::time::Duration::from_millis(150));
         }
