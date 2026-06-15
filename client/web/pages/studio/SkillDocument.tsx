@@ -403,6 +403,7 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
           placeholder="Write the skill instructions in Markdown…"
           baseline={headBody}
           review={reviewRequested}
+          assets={{ root: data.root, dir: "." }}
         />
       </Suspense>
     </div>

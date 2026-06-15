@@ -1,0 +1,10 @@
+# Stray-console-window guard. On Windows a packaged GUI app has no console, so a
+# raw `Command::new` makes every child (git.exe, ssh.exe, wsl.exe, nvidia-smi.exe,
+# the llama-server engine, tmux, agent `--version` probes) flash its own console
+# window. `skill_core::process::hidden_command` spawns with CREATE_NO_WINDOW (a
+# no-op off Windows); this rule makes the raw constructor a lint error so the flag
+# can never be forgotten at a new call site. The one sanctioned `Command::new`
+# lives inside `hidden_command` itself (behind an `#[allow]`).
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "use skill_core::process::hidden_command — a raw Command::new flashes a console window on Windows" },
+]

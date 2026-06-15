@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::process::hidden_command;
+
 // ───────────────────────────── model catalog ─────────────────────────────
 
 /// A downloadable GGUF model + the context window to run it with.
@@ -352,7 +354,7 @@ fn spawn_one(
     let port = free_port()?;
     let bin = engine_binary();
     ensure_executable(&bin); // bundling as a resource can drop the exec bit on unix
-    let mut cmd = Command::new(&bin);
+    let mut cmd = hidden_command(&bin);
     cmd.args([
         "-m",
         &model.to_string_lossy(),
@@ -572,7 +574,7 @@ pub fn reap_orphans() {
     }
     #[cfg(unix)]
     {
-        let Ok(out) = Command::new("ps").args(["-eo", "pid=,ppid=,args="]).output() else {
+        let Ok(out) = hidden_command("ps").args(["-eo", "pid=,ppid=,args="]).output() else {
             return;
         };
         if !out.status.success() {
@@ -596,7 +598,7 @@ pub fn reap_orphans() {
             // conservative direction: we'd rather leave a stray engine than
             // kill a sibling backend's live one.)
             if pid != me && ppid == 1 {
-                let _ = Command::new("kill").arg(pid.to_string()).output(); // SIGTERM
+                let _ = hidden_command("kill").arg(pid.to_string()).output(); // SIGTERM
             }
         }
     }
@@ -605,6 +607,6 @@ pub fn reap_orphans() {
         // Best-effort on Windows: kill our bundled engine by image name. No
         // cheap parent check here, so this CAN hit a sibling backend's engine —
         // acceptable for the rare run-two-backends-on-Windows case.
-        let _ = Command::new("taskkill").args(["/F", "/IM", "llama-server.exe"]).output();
+        let _ = hidden_command("taskkill").args(["/F", "/IM", "llama-server.exe"]).output();
     }
 }

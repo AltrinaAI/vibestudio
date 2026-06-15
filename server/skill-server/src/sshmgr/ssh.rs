@@ -9,6 +9,8 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
+use skill_core::process::hidden_command;
+
 use crate::RemoteHost;
 
 /// Options for a one-shot remote command over ssh.
@@ -70,7 +72,7 @@ impl Transport {
     fn run_command(&self, remote_cmd: &str) -> Command {
         match self {
             Transport::Ssh { host } => {
-                let mut c = Command::new("ssh");
+                let mut c = hidden_command("ssh");
                 // `--` ends option parsing so a host can never be read as an ssh flag.
                 c.args(COMMON_OPTS).arg("--").arg(host).arg(remote_cmd);
                 c
@@ -85,7 +87,7 @@ impl Transport {
     pub fn launch_command(&self, remote_cmd: &str, local_port: u16, remote_port: u16) -> Command {
         match self {
             Transport::Ssh { host } => {
-                let mut c = Command::new("ssh");
+                let mut c = hidden_command("ssh");
                 c.args(LAUNCH_OPTS)
                     .arg("-L")
                     .arg(format!("{local_port}:127.0.0.1:{remote_port}"))
@@ -116,7 +118,7 @@ impl Transport {
 fn wsl_command(distro: &str, remote_cmd: &str) -> Command {
     let b64 = base64(remote_cmd.as_bytes());
     let wrapper = format!("bash <(echo {b64}|base64 -d)");
-    let mut c = Command::new("wsl.exe");
+    let mut c = hidden_command("wsl.exe");
     c.arg("-d").arg(distro).arg("--").arg("bash").arg("-lc").arg(wrapper);
     c
 }
@@ -270,7 +272,7 @@ fn list_wsl_distros() -> Vec<RemoteHost> {
 
 /// Run `wsl.exe <args>` and decode its UTF-16LE stdout (wsl emits wide chars).
 fn wsl_output(args: &[&str]) -> Option<String> {
-    let o = Command::new("wsl.exe").args(args).output().ok()?;
+    let o = hidden_command("wsl.exe").args(args).output().ok()?;
     let wide: Vec<u16> = o.stdout.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     Some(String::from_utf16_lossy(&wide))
 }

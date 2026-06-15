@@ -61,6 +61,7 @@ function MarkdownPane({ dir, name, file }: { dir: string; name: string; file: Fi
             value={content}
             onChange={setContent}
             placeholder="Write Markdown…"
+            assets={{ root: dir, dir: "." }}
           />
         </Suspense>
       )}

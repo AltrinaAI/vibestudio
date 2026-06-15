@@ -92,9 +92,8 @@ fn nvidia_present() -> bool {
 }
 
 fn nvidia_smi_reports_gpu() -> bool {
-    use std::process::Command;
     let exe = if cfg!(windows) { "nvidia-smi.exe" } else { "nvidia-smi" };
-    match Command::new(exe).arg("-L").output() {
+    match crate::process::hidden_command(exe).arg("-L").output() {
         Ok(out) => out.status.success() && String::from_utf8_lossy(&out.stdout).contains("GPU "),
         Err(_) => false,
     }

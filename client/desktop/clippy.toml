@@ -1,0 +1,9 @@
+# Same guard as the server workspace's clippy.toml (the desktop is a separate
+# Cargo workspace, so the rule must be repeated here). This crate shells out to
+# nothing today — every capability is reached over /api against the in-process
+# server — but if a GUI affordance ever spawns a child directly (open a folder,
+# reveal a file), it must use `skill_core::process::hidden_command` so it doesn't
+# flash a console window on Windows.
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "use skill_core::process::hidden_command — a raw Command::new flashes a console window on Windows" },
+]

@@ -5,7 +5,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { ReviewToggleContext } from "./reviewContext";
 import { EditorView, Decoration, WidgetType, keymap, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { StateField, StateEffect, Text, type Extension, type Range, type EditorState } from "@codemirror/state";
+import { StateField, StateEffect, Facet, Text, type Extension, type Range, type EditorState } from "@codemirror/state";
 import { unifiedMergeView, goToNextChunk, goToPreviousChunk, getChunks, rejectChunk, Chunk } from "@codemirror/merge";
 import { publishDiffGeometry, type DiffMark } from "@/lib/diffGeometry";
 import {
@@ -24,6 +24,7 @@ import {
 import { tags as t } from "@lezer/highlight";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
+import { imageDataUrl } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Syntax highlighting — solid, comprehensive, GitHub-style palette (CSS vars
@@ -938,6 +939,143 @@ const foldPlaceholder = (_view: EditorView, onclick: (event: Event) => void): HT
   return el;
 };
 
+// ---------------------------------------------------------------------------
+// Inline images. A local image (`![alt](./logo.png)`) renders as a real <img>
+// when its line isn't being edited — mirroring how the editor conceals other
+// markup. The bytes come from /api/read-image as a data: URL (the same path
+// FilePane uses for standalone images), so it works identically over the
+// loopback server and a remote one. External http(s) URLs stay raw: the webview
+// CSP only allows self/data:/blob: images, so they could never load anyway.
+//
+// Decorations build synchronously from state, but the fetch is async, so a
+// module cache bridges them: the builder renders only what's already loaded, and
+// `imageLoader` fetches misses and dispatches `bumpImages` to trigger one rebuild
+// when the data: URL lands. A missing/failed image is left raw so its source
+// stays visible and fixable.
+// ---------------------------------------------------------------------------
+
+/** Where a markdown file's relative image paths resolve: `root` is the
+ *  read-image sandbox root, `dir` is the file's folder within it ("." at root).
+ *  null → image rendering off (the raw-source default). */
+type ImageCtx = { root: string; dir: string } | null;
+const imageCtx = Facet.define<ImageCtx, ImageCtx>({
+  combine: (vs) => (vs.length ? vs[vs.length - 1] : null),
+});
+
+type ImageEntry = { url: string } | { failed: true };
+// Keyed by `${root} ${rel}`. Module-scoped so it survives editor remounts
+// (switching files, entering review) without refetching; never evicted — skills
+// hold a handful of small images, so a session won't accumulate many.
+const imageCache = new Map<string, ImageEntry>();
+const imageInFlight = new Set<string>();
+const imageKey = (root: string, rel: string) => `${root} ${rel}`;
+
+// Recompute decorations when an image finishes loading (the cache changed).
+const bumpImages = StateEffect.define<null>();
+
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"]);
+
+/** A markdown image src → its path relative to the asset root, or null when it
+ *  shouldn't be fetched (external/absolute URL, or a non-image extension). The
+ *  backend re-normalizes and sandboxes; this normalizes too so the cache key is
+ *  canonical. */
+function resolveImageRel(dir: string, srcRaw: string): string | null {
+  let src = srcRaw.trim();
+  if (src.startsWith("<") && src.endsWith(">")) src = src.slice(1, -1).trim();
+  if (!src) return null;
+  // A URL scheme (http:, https:, data:, file:…) or protocol-relative → external.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//")) return null;
+  src = src.replace(/[?#].*$/, ""); // drop any fragment/query the path router can't use
+  try {
+    src = decodeURIComponent(src); // `my%20pic.png` → the real on-disk `my pic.png`
+  } catch {
+    /* malformed % escape — fall through with the literal text */
+  }
+  const ext = src.slice(src.lastIndexOf(".") + 1).toLowerCase();
+  if (!IMAGE_EXTS.has(ext)) return null;
+  const joined = dir === "." || dir === "" ? src : `${dir}/${src}`;
+  const parts: string[] = [];
+  for (const seg of joined.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  return parts.length ? parts.join("/") : null;
+}
+
+class ImageWidget extends WidgetType {
+  constructor(
+    readonly key: string,
+    readonly url: string,
+    readonly alt: string,
+  ) {
+    super();
+  }
+  // key already encodes (root, rel); same key + alt ⇒ identical render, so
+  // CodeMirror reuses the DOM (no reload) when an unrelated edit rebuilds.
+  eq(other: WidgetType): boolean {
+    return other instanceof ImageWidget && other.key === this.key && other.alt === this.alt;
+  }
+  ignoreEvent(): boolean {
+    // false (not the WidgetType default) so a double-click on the image reaches
+    // editGate's handler and reveals the raw `![alt](url)` source for editing —
+    // the same reveal-on-double-click UX as headings, links, and tables.
+    return false;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const img = document.createElement("img");
+    img.className = "cm-md-img";
+    img.src = this.url;
+    img.alt = this.alt;
+    // The data: URL decodes async; once it has real dimensions the line height
+    // changes, so ask CodeMirror to re-measure (it can't observe this itself).
+    img.addEventListener("load", () => view.requestMeasure());
+    return img;
+  }
+}
+
+// Fetches the document's images and nudges a rebuild as each lands. A ViewPlugin
+// (not the builder) because a StateField update must stay pure — no fetch, no
+// dispatch.
+const imageLoader = ViewPlugin.fromClass(
+  class {
+    destroyed = false;
+    constructor(readonly view: EditorView) {
+      this.scan();
+    }
+    update(u: ViewUpdate) {
+      if (u.docChanged || u.startState.facet(imageCtx) !== u.state.facet(imageCtx)) this.scan();
+    }
+    destroy() {
+      this.destroyed = true;
+    }
+    scan() {
+      const ctx = this.view.state.facet(imageCtx);
+      if (!ctx) return;
+      const doc = this.view.state.doc;
+      syntaxTree(this.view.state).iterate({
+        enter: (node) => {
+          if (node.name !== "Image") return undefined;
+          const urlNode = node.node.getChild("URL");
+          const rel = urlNode && resolveImageRel(ctx.dir, doc.sliceString(urlNode.from, urlNode.to));
+          if (!rel) return false;
+          const key = imageKey(ctx.root, rel);
+          if (imageCache.has(key) || imageInFlight.has(key)) return false;
+          imageInFlight.add(key);
+          imageDataUrl(ctx.root, rel)
+            .then((url) => imageCache.set(key, { url }))
+            .catch(() => imageCache.set(key, { failed: true }))
+            .finally(() => {
+              imageInFlight.delete(key);
+              if (!this.destroyed) this.view.dispatch({ effects: bumpImages.of(null) });
+            });
+          return false; // don't descend into the image's marks
+        },
+      });
+    }
+  },
+);
+
 function buildMarkdownDecorations(state: EditorState): DecorationSet {
   const doc = state.doc;
   const tree = syntaxTree(state);
@@ -1061,6 +1199,29 @@ function buildMarkdownDecorations(state: EditorState): DecorationSet {
         if (!lineActive(node.from)) decos.push(hideDeco.range(node.from, node.to));
         return false;
       }
+      // Inline image: a real <img> when idle, raw `![alt](url)` while the line is
+      // being edited (so the URL stays editable) — same reveal as links/tables.
+      // Only images already loaded (see imageLoader) render; anything else (still
+      // loading, failed, external, non-image) falls through to raw source.
+      if (name === "Image") {
+        const ctx = state.facet(imageCtx);
+        const urlNode = ctx ? node.node.getChild("URL") : null;
+        if (ctx && urlNode && !editIntersects(node.from, node.to)) {
+          const rel = resolveImageRel(ctx.dir, doc.sliceString(urlNode.from, urlNode.to));
+          const entry = rel ? imageCache.get(imageKey(ctx.root, rel)) : undefined;
+          if (rel && entry && "url" in entry) {
+            const alt = doc.sliceString(node.from, node.to).replace(/^!\[/, "").replace(/\].*$/s, "");
+            decos.push(
+              Decoration.replace({ widget: new ImageWidget(imageKey(ctx.root, rel), entry.url, alt) }).range(
+                node.from,
+                node.to,
+              ),
+            );
+          }
+        }
+        return false; // marks/URL inside stay raw when not rendered
+      }
+
       // A link gets a pointer cursor (it's clickable) when not being edited.
       if (name === "Link") {
         if (!lineActive(node.from)) decos.push(linkMarkDeco.range(node.from, node.to));
@@ -1122,7 +1283,9 @@ const markdownBlocks = StateField.define<DecorationSet>({
     if (
       tr.docChanged ||
       tr.selection ||
-      tr.effects.some((e) => e.is(setFocused) || e.is(setEdit) || e.is(foldEffect) || e.is(unfoldEffect)) ||
+      tr.effects.some(
+        (e) => e.is(setFocused) || e.is(setEdit) || e.is(foldEffect) || e.is(unfoldEffect) || e.is(bumpImages),
+      ) ||
       syntaxTree(tr.startState) !== syntaxTree(tr.state) ||
       // The diff chunks finished computing / changed → re-decide which lines to
       // reveal as raw (so unchanged lines render and changed ones show source).
@@ -1145,6 +1308,7 @@ const markdownExtensions: Extension[] = [
   editField,
   editGate,
   anchorNav,
+  imageLoader,
   markdownBlocks,
   baseTheme,
 ];
@@ -1413,6 +1577,7 @@ export default function LiveEditor({
   placeholder,
   baseline,
   review,
+  assets,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -1420,6 +1585,10 @@ export default function LiveEditor({
   language?: string;
   filename?: string;
   placeholder?: string;
+  /** Markdown only: where relative image paths resolve, so `![alt](./x.png)`
+   *  renders inline. `root` is the read-image sandbox; `dir` is the file's folder
+   *  within it ("." when the file sits at the root). Omitted → images stay raw. */
+  assets?: { root: string; dir: string };
   /** The file's HEAD content. When defined (a tracked file), live change
    *  indicators (overview ruler + left red/green bars) track edits against it.
    *  "" = a new/untracked file (whole buffer reads as added). undefined = not
@@ -1453,6 +1622,10 @@ export default function LiveEditor({
   reviewToggleRef.current = reviewToggle;
   const onReview = useMemo(() => () => reviewToggleRef.current?.(), []);
 
+  // Primitives (not the fresh `assets` object) so the extension memo is stable.
+  const assetRoot = assets?.root;
+  const assetDir = assets?.dir ?? ".";
+
   // Memoized so editing (which changes `value`, NOT these deps) never rebuilds
   // the extension array — only a baseline reload or entering review reconfigures
   // (rare events), which @uiw applies via StateEffect.reconfigure, preserving the
@@ -1463,9 +1636,14 @@ export default function LiveEditor({
     // is on; untouched content always looks like normal viewing).
     const base =
       kind === "markdown"
-        ? review
-          ? markdownExtensions // folding off in review mode (it would hide diff content)
-          : [...markdownExtensions, ...headingFolding]
+        ? [
+            ...markdownExtensions,
+            // Resolve relative image paths against the file's folder so they render
+            // inline; absent → images stay raw (markdownExtensions' default).
+            ...(assetRoot ? [imageCtx.of({ root: assetRoot, dir: assetDir })] : []),
+            // Folding is off in review mode (it would hide diff content).
+            ...(review ? [] : headingFolding),
+          ]
         : [...codeLang, EditorView.lineWrapping, syntaxHighlighting(codeHighlight), baseTheme];
     if (baseline === undefined) return base; // not tracked → plain editor
     // Live change indicators (in-editor gutter bars + overview ruler) for every
@@ -1490,7 +1668,7 @@ export default function LiveEditor({
       );
     }
     return exts;
-  }, [kind, codeLang, baseline, review, onReview]);
+  }, [kind, codeLang, baseline, review, onReview, assetRoot, assetDir]);
 
   return (
     <CodeMirror

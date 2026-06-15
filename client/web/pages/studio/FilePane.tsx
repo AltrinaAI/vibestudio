@@ -21,6 +21,9 @@ export default function FilePane({ root, file, onSaved }: { root: string; file: 
   const isMarkdown = file.category === "markdown";
   const [content, setContent] = useState(file.content ?? "");
   const baseName = file.rel.split("/").pop() ?? file.rel;
+  // The file's folder within the skill, against which its relative image paths
+  // resolve ("." when it sits at the skill root).
+  const assetDir = file.rel.includes("/") ? file.rel.slice(0, file.rel.lastIndexOf("/")) : ".";
 
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [imgError, setImgError] = useState(false);
@@ -171,6 +174,7 @@ export default function FilePane({ root, file, onSaved }: { root: string; file: 
             onChange={setContent}
             baseline={baseline}
             review={reviewRequested && isMarkdown}
+            assets={{ root, dir: assetDir }}
           />
         </Suspense>
       )}

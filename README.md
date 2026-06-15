@@ -1,43 +1,24 @@
 # Skill Studio
 
-A desktop app for **viewing, editing, versioning, and running
-[Agent Skills](https://agentskills.io/home)** — the portable folders of human
-expert knowledge that agents load on demand.
+The best editor for **[Agent Skills](.https://agentskills.io/home)**. 
 
 ![Skill Studio — recent skills, skill mining, and the discovered skills library](./Screenshot.png)
 
-Managing skills is like managing a team's culture and policies: written once,
-leveraged by every agent. Studio gives that knowledge a human interface so you
-can see, diff, version, and share your skills instead of letting them drift
-across a dozen agent config dirs.
+As agents get more powerful, it's easy to feel like loosing control over the direction of your project or organization. Your need a place to specify your taste, expertise, and customize your way of doing things. We think the place to do it on the organization level is through [agent skills](.https://agentskills.io/home). 
 
-Built with [Tauri](https://tauri.app/) (Rust backend + React/TS frontend). The
-backend is separable from the UI, so it runs natively *or* headless on a remote
-box you drive from a browser (the VS Code-remote model — see [`design.md`](./design.md)).
+Any place that requires human creativity needs a good human interface, and there just isn't a good one with skills, so we built one and open-sourced it. 
+
+Built with [Tauri](https://tauri.app/), Skill Studio runs on macOS, Linux, and Windows, and connects to any remote dev setup you have natively VS Code style (see [`design.md`](./design.md)). 
 
 ## Features
 
-- **Discover** every skill on your machine — across Claude Code, Codex, Cursor,
-  Gemini CLI, OpenClaw, the shared `~/.agents/skills` standard, and project repos
-  — classified personal / official / plugin.
-- **Skill Mining** — use a local agent to analyze your past agent
-  conversations and create / update skills.
-- **Rendered Markdown editing** — `SKILL.md` and other Markdown files rendered
-  as a clean, Notion-like document with frontmatter badges, a GFM body, and a
-  full file-tree browser.
-- **Automatic versioning** — a VS Code-style Source Control panel per skill:
-  working-tree changes, inline diffs, discard, and numbered commit history,
-  parent-repo aware. Commit messages are drafted locally by the on-device 2B
-  Qwen model — nothing leaves the machine.
-- **Secrets manager** — one machine-local store. Terminals launched from the
-  app inject the secrets into the agent's environment automatically. Secrets in
-  use are auto-detected and can be bundled on skill export, for
-  "batteries-included" skill sharing within a team.
-- **Terminals & remote hosts** — run Claude Code, Codex, or a shell in
-  tmux-backed sessions that survive UI disconnect, so you can close your laptop
-  and pick the run back up later. Point Studio at an SSH host or a local WSL
-  distro to edit and run skills on that machine as if it were local (the VS
-  Code-remote model).
+- **Discover** and manage every skill on your machine, across Claude Code, Codex, Cursor,
+  Gemini CLI, OpenClaw, the shared `~/.agents/skills` standard, and project repos.
+- **Skill Mining** — use your local agent to analyze past agent conversations to create / update skills.
+- **Edit rendered markdown directly** — view and edit `SKILL.md` and other Markdown files directly on the rendered document. Double click to edit the raw markdown syntax. 
+- **Automatic versioning** — automatically track changes across all your skills and sync to any remote you specify
+- **Secrets manager** — machine-local store. Automatically detect secrets used and notice on export for "batteries included" sharing of the skills. 
+- **Terminals & remote hosts** — managed agent sessions that survive UI disconnect, so you can close your laptop and pick the run back up later. Point Studio at any SSH host and run agents there. Supports Claude Code, Codex, or a shell. 
 
 ## Run it
 
@@ -59,10 +40,8 @@ Open a skill via the discovered list, the top-bar path input, **Browse…**, or 
 
 ## Roadmap
 
-The thesis: the future is humans and AI agents **collaborating**, not humans
-replaced — and skills are the medium for human expert knowledge, so they need a
+The thesis: the future is one where humans **collaborate** with AI agents , not one where they are replaced by.  Skills are the medium for human expert knowledge, so they need a
 first-class human UX. Next:
 
-1. **Version-controlled team collaboration & team secret managers** — share
-   skills and the secrets they need across a team, account-backed.
-2. **Multi-modal skills / SOP documents** in a readable format.
+1. **Team collaboration & secret management** — share skills and the secrets they need across a team, account-backed. 
+2. **Multi-modal skills / SOP documents** in a format readable by both humans and agents, for computer use agents. 

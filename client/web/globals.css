@@ -192,6 +192,15 @@ body {
 .cm-editor .cm-md-link {
   cursor: pointer;
 }
+/* Inline-rendered markdown images: fit the text column and keep their aspect
+   ratio, otherwise shown exactly as authored — no frame, since many images carry
+   their own border/shadow. Double-click reveals the raw `![alt](url)` source. */
+.cm-editor .cm-md-img {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  vertical-align: top;
+}
 /* Code editor variant keeps a monospace scroller. */
 .cm-mono .cm-scroller {
   font-family: var(--font-mono);

@@ -27,6 +27,8 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
+
+use skill_core::process::hidden_command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -177,7 +179,7 @@ fn tmux_bin() -> String {
 /// A `tmux` command that works even when the backend itself runs inside a tmux
 /// pane (`-d` creates are fine within tmux; we only must not inherit `$TMUX`).
 fn tmux() -> Command {
-    let mut c = Command::new(tmux_bin());
+    let mut c = hidden_command(tmux_bin());
     c.env_remove("TMUX");
     c
 }
@@ -354,7 +356,7 @@ fn all_panes_are_shells(id: &str) -> bool {
     // One snapshot of the process table (Linux and macOS both take -eo with
     // empty headers). comm is a bare name on Linux and may be a full path on
     // macOS; is_shell() compares the basename.
-    let Ok(ps) = Command::new("ps").args(["-eo", "pid=,ppid=,comm="]).output() else {
+    let Ok(ps) = hidden_command("ps").args(["-eo", "pid=,ppid=,comm="]).output() else {
         return false;
     };
     if !ps.status.success() {
@@ -921,7 +923,7 @@ fn slug(s: &str) -> String {
 /// bounded by a timeout so a hung/misbehaving binary can't freeze agent detection.
 fn bin_version(bin: &str) -> Option<String> {
     use std::process::Stdio;
-    let mut child = Command::new(bin)
+    let mut child = hidden_command(bin)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1227,7 +1229,7 @@ mod tests {
             };
             let pid = String::from_utf8_lossy(&out.stdout).trim().to_string();
             !pid.is_empty()
-                && Command::new("ps")
+                && hidden_command("ps")
                     .args(["-p", &pid, "-o", "comm="])
                     .output()
                     .map(|o| String::from_utf8_lossy(&o.stdout).trim().ends_with("sleep"))
