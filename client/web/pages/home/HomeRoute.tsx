@@ -12,7 +12,7 @@ import ImportSkillDialog from "./ImportSkillDialog";
 import MineDialog from "./MineDialog";
 import { useConfirm } from "@/components/useConfirm";
 import { useRecents, removeRecent, type Recent } from "@/lib/recents";
-import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO } from "@/lib/agents";
+import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO, type AgentGroupInfo } from "@/lib/agents";
 import * as api from "@/lib/api";
 import type { AgentSkills, DiscoveredSkill, MineState } from "@/lib/api";
 import { useMining, refreshMining } from "@/lib/mining";
@@ -186,6 +186,50 @@ function SkillCard({
   );
 }
 
+function InfoIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4M12 8h.01" />
+    </svg>
+  );
+}
+
+// A real hover popover for the shared-standard explainer — the desktop webview
+// renders nothing for a native `title`, so the ⓘ carries its own DOM tooltip.
+// Keeps the section header to one line; the chips + note appear only on hover.
+function SharedStandardInfo({ info }: { info: AgentGroupInfo }) {
+  return (
+    <span className="group/info relative flex items-center">
+      <span className="cursor-help text-faint transition-colors hover:text-muted">
+        <InfoIcon />
+      </span>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-0 top-full z-30 mt-1.5 hidden w-max max-w-xs flex-wrap items-center gap-x-1.5 gap-y-1 rounded-lg border border-border bg-surface px-3 py-2 text-xs leading-relaxed text-muted shadow-lg group-hover/info:flex"
+      >
+        <span>Shared standard — read by</span>
+        {info.sharedWith.map((a) => (
+          <span key={a} className="inline-flex items-center gap-1 rounded-full bg-panel px-1.5 py-0.5">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: agentColor(a) }} aria-hidden />
+            {a}
+          </span>
+        ))}
+        <span>&amp; more.</span>
+        {info.excludes.length > 0 && (
+          <span className="text-faint">Not {info.excludes.join(", ")} — it keeps its own folder.</span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+// The shared ~/.agents/skills dir is keyed "Agent Skills" internally (color,
+// info, path rules); shown as "Standard Agent Skills" so its cross-agent,
+// standard nature is clear from the label alone.
+const AGENT_LABELS: Record<string, string> = { "Agent Skills": "Standard Agent Skills" };
+const agentLabel = (agent: string) => AGENT_LABELS[agent] ?? agent;
+
 // One section per agent (the skill's source). Mined proposals lead the grid
 // (green-tinted, awaiting acceptance), then your own skills; everything you
 // didn't author — built-in/official skills and third-party plugins — collapses
@@ -248,30 +292,17 @@ function AgentSection({
     ) : null;
   return (
     <section>
-      <div className="mb-3">
-        <div className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: agentColor(group.agent) }} aria-hidden />
-          <h3 className="text-sm font-semibold text-fg">{group.agent}</h3>
-          <span className="text-xs text-faint">{group.skills.length}</span>
-          {/* No cards to anchor the section: the bundled toggle joins the
-              header row instead of dangling alone beneath it. */}
-          {own.length === 0 && proposals.length === 0 && bundledToggle}
-        </div>
-        {info && (
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted">
-            <span>Shared standard — read by</span>
-            {info.sharedWith.map((a) => (
-              <span key={a} className="inline-flex items-center gap-1 rounded-full bg-panel px-1.5 py-0.5">
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: agentColor(a) }} aria-hidden />
-                {a}
-              </span>
-            ))}
-            <span>&amp; more.</span>
-            {info.excludes.length > 0 && (
-              <span className="text-faint">Not {info.excludes.join(", ")} — it keeps its own folder.</span>
-            )}
-          </p>
-        )}
+      {/* One-line header; the shared-standard explainer (Agent Skills only) lives
+          in a hover popover on the ⓘ so the row stays compact — a real DOM
+          popover, since native `title` tooltips render nothing in the webview. */}
+      <div className="mb-3 flex items-center gap-2">
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: agentColor(group.agent) }} aria-hidden />
+        <h3 className="text-sm font-semibold text-fg">{agentLabel(group.agent)}</h3>
+        <span className="text-xs text-faint">{group.skills.length}</span>
+        {info && <SharedStandardInfo info={info} />}
+        {/* No cards to anchor the section: the bundled toggle joins the header
+            row instead of dangling alone beneath it. */}
+        {own.length === 0 && proposals.length === 0 && bundledToggle}
       </div>
       {(own.length > 0 || proposals.length > 0) && (
         <div className={gridCls}>
