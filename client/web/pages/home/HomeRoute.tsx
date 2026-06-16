@@ -60,12 +60,17 @@ function RefreshIcon({ className = "" }: { className?: string }) {
 const gridCls = "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4";
 const cardCls =
   "group flex flex-col gap-1.5 rounded-xl border border-border bg-surface p-3.5 text-left transition-colors hover:border-border-strong hover:bg-panel";
+// A skill with uncommitted changes is "pending review" like a proposed skill, so
+// it wears the same tinted-border treatment — in amber (its CHANGES tone) rather
+// than the proposed card's green — so the two read as one family of review cards.
+const dirtyCardCls =
+  "group flex flex-col gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_6%,var(--surface))] p-3.5 text-left transition-colors hover:border-[color-mix(in_srgb,var(--warning)_60%,transparent)] hover:bg-[color-mix(in_srgb,var(--warning)_12%,var(--surface))]";
 // Proposed cards wear a green-tinted border to stand apart in the grid. The card
 // body opens the skill (same click-to-open as a normal card), but Accept /
 // Discard live below as their own buttons — so the root stays a container, not a
 // single button. Mirrors the SkillCard look (h-full, hover) so they sit flush.
 const proposedCardCls =
-  "group flex h-full flex-col gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-surface p-3.5 text-left transition-colors hover:border-[color-mix(in_srgb,var(--ok)_60%,transparent)] hover:bg-panel";
+  "group flex h-full flex-col gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-[color-mix(in_srgb,var(--ok)_6%,var(--surface))] p-3.5 text-left transition-colors hover:border-[color-mix(in_srgb,var(--ok)_60%,transparent)] hover:bg-[color-mix(in_srgb,var(--ok)_12%,var(--surface))]";
 const pillCls = "shrink-0 rounded-full px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wide";
 
 function CheckIcon() {
@@ -139,7 +144,7 @@ function SkillCard({
     <div className="group relative h-full">
       {/* w-full so the shrink-wrapping <button> fills the column; h-full keeps
           sibling cards equal-height with the delete control at the real bottom. */}
-      <button type="button" onClick={() => onOpen(skill.root)} className={`${cardCls} h-full w-full`}>
+      <button type="button" onClick={() => onOpen(skill.root)} className={`${dirty ? dirtyCardCls : cardCls} h-full w-full`}>
         <div className="flex items-center gap-2">
           <FolderIcon open={false} name={name} />
           <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{name}</span>
@@ -371,109 +376,61 @@ function PickaxeIcon({ className = "", size = 13 }: { className?: string; size?:
   );
 }
 
-/** Plain words for the run's current stage (the terminal has the detail). */
-function stageText(mining: MineState): string {
-  if (mining.stage === "analyzing")
-    return mining.found ? `Analyzing ${Math.min(mining.found, 100)} sessions…` : "Analyzing your sessions…";
-  // Past the early stages the artifacts can't tell "drafting" from "report
-  // delivered, conversation open" — don't claim in-flight work indefinitely.
-  if (mining.stage === "reviewing") return "Session open — skills appear as they land";
-  return "Scanning your sessions…";
-}
-
-// Mining's door: a compact side card (content — discovered and mined skills —
-// leads the page). Carries the start button, the live run status (Watch/Stop),
-// the last-run line, the after-run conversation link, and the run's edits to
-// existing skills. Proposed NEW skills land inline in the Discovered grid.
+// Mining's door: a compact side card to start a run or reopen the last one. It
+// deliberately shows NO progress/status — a run is an interactive session that
+// stays open after the work lands, so the app can't reliably tell "still running"
+// from "done". Rather than guess (and usually guess wrong), the card just points
+// at the last session. Proposed NEW skills land inline in the Discovered grid.
 function MineCard({
   mining,
   onMine,
-  onStop,
-  onWatch,
   onContinue,
   onDetails,
 }: {
   mining: MineState | null;
   onMine: () => void;
-  onStop: () => void;
-  onWatch: () => void;
   onContinue: () => Promise<void>;
   onDetails: () => void;
 }) {
-  const running = mining?.status === "running";
   const hasRun = mining != null && mining.status !== "idle";
   const [continuing, setContinuing] = useState(false);
-  const description = (
-    <p className="text-xs leading-relaxed text-muted">Analyze your past conversations to create / update skills</p>
-  );
-  // The whole card opens the mining page; every inner control stops the
-  // bubble so its own action doesn't also navigate.
-  const actions =
-    running && mining ? (
-      <div className="mt-auto flex items-center gap-2 pt-1 text-xs">
-        {/* The spinner only while work is verifiably in flight; "reviewing"
-            covers the open-conversation steady state, which can last days. */}
-        {mining.stage !== "reviewing" && <Spinner className="h-3 w-3 shrink-0" />}
-        <span className="min-w-0 flex-1 truncate text-muted">{stageText(mining)}</span>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onWatch();
-          }}
-          className="shrink-0 font-medium text-accent hover:opacity-80"
-        >
-          Watch
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onStop();
-          }}
-          className="shrink-0 font-medium text-faint hover:text-danger"
-        >
-          Close
-        </button>
-      </div>
-    ) : (
-      <div className="mt-auto flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-1">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onMine();
-            }}
-            className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent-soft"
-          >
-            <PickaxeIcon />
-            Mine
-          </button>
-          {hasRun && (
-            <button
-              type="button"
-              disabled={continuing}
-              onClick={(e) => {
-                e.stopPropagation();
-                setContinuing(true);
-                void onContinue().finally(() => setContinuing(false));
-              }}
-              title="Reopens the mining conversation — ask it why, or steer a refinement (revived if its terminal was closed)"
-              className="text-xs font-medium text-accent hover:opacity-80 disabled:opacity-50"
-            >
-              {continuing ? "Opening…" : "Continue the conversation"}
-            </button>
-          )}
-      </div>
-    );
   return (
     <section
       onClick={onDetails}
       title="Mining details — the latest run and its files"
       className="flex flex-1 cursor-pointer flex-col gap-1 rounded-xl border border-border bg-surface p-3.5 transition-colors hover:border-border-strong hover:bg-panel"
     >
-      {description}
-      {actions}
+      <p className="text-xs leading-relaxed text-muted">Analyze your past conversations to create / update skills</p>
+      {/* The whole card opens the mining page; inner controls stop the bubble so
+          their own action doesn't also navigate. */}
+      <div className="mt-auto flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-1">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMine();
+          }}
+          className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent-soft"
+        >
+          <PickaxeIcon />
+          Mine
+        </button>
+        {hasRun && (
+          <button
+            type="button"
+            disabled={continuing}
+            onClick={(e) => {
+              e.stopPropagation();
+              setContinuing(true);
+              void onContinue().finally(() => setContinuing(false));
+            }}
+            title="Reopens your last mining session — revived in a fresh terminal if it was closed"
+            className="text-xs font-medium text-accent hover:opacity-80 disabled:opacity-50"
+          >
+            {continuing ? "Opening…" : "Open last session"}
+          </button>
+        )}
+      </div>
     </section>
   );
 }
@@ -737,28 +694,6 @@ export function Component() {
     }
   }, [navigate, mining?.terminalId]);
 
-  const stopMining = useCallback(async () => {
-    if (
-      !(await confirm({
-        title: "Close the mining session?",
-        body:
-          "Closes the run's terminal. If the agent is still working it's interrupted; " +
-          "you can reopen the conversation with Continue, and anything staged stays reviewable.",
-        confirmLabel: "Close",
-        // Only an interruption is destructive — closing an open conversation
-        // after the work landed is routine.
-        danger: mining?.stage !== "reviewing",
-      }))
-    )
-      return;
-    try {
-      await api.mineStop();
-    } catch {
-      // The state poll will reconcile either way.
-    }
-    void refreshMining();
-  }, [confirm, mining?.stage]);
-
   const acceptProposed = useCallback(
     async (root: string) => {
       setBusyRoot(root);
@@ -901,8 +836,6 @@ export function Component() {
             <MineCard
               mining={mining}
               onMine={() => setMineOpen(true)}
-              onStop={() => void stopMining()}
-              onWatch={() => navigate(terminalsPath(mining?.terminalId))}
               onContinue={continueMining}
               onDetails={() => navigate(miningPath())}
             />
