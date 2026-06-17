@@ -42,14 +42,6 @@ npm run dev          # native desktop
 |------|---------|------|
 | Native desktop | `npm run dev` | the app window |
 | Browser, local backend | `cargo run -p skill-server` + `npm run dev:vite` | `localhost:1420` |
-| Production | `npm run build`, then run `skill-server` | skill-server's port |
-
-Open a skill via the discovered list, the top-bar path input, **Browse…**, or a
-`?path=/abs/path/to/skill` deep link. Commit-message drafting is keyless: it shells
-out to a coding-agent CLI you're already logged into (Claude Code, Codex, or
-Gemini). An on-device model (`scripts/fetch-engine.sh` + `SKILL_STUDIO_COMMIT_AGENT=llama`)
-is an opt-in offline alternative. `examples/` holds real document skills (`docx`,
-`pdf`, `pptx`, `xlsx`).
 
 ## Roadmap
 
