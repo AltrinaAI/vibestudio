@@ -20,6 +20,19 @@ Built with [Tauri](https://tauri.app/), Skill Studio runs on macOS, Linux, and W
 - **Secrets manager** — machine-local store. Automatically detect secrets used and notice on export for "batteries included" sharing of the skills. 
 - **Terminals & remote hosts** — managed agent sessions that survive UI disconnect, so you can close your laptop and pick the run back up later. Point Studio at any SSH host and run agents there. Supports Claude Code, Codex, or a shell. 
 
+## Download
+
+Grab the latest signed build for your platform from the
+[**Releases**](https://github.com/AltrinaAI/skills-studio/releases/latest) page:
+
+| Platform | File |
+|----------|------|
+| macOS (Apple silicon / Intel) | `.dmg` |
+| Windows | `.exe` installer |
+| Linux | `.deb` |
+
+Prefer to build from source? See **Run it** below.
+
 ## Run it
 
 ```bash
