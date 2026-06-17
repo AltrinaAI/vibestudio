@@ -22,16 +22,16 @@ Built with [Tauri](https://tauri.app/), Skill Studio runs on macOS, Linux, and W
 
 ## Download
 
-Grab the latest signed build for your platform from the
-[**Releases**](https://github.com/AltrinaAI/skills-studio/releases/latest) page:
+Latest build, one click per platform:
 
-| Platform | File |
-|----------|------|
-| macOS (Apple silicon / Intel) | `.dmg` |
-| Windows | `.exe` installer |
-| Linux | `.deb` |
+| Platform | Download |
+|----------|----------|
+| **macOS** — Apple silicon | [`.dmg`](https://github.com/AltrinaAI/skills-studio/releases/latest/download/Skill-Studio-macOS-AppleSilicon.dmg) |
+| **macOS** — Intel | [`.dmg`](https://github.com/AltrinaAI/skills-studio/releases/latest/download/Skill-Studio-macOS-Intel.dmg) |
+| **Windows** | [`.exe` installer](https://github.com/AltrinaAI/skills-studio/releases/latest/download/Skill-Studio-Windows-x64-setup.exe) |
+| **Linux** — Debian/Ubuntu | [`.deb`](https://github.com/AltrinaAI/skills-studio/releases/latest/download/Skill-Studio-Linux-x86_64.deb) |
 
-Prefer to build from source? See **Run it** below.
+Older versions and checksums are on the [Releases](https://github.com/AltrinaAI/skills-studio/releases/latest) page. Prefer to build from source? See **Run it** below.
 
 ## Run it
 

@@ -1,0 +1,45 @@
+name: download-aliases
+
+# When a release is published (the manual rollout gate), attach version-less copies of
+# each desktop installer so the README can link to /releases/latest/download/<name>
+# without rotting on every version bump — Tauri's bundle filenames embed the version.
+# Isolated from build.yml so it can never break a release: the versioned assets and the
+# Releases-page fallback still work if this fails. Assets are matched by stable suffix,
+# so it stays correct as the version changes. Idempotent (--clobber), so safe to re-run.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to (re)build download aliases for (e.g. v0.1.21)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  alias:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror installers under stable, version-less names
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          names=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          mirror() {  # $1 = end-anchored regex over the versioned name, $2 = stable alias
+            local asset
+            asset=$(printf '%s\n' "$names" | grep -E "$1" | head -1 || true)
+            if [ -z "$asset" ]; then echo "skip: no asset matching /$1/"; return 0; fi
+            gh release download "$TAG" -p "$asset" -O "$2" --clobber
+            gh release upload "$TAG" "$2" --clobber
+            echo "aliased $asset -> $2"
+          }
+          mirror '_aarch64\.dmg$'   Skill-Studio-macOS-AppleSilicon.dmg
+          mirror '_x64\.dmg$'       Skill-Studio-macOS-Intel.dmg
+          mirror '_x64-setup\.exe$' Skill-Studio-Windows-x64-setup.exe
+          mirror '_amd64\.deb$'     Skill-Studio-Linux-x86_64.deb
