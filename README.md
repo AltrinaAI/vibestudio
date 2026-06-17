@@ -20,14 +20,24 @@ Built with [Tauri](https://tauri.app/), Skill Studio runs on macOS, Linux, and W
 - **Secrets manager** — machine-local store. Automatically detect secrets used and notice on export for "batteries included" sharing of the skills. 
 - **Terminals & remote hosts** — managed agent sessions that survive UI disconnect, so you can close your laptop and pick the run back up later. Point Studio at any SSH host and run agents there. Supports Claude Code, Codex, or a shell. 
 
-## Download
+## Install
 
-| Platform | Download |
-|----------|----------|
+Grab the latest build for your platform:
+
+| Platform | |
+|----------|--|
 | **macOS** — Apple silicon | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-macOS-AppleSilicon.dmg) |
 | **macOS** — Intel | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-macOS-Intel.dmg) |
 | **Windows** | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-Windows-x64-setup.exe) |
 | **Linux** — Debian/Ubuntu | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-Linux-x86_64.deb) |
+
+### First launch (unsigned builds)
+
+The builds aren't OS-notarized yet, so macOS and Windows warn the first time you open the app — once, then never again:
+
+- **macOS** — the app is blocked as unverified (or reported as "damaged"). Open **System Settings → Privacy & Security**, scroll to the message about Skill Studio, and click **Open Anyway**. 
+- **Windows** — SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**.
+- **Linux** — install the package with `sudo apt install ./Skill-Studio-Linux-x86_64.deb`.
 
 ## Build from source
 
