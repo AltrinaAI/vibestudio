@@ -218,6 +218,14 @@ on the very port the proxy connects to. WSL scripts are base64-wrapped to stay c
 `wsl.exe` command-line quoting. On reaching "connected" the SPA reloads, so the whole
 window rebinds to the remote. Terminals are tmux-backed, so sessions survive reconnects.
 
+**Resume + recents (VS Code-style).** The last successfully-connected host is remembered
+on the *connecting* machine (`/api/remote/last`, persisted by `sshmgr/lastconn.rs`); on
+launch the client auto-reconnects to it through the normal connect path, and an explicit
+disconnect (`disconnect(forget=true)`) clears it so the next launch starts Local — app-exit
+teardown keeps it. Recently-opened skills (`/api/recents`, [skill-core/src/recents.rs](server/skill-core/src/recents.rs))
+are a *normal* proxied route, not a locally-handled one, so — unlike the connection manager —
+they follow the active server: a machine's recents are the same whether reached locally or over SSH.
+
 **Same code in every server.** The manager lives server-side, so a `skill-server`
 exposes it whether it runs **in-process in the desktop** or **standalone** (browser-local
 dev, or a dev box) — there's no browser-vs-desktop divergence. Two safety gates keep it

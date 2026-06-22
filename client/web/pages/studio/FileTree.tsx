@@ -64,7 +64,9 @@ function TreeItem({
             title={node.rel}
             className={`flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left text-sm text-fg ${pad}`}
           >
-            <span aria-hidden className="w-3 text-muted">{open ? "▾" : "▸"}</span>
+            <svg aria-hidden width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`}>
+              <polyline points="9 6 15 12 9 18" />
+            </svg>
             <FolderIcon open={open} name={node.name} />
             <span className="truncate font-medium">{node.name}</span>
           </button>

@@ -104,6 +104,22 @@ function InlineDiff({ before, after, className }: { before: string; after: strin
 
 function ValidationPill({ issues }: { issues: ValidationIssue[] }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
   const { errors, warnings, ok } = summarizeIssues(issues);
   const label = !ok
     ? `${errors} issue${errors === 1 ? "" : "s"}`
@@ -112,7 +128,7 @@ function ValidationPill({ issues }: { issues: ValidationIssue[] }) {
       : "Spec compliant";
   const cls = !ok ? "text-danger" : warnings > 0 ? "text-warn" : "text-muted";
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <button type="button" onClick={() => setOpen((o) => !o)} className={`inline-flex items-center gap-1.5 ${cls} hover:underline`}>
         <span aria-hidden>{ok ? (warnings > 0 ? "▲" : "✓") : "▲"}</span>
         {label}
@@ -332,10 +348,13 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
           type="button"
           onClick={() => setShowProps((s) => !s)}
           aria-expanded={showProps}
-          className="text-xs font-medium text-muted hover:text-fg"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted hover:text-fg"
         >
-          {showProps ? "▾" : "▸"} Properties
-          {!showProps && propCount > 0 && <span className="ml-1 text-faint">· {propCount}</span>}
+          <svg aria-hidden width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 transition-transform ${showProps ? "rotate-90" : ""}`}>
+            <polyline points="9 6 15 12 9 18" />
+          </svg>
+          Properties
+          {!showProps && propCount > 0 && <span className="text-faint">· {propCount}</span>}
         </button>
         {showProps && (
           <div className="mt-2 space-y-2">
