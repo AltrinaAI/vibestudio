@@ -12,13 +12,13 @@ Built with [Tauri](https://tauri.app/), Skill Studio runs on macOS, Linux, and W
 
 ## Features
 
-- **Discover** and manage every skill on your machine, across Claude Code, Codex, Cursor,
-  Gemini CLI, OpenClaw, the shared `~/.agents/skills` standard, and project repos.
+- **Discover** and manage every skill on your machine, across Claude Code, Codex, opencode,
+  Cursor, Gemini CLI, OpenClaw, the shared `~/.agents/skills` standard, and project repos.
 - **Skill Mining** — use your local agent to analyze past agent conversations to create / update skills.
 - **Edit rendered markdown directly** — view and edit `SKILL.md` and other Markdown files directly on the rendered document. Double click to edit the raw markdown syntax. 
 - **Automatic versioning** — automatically track changes across all your skills and sync to any remote you specify
 - **Secrets manager** — machine-local store. Automatically detect secrets used and notice on export for "batteries included" sharing of the skills. 
-- **Terminals & remote hosts** — managed agent sessions that survive UI disconnect, so you can close your laptop and pick the run back up later. Point Studio at any SSH host and run agents there. Supports Claude Code, Codex, or a shell. 
+- **Terminals & remote hosts** — managed agent sessions that survive UI disconnect, so you can close your laptop and pick the run back up later. Point Studio at any SSH host and run agents there. Supports Claude Code, Codex, opencode, or a shell. 
 
 ## Install
 
