@@ -30,9 +30,8 @@ def main():
         discover_fn, _ = common.ADAPTERS[agent]
         n = 0
         for path in discover_fn():
-            try: mt = os.path.getmtime(path)
-            except OSError: continue
-            if mt < cutoff: continue
+            mt = common.path_mtime(path)  # file mtime, or a DB adapter's embedded epoch
+            if mt is None or mt < cutoff: continue
             rows.append({"agent": agent, "path": path,
                          "mtime": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mt))})
             n += 1

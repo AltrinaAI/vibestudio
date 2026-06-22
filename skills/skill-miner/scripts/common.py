@@ -77,6 +77,21 @@ def iter_jsonl(path):
     except Exception:
         return
 
+def _loads(s):
+    try: return json.loads(s)
+    except Exception: return None
+
+def path_mtime(path):
+    """Modification time of a discovered conversation, for the discover.py window
+    filter. File-backed adapters yield real paths (stat them); DB-backed adapters
+    (opencode — one SQLite file, no per-conversation file) embed their own
+    epoch-seconds after a `#mtime=` suffix on a synthetic id."""
+    if "#mtime=" in path:
+        try: return float(path.rsplit("#mtime=", 1)[1])
+        except ValueError: return None
+    try: return os.path.getmtime(path)
+    except OSError: return None
+
 # ---------------------------------------------------------------- path / main_dir
 def extract_paths_from_text(text, cwd):
     """Best-effort touched-file paths from free text: absolute paths + @mentions."""
@@ -206,6 +221,121 @@ def codex_discover(roots=None):
     for f in glob.glob(os.path.join(base, "**", "rollout-*.jsonl"), recursive=True):
         yield f
 
+def _opencode_conn():
+    """Read-only connection to opencode's SQLite store, or None if it's absent /
+    can't be opened. `mode=ro` never creates or write-locks the file, and WAL
+    allows concurrent readers, so this is safe while opencode is running. sqlite3
+    is stdlib but imported lazily so a Python built without it still mines the
+    file-based agents."""
+    db = os.path.join(HOME, ".local", "share", "opencode", "opencode.db")
+    if not os.path.exists(db):
+        return None
+    try:
+        import sqlite3
+        return sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2.0)
+    except Exception:
+        return None
+
+def _ms_to_iso(ms):
+    """opencode times are epoch-ms ints; the pipeline sorts/serializes ISO
+    strings (parse_ts reads them back), so normalize to the shared shape."""
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ms / 1000.0))
+    except Exception:
+        return None
+
+def opencode_discover(roots=None):
+    # One DB holds every session, so there's no per-conversation file to stat.
+    # Yield a synthetic id carrying the session's last-activity epoch after a
+    # `#mtime=` suffix; discover.py's window filter honors it via path_mtime().
+    conn = _opencode_conn()
+    if conn is None:
+        return
+    try:
+        rows = conn.execute(
+            "select s.id, coalesce(max(m.time_created), s.time_created) "
+            "from session s left join message m on m.session_id = s.id "
+            "group by s.id"
+        ).fetchall()
+    except Exception:
+        rows = []
+    finally:
+        conn.close()
+    for sid, last_ms in rows:
+        yield f"opencode:{sid}#mtime={(last_ms or 0) / 1000.0}"
+
+def opencode_parse(path):
+    sid = path.split("#mtime=", 1)[0].split("opencode:", 1)[-1]
+    conn = _opencode_conn()
+    if conn is None:
+        return None
+    try:
+        srow = conn.execute("select directory from session where id=?", (sid,)).fetchone()
+        if not srow:
+            return None
+        cwds = {}
+        if srow[0]:
+            cwds[srow[0]] = cwds.get(srow[0], 0) + 5  # the session's own cwd, weighted
+        users = []; weighted = []; events = []; skills = set(); first = last = None
+        msgs = conn.execute(
+            "select id, data, time_created from message where session_id=? order by time_created, id", (sid,)
+        ).fetchall()
+        for mid, mdata, mtime in msgs:
+            try: md = json.loads(mdata)
+            except Exception: continue
+            role = md.get("role")
+            if mtime:
+                if first is None: first = mtime
+                last = mtime
+            parts = conn.execute(
+                "select data from part where message_id=? order by time_created, id", (mid,)
+            ).fetchall()
+            cwd = max(cwds, key=cwds.get) if cwds else None
+            if role == "user":
+                # real user text only: skip the synthetic parts opencode injects
+                # for tool descriptions ("Called the Read tool with ...").
+                texts = []
+                for (pdata,) in parts:
+                    pd = _loads(pdata)
+                    if pd and pd.get("type") == "text" and not pd.get("synthetic"):
+                        texts.append(pd.get("text", ""))
+                raw = "\n".join(t for t in texts if t)
+                for nm in re.findall(r"<command-name>\s*/?([\w:-]+)", raw or ""):
+                    if nm not in BUILTIN_CMDS:
+                        skills.add(nm)
+                        if events[-1:] != [("skill", nm)]: events.append(("skill", nm))
+                t = clean(strip_agent_context(raw))
+                if t and len(t) > 8:
+                    users.append(t); events.append(("user", t))
+                for p in extract_paths_from_text(raw, cwd): weighted.append((p, 1))
+            elif role == "assistant":
+                for (pdata,) in parts:
+                    pd = _loads(pdata)
+                    if not pd: continue
+                    pt = pd.get("type")
+                    if pt == "tool":
+                        tool = (pd.get("tool") or "").lower()
+                        inp = (pd.get("state") or {}).get("input") or {}
+                        fp = inp.get("filePath") or inp.get("file_path") or inp.get("path")
+                        if tool in ("edit", "write", "patch") and fp: weighted.append((fp, 3))
+                        elif tool == "read" and fp: weighted.append((fp, 1))
+                        elif tool in ("grep", "glob", "list", "ls") and (inp.get("path") or fp):
+                            weighted.append((inp.get("path") or fp, 1))
+                        elif tool == "bash":
+                            for p in extract_paths_from_text(inp.get("command", ""), cwd): weighted.append((p, 1))
+                    elif pt == "patch":
+                        files = pd.get("files")
+                        if isinstance(files, dict): files = list(files.keys())
+                        if isinstance(files, list):
+                            for f in files:
+                                if isinstance(f, str): weighted.append((f, 3))
+    finally:
+        conn.close()
+    if not users:
+        return None
+    return _norm("opencode", f"opencode:{sid}", sid, cwds,
+                 _ms_to_iso(first), _ms_to_iso(last), users, weighted, skills, events)
+
 def codex_parse(path):
     cwds = {}; first = last = None; users = []; weighted = []; sess_id = None
     for o in iter_jsonl(path):
@@ -267,6 +397,7 @@ def _norm(agent, path, sid, cwds, first, last, users, weighted, skills, events=N
 ADAPTERS = {
     "claude-code": (claude_discover, claude_parse),
     "codex":       (codex_discover, codex_parse),
+    "opencode":    (opencode_discover, opencode_parse),
 }
 
 def parse_ts(ts):

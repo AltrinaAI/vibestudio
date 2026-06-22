@@ -74,6 +74,38 @@ Extra constraints:
 - Frontend: `api.generateCommitMessage()` / `api.commitModelStatus()` over `http`.
 - Verified end-to-end through the HTTP path (skill-server) — the only path.
 
+## Skill versioning: tracked by default
+
+Every personal skill is its **own git repo** — one repo per skill, so each is versioned,
+diffed, rolled back, and synced to GitHub independently. Tracking is **automatic, not
+opt-in**: `GET /api/discover` runs `discover::discover_and_autotrack`, which hands every
+eligible skill to `gitops::auto_track_personal`. Off the request thread (the first run may
+init many repos), that `git init`s a repo and lands a baseline **"Initial version"** commit
+for each — discovery itself stays snappy.
+
+- **Why init *and* a baseline commit, not just init.** An unborn HEAD is a dead state:
+  `git status` reports every file as untracked (the skill reads as all-dirty) and GitHub
+  sync needs ≥1 commit. The baseline keeps a fresh repo clean and immediately syncable.
+  With no git identity set we stop at the empty repo, and the Save-version flow surfaces the
+  identity prompt on the first manual save.
+- **Eligibility = personal, not a proposal, not already in a repo.** A `generated-skills/`
+  draft (still a proposal) and a skill already inside a parent repo (`project: Some`) are
+  both skipped — we never nest a `.git` inside someone's project repo. `auto_track_personal`
+  also cheaply skips roots that already have a `.git`. Secrets/junk never reach the baseline:
+  `ensure_exclude` seeds a local `.git/info/exclude` (never a committed `.gitignore`) before
+  the catch-all `git add -A`.
+- **Opt-out is sticky.** "Stop tracking" (`POST /api/git-untrack`) deletes the skill's own
+  `.git` *and* records its canonical path in a denylist
+  (`~/.config/skill-studio/untracked.json`); without that record the next discovery would
+  just re-create the repo. `auto_track_personal` skips every denylisted root, so a skill
+  stays untracked until "Start tracking" (`POST /api/git-track`) clears the denylist and
+  re-inits with a fresh baseline. Untrack is guarded — it refuses when a parent repo owns
+  the history, and only ever removes a `.git` whose top-level *is* the skill folder.
+- HTTP: `POST /api/git-track` / `/api/git-untrack` (the opt-in/out pair) and
+  `/api/git-commit` (the Save-version path; + `git-log`, `git-status`, `git-info`).
+  Frontend: `api.gitTrack` / `api.gitUntrack` / `api.gitCommit` in `client/web/lib/api.ts`,
+  surfaced in the Versions panel ([SourceControl.tsx](client/web/pages/studio/SourceControl.tsx)).
+
 ## Dev workflows
 
 | Goal | Backend | Frontend | Open |
