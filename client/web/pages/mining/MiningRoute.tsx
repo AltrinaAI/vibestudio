@@ -6,7 +6,7 @@ import NavBar from "@/components/NavBar";
 import { Modal } from "@/components/Modal";
 import { btnGhost, Spinner } from "@/components/ui";
 import * as api from "@/lib/api";
-import type { AgentOption, MineFile, MineFiles } from "@/lib/api";
+import type { AgentOption, MineFile, MineFiles, MineHistoryEntry } from "@/lib/api";
 import type { FileData } from "@/lib/types";
 import { refreshMining, useMining } from "@/lib/mining";
 import { terminalsPath } from "@/lib/routes";
@@ -60,16 +60,17 @@ function Fact({ label, value }: { label: string; value: string }) {
 }
 
 /**
- * The mining page (route: /mining): the latest run's record and the live
- * contents of its run dir. Only one run is retained — starting a new mine
- * wipes this folder — so this is a window into "what just happened / what is
- * happening", not a history. Reachable from the Home MineCard.
+ * The mining page (route: /mining): the active run's record and the live
+ * contents of its run dir, plus a display-only list of past runs (each
+ * archived under history/<id>/ when the next mine starts). Reachable from the
+ * Home MineCard.
  */
 export function Component() {
   const navigate = useNavigate();
   const mining = useMining();
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [files, setFiles] = useState<MineFiles | null>(null);
+  const [history, setHistory] = useState<MineHistoryEntry[] | null>(null);
   const [viewing, setViewing] = useState<FileData | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
@@ -80,6 +81,12 @@ export function Component() {
       .then(setFiles)
       .catch(() => setFiles({ runDir: "", files: [] }));
   }, []);
+  const refreshHistory = useCallback(() => {
+    api
+      .mineHistory()
+      .then(setHistory)
+      .catch(() => setHistory([]));
+  }, []);
   useEffect(() => {
     refreshFiles();
     void refreshMining();
@@ -88,6 +95,12 @@ export function Component() {
       .then(setAgents)
       .catch(() => {});
   }, [refreshFiles]);
+  // The archive grows only when a new run starts (which re-stamps the active
+  // run); re-list past runs whenever that happens.
+  const startedUnix = mining?.startedUnix;
+  useEffect(() => {
+    refreshHistory();
+  }, [refreshHistory, startedUnix]);
   // Artifacts appear as the run progresses; re-list on status flips and on a
   // slow tick while running (the state poll itself is the fast one).
   const status = mining?.status;
@@ -148,8 +161,8 @@ export function Component() {
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 pb-24 pt-10">
         <h1 className="text-2xl font-semibold tracking-tight text-fg">Mining</h1>
         <p className="mt-1.5 max-w-prose text-sm text-muted">
-          The most recent mining run and its working files. Only one run is kept — starting a new mine clears
-          this folder and replaces the record.
+          The most recent mining run and its working files. Starting a new mine archives the previous run below
+          and begins a fresh one.
         </p>
 
         {mining === null ? (
@@ -202,15 +215,52 @@ export function Component() {
                 )}
               </span>
             </div>
-            <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+            <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
               <Fact label="Agent" value={agentLabel(mining.agent)} />
               <Fact label="Model" value={mining.model || "Default"} />
               <Fact label="Effort" value={mining.effort || "Default"} />
-              <Fact label="Window" value={mining.days != null ? `Last ${mining.days} days` : "—"} />
             </dl>
+            {/* The exact launched prompt — the source of truth for what the run
+                actually looked at (window, scope), which a hand-edited prompt can
+                make a derived "Last N days" misrepresent. Older records that
+                predate prompt capture fall back to the window. */}
+            {mining.prompt ? (
+              <dl className="mt-4">
+                <dt className="text-[0.7rem] font-medium uppercase tracking-wider text-faint">Prompt</dt>
+                <dd className="mt-1">
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-panel p-3 font-mono text-xs leading-relaxed text-fg">
+                    {mining.prompt}
+                  </pre>
+                </dd>
+              </dl>
+            ) : (
+              mining.days != null && (
+                <dl className="mt-4">
+                  <Fact label="Window" value={`Last ${mining.days} days`} />
+                </dl>
+              )
+            )}
             {(mining.sources?.length ?? 0) > 0 && (
               <p className="mt-3 text-xs text-muted">Sources: {mining.sources?.join(", ")}</p>
             )}
+          </section>
+        )}
+
+        {history && history.length > 0 && (
+          <section className="mt-8">
+            <h2 className="mb-2 text-sm font-semibold text-fg">Past runs</h2>
+            <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
+              {history.map((h) => (
+                <li key={h.id} className="flex items-center gap-3 px-4 py-2.5">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-fg">{agentLabel(h.agent)}</span>
+                    <span className="block truncate font-mono text-[0.7rem] text-faint">{h.id}</span>
+                  </span>
+                  <span className="shrink-0 text-xs text-muted">Last {h.days} days</span>
+                  <span className="w-24 shrink-0 text-right text-xs text-faint">{timeAgo(h.startedUnix)}</span>
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 

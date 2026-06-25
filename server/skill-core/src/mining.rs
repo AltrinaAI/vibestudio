@@ -47,7 +47,10 @@ pub struct MineSource {
     pub sessions: usize,
 }
 
-/// The persisted record of the (single, most recent) run.
+/// The persisted record of the active (most recent) run. When a new run starts
+/// the active run is archived verbatim — record plus its `out/` artifacts —
+/// under `history/<id>/`, so past runs are kept rather than wiped (see
+/// [`reset_for_new_run`]).
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RunRecord {
@@ -63,6 +66,12 @@ struct RunRecord {
     #[serde(default)]
     effort: String,
     improve: bool,
+    /// The exact prompt the run was launched with — the agent's actual initial
+    /// message, including any edits made in the dialog. Shown on the mining
+    /// page in place of a derived "window", which a hand-edited prompt can
+    /// silently diverge from. Defaulted for records written before it existed.
+    #[serde(default)]
+    prompt: String,
     terminal_id: String,
     /// When a revival terminal was last spawned; within the startup grace the
     /// recorded terminal is trusted without probing (see [`continue_run`]).
@@ -101,16 +110,31 @@ pub struct MineState {
     pub days: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<String>>,
+    /// The prompt the run was launched with — the mining page shows it instead
+    /// of a derived window. Empty for runs recorded before it was captured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
+
+/// Children of the mining root: the active run's record, and the archive of
+/// past runs (`history/<id>/`). `out/` (the agent's artifacts) sits beside them.
+const RUN_FILE: &str = "run.json";
+const HISTORY_DIR: &str = "history";
 
 fn mining_dir() -> Result<PathBuf, String> {
     Ok(secrets::config_dir()?.join("mining"))
 }
+/// The active (most recent) run lives directly at the mining root; finished
+/// runs are archived under `history/<id>/` (see [`reset_for_new_run`]). The
+/// archive is the one child of the run dir that isn't part of the live run.
 fn run_dir() -> Result<PathBuf, String> {
-    Ok(mining_dir()?.join("current"))
+    mining_dir()
+}
+fn history_dir() -> Result<PathBuf, String> {
+    Ok(mining_dir()?.join(HISTORY_DIR))
 }
 fn run_file() -> Result<PathBuf, String> {
-    Ok(run_dir()?.join("run.json"))
+    Ok(run_dir()?.join(RUN_FILE))
 }
 
 fn now_unix() -> u64 {
@@ -144,6 +168,94 @@ fn save_run(rec: &RunRecord) -> Result<(), String> {
 fn count_lines(path: &Path) -> Option<usize> {
     let raw = std::fs::read_to_string(path).ok()?;
     Some(raw.lines().filter(|l| !l.trim().is_empty()).count())
+}
+
+/// Move the active run (the record + everything beside it, except the history
+/// archive itself) into `history/<id>/`, keyed by the run's own id. Called
+/// right before a new run lays down a fresh run dir, so past runs are kept
+/// instead of wiped. No record on disk ⇒ nothing to preserve (a prepared-but-
+/// never-started run carries no metadata to show, so it isn't a "past run").
+fn archive_active_in(mdir: &Path) -> Result<(), String> {
+    let run_file = mdir.join(RUN_FILE);
+    if !run_file.exists() {
+        return Ok(());
+    }
+    let id = std::fs::read_to_string(&run_file)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<RunRecord>(&raw).ok())
+        .map(|r| r.id)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("mine-{}", now_unix()));
+    let hdir = mdir.join(HISTORY_DIR);
+    let dest = hdir.join(&id);
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest).map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    if let Ok(rd) = std::fs::read_dir(mdir) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let p = e.path();
+            if p == hdir {
+                continue; // never move the archive into itself
+            }
+            std::fs::rename(&p, dest.join(e.file_name())).map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Ready the run dir for a fresh run: archive the previous run under
+/// `history/<id>/`, clear anything left at the root (a never-recorded leftover
+/// has no archive to go to), and recreate an empty `out/`. The history archive
+/// is the one thing preserved across the reset.
+fn reset_for_new_run() -> Result<(), String> {
+    reset_for_new_run_in(&mining_dir()?)
+}
+
+fn reset_for_new_run_in(mdir: &Path) -> Result<(), String> {
+    let hdir = mdir.join(HISTORY_DIR);
+    std::fs::create_dir_all(mdir).map_err(|e| e.to_string())?;
+    archive_active_in(mdir)?;
+    if let Ok(rd) = std::fs::read_dir(mdir) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let p = e.path();
+            if p == hdir {
+                continue;
+            }
+            let _ = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        }
+    }
+    std::fs::create_dir_all(mdir.join("out")).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// One-time upgrade of the pre-history layout, which kept the active run in a
+/// `current/` subdir. Promote that run to the new active slot (the mining root)
+/// so the upgrade is seamless — it then archives normally on the next run.
+/// Idempotent: a no-op once `current/` is gone, and it never clobbers an
+/// already-migrated root.
+fn migrate_legacy() {
+    if let Ok(mdir) = mining_dir() {
+        migrate_legacy_in(&mdir);
+    }
+}
+
+fn migrate_legacy_in(mdir: &Path) {
+    let legacy = mdir.join("current");
+    if !legacy.exists() {
+        return;
+    }
+    // A new-layout run already exists ⇒ the legacy dir is stale; just drop it.
+    if mdir.join(RUN_FILE).exists() {
+        let _ = std::fs::remove_dir_all(&legacy);
+        return;
+    }
+    if let Ok(rd) = std::fs::read_dir(&legacy) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let _ = std::fs::rename(e.path(), mdir.join(e.file_name()));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&legacy);
 }
 
 /// Per-source transcript counts within the window — powers the source picker.
@@ -371,6 +483,7 @@ pub fn prepare_run(
     prompt_override: Option<&str>,
     bundled_miner: Option<&Path>,
 ) -> Result<PreparedRun, String> {
+    migrate_legacy();
     if load_run().map(|r| r.status == "running").unwrap_or(false) {
         return Err("A mining run is already in progress.".into());
     }
@@ -381,12 +494,9 @@ pub fn prepare_run(
 
     ensure_installed_in(&home, bundled_miner)?;
 
-    // Reset the single retained run dir.
+    // Archive the previous run under history/<id>/, then lay down a fresh run dir.
+    reset_for_new_run()?;
     let rdir = run_dir()?;
-    if rdir.exists() {
-        std::fs::remove_dir_all(&rdir).map_err(|e| e.to_string())?;
-    }
-    std::fs::create_dir_all(rdir.join("out")).map_err(|e| e.to_string())?;
 
     let sources = default_sources(sources);
     let prompt = match prompt_override.map(str::trim).filter(|p| !p.is_empty()) {
@@ -460,6 +570,7 @@ pub fn record_run(
         model: model.to_string(),
         effort: effort.to_string(),
         improve: prep.improve,
+        prompt: prep.prompt,
         terminal_id: terminal_id.to_string(),
         continued_unix: 0,
         status: "running".into(),
@@ -489,6 +600,7 @@ pub fn continue_run(
     spawn_resume: impl Fn(&str, &str, Option<&str>, Option<&str>) -> Result<String, String>,
 ) -> Result<String, String> {
     let _guard = run_lock();
+    migrate_legacy();
     let mut rec = load_run().ok_or_else(|| "No mining run on record.".to_string())?;
     if rec.status == "running"
         || now_unix().saturating_sub(rec.continued_unix) <= REVIVE_GRACE_SECS
@@ -522,6 +634,7 @@ pub fn state(
     agent_running: impl Fn(&str) -> bool,
 ) -> Result<MineState, String> {
     let _guard = run_lock();
+    migrate_legacy();
     state_inner(session_exists, agent_running)
 }
 
@@ -541,6 +654,7 @@ fn state_inner(
             effort: None,
             days: None,
             sources: None,
+            prompt: None,
         });
     };
     let rdir = run_dir()?;
@@ -579,6 +693,7 @@ fn state_inner(
         effort: Some(rec.effort.clone()),
         days: Some(rec.days),
         sources: Some(rec.sources.clone()),
+        prompt: Some(rec.prompt.clone()),
     })
 }
 
@@ -597,16 +712,20 @@ pub struct MineFiles {
     pub files: Vec<MineFile>,
 }
 
-/// Everything currently in the (single retained) run dir — rel path, size,
-/// mtime, newest first. Powers the mining page's artifacts listing; viewing a
-/// file goes through the generic read-file route with `run_dir` as the root.
+/// Everything in the active run dir — rel path, size, mtime, newest first.
+/// The `history/` archive of past runs is skipped (it isn't part of the live
+/// run). Powers the mining page's artifacts listing; viewing a file goes
+/// through the generic read-file route with `run_dir` as the root.
 pub fn files() -> Result<MineFiles, String> {
-    fn walk(base: &Path, dir: &Path, out: &mut Vec<MineFile>) {
+    fn walk(base: &Path, dir: &Path, skip: &Path, out: &mut Vec<MineFile>) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         for e in rd.filter_map(|e| e.ok()) {
             let p = e.path();
+            if p == skip {
+                continue;
+            }
             if p.is_dir() {
-                walk(base, &p, out);
+                walk(base, &p, skip, out);
             } else if let Ok(meta) = e.metadata() {
                 let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().into_owned();
                 let modified_unix = meta
@@ -619,11 +738,69 @@ pub fn files() -> Result<MineFiles, String> {
             }
         }
     }
+    migrate_legacy();
     let rdir = run_dir()?;
+    let hdir = history_dir()?;
     let mut files = Vec::new();
-    walk(&rdir, &rdir, &mut files);
+    walk(&rdir, &rdir, &hdir, &mut files);
     files.sort_by(|a, b| b.modified_unix.cmp(&a.modified_unix).then_with(|| a.rel.cmp(&b.rel)));
     Ok(MineFiles { run_dir: rdir.to_string_lossy().into_owned(), files })
+}
+
+/// A past run's summary for the mining page's "Past runs" list — read straight
+/// from each `history/<id>/run.json`. Display-only for now: the artifacts stay
+/// on disk under the id, but there's no per-session reopen yet.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MineHistoryEntry {
+    pub id: String,
+    pub agent: String,
+    pub model: String,
+    pub effort: String,
+    pub days: u64,
+    pub sources: Vec<String>,
+    pub started_unix: u64,
+    /// The prompt this run was launched with (empty for pre-capture records).
+    pub prompt: String,
+    /// Always "ended" — an archived run is no longer live.
+    pub status: String,
+}
+
+/// Archived past runs, newest first. Best-effort: a history dir whose run.json
+/// is missing or unreadable is skipped rather than failing the whole listing.
+pub fn history() -> Result<Vec<MineHistoryEntry>, String> {
+    migrate_legacy();
+    history_in(&mining_dir()?)
+}
+
+fn history_in(mdir: &Path) -> Result<Vec<MineHistoryEntry>, String> {
+    let hdir = mdir.join(HISTORY_DIR);
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&hdir) {
+        for e in rd.filter_map(|e| e.ok()) {
+            if !e.path().is_dir() {
+                continue;
+            }
+            let raw = match std::fs::read_to_string(e.path().join(RUN_FILE)) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let Ok(rec) = serde_json::from_str::<RunRecord>(&raw) else { continue };
+            out.push(MineHistoryEntry {
+                id: rec.id,
+                agent: rec.agent,
+                model: rec.model,
+                effort: rec.effort,
+                days: rec.days,
+                sources: rec.sources,
+                started_unix: rec.started_unix,
+                prompt: rec.prompt,
+                status: "ended".into(),
+            });
+        }
+    }
+    out.sort_by(|a, b| b.started_unix.cmp(&a.started_unix).then_with(|| b.id.cmp(&a.id)));
+    Ok(out)
 }
 
 /// Stop a running run: the route layer kills the terminal; we mark the record.
@@ -788,6 +965,82 @@ mod tests {
             std::fs::read_to_string(copy.join("scripts/common.py")).unwrap().contains("opencode"),
             "the new bundled content actually landed"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Lay down an active run (record + an `out/` artifact) at `dir`.
+    fn write_record(dir: &Path, id: &str, started: u64, agent: &str) {
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        std::fs::write(dir.join("out/inventory.jsonl"), "{}\n{}\n").unwrap();
+        let rec = RunRecord {
+            id: id.into(),
+            started_unix: started,
+            days: 30,
+            sources: vec!["claude-code".into()],
+            agent: agent.into(),
+            model: String::new(),
+            effort: String::new(),
+            improve: true,
+            prompt: format!("Mine the past 30 days ({id})"),
+            terminal_id: "t1".into(),
+            continued_unix: 0,
+            status: "ended".into(),
+        };
+        std::fs::write(dir.join(RUN_FILE), serde_json::to_string_pretty(&rec).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn new_run_archives_the_previous_instead_of_wiping() {
+        let base = std::env::temp_dir().join(format!("ass_mine_archive_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let mdir = base.join("mining");
+        std::fs::create_dir_all(&mdir).unwrap();
+
+        // First run lives at the mining root; starting a second archives it.
+        write_record(&mdir, "mine-100", 100, "claude");
+        reset_for_new_run_in(&mdir).unwrap();
+        assert!(!mdir.join(RUN_FILE).exists(), "active record cleared for the new run");
+        assert!(
+            std::fs::read_dir(mdir.join("out")).unwrap().next().is_none(),
+            "the new run starts with an empty out/"
+        );
+        let arch1 = mdir.join(HISTORY_DIR).join("mine-100");
+        assert!(arch1.join(RUN_FILE).exists(), "the first run is kept under its id");
+        assert!(arch1.join("out/inventory.jsonl").exists(), "its artifacts moved with it");
+
+        // Run + start a third → the second is archived too, the first untouched.
+        write_record(&mdir, "mine-200", 200, "codex");
+        reset_for_new_run_in(&mdir).unwrap();
+        assert!(mdir.join(HISTORY_DIR).join("mine-200").join(RUN_FILE).exists());
+        assert!(arch1.join(RUN_FILE).exists(), "history accumulates, never wiped");
+
+        // Listing is newest-first and carries the agent/id for display.
+        let hist = history_in(&mdir).unwrap();
+        assert_eq!(hist.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["mine-200", "mine-100"]);
+        assert_eq!(hist[0].agent, "codex");
+        assert_eq!(hist[0].prompt, "Mine the past 30 days (mine-200)", "the launch prompt is kept for display");
+        assert!(hist.iter().all(|h| h.status == "ended"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn migrate_promotes_a_legacy_current_run() {
+        let base = std::env::temp_dir().join(format!("ass_mine_migrate_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let mdir = base.join("mining");
+        // Pre-history layout kept the active run in current/.
+        write_record(&mdir.join("current"), "mine-50", 50, "claude");
+
+        migrate_legacy_in(&mdir);
+        assert!(!mdir.join("current").exists(), "legacy dir removed after promotion");
+        assert!(mdir.join(RUN_FILE).exists(), "run promoted to the new active slot");
+        assert!(mdir.join("out/inventory.jsonl").exists(), "its artifacts came along");
+
+        // Idempotent: a second pass is a no-op and keeps the promoted run.
+        migrate_legacy_in(&mdir);
+        assert!(mdir.join(RUN_FILE).exists());
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }

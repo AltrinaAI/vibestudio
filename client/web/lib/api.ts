@@ -75,6 +75,14 @@ export const deleteFile = (root: string, rel: string) =>
 const readImage = (root: string, rel: string) =>
   http<{ mime: string; base64: string }>("POST", "read-image", { root, rel });
 
+/** Write a pasted/dropped media file into the skill folder. The bytes ride as
+ *  base64 over JSON (decoded server-side, the machine the skill lives on — local
+ *  or remote). The server places it under `dir` with a non-clobbering name
+ *  derived from `name` and returns the path it wrote, relative to `root` — ready
+ *  to drop into a `![](…)` link. */
+export const writeSkillAsset = (root: string, dir: string, name: string, bytes: Uint8Array) =>
+  http<{ rel: string }>("POST", "write-asset", { root, dir, name, data: bytesToB64(bytes) });
+
 export async function discoverSkills(): Promise<AgentSkills[]> {
   const groups = await http<AgentSkills[]>("GET", "discover");
   // The bundled built-in skills (load-secrets, skill-miner) ship with the app
@@ -771,9 +779,12 @@ export interface MineState {
   effort?: string;
   days?: number;
   sources?: string[];
+  /** The prompt the run was launched with — shown instead of a derived window
+   *  (which a hand-edited prompt can diverge from). "" for pre-capture runs. */
+  prompt?: string;
 }
 
-/** One file in the current run dir (the single retained run). */
+/** One file in the active run dir (the history archive is excluded). */
 export interface MineFile {
   rel: string;
   size: number;
@@ -782,6 +793,21 @@ export interface MineFile {
 export interface MineFiles {
   runDir: string;
   files: MineFile[];
+}
+
+/** A past run archived under history/<id>/ — display-only summary for the
+ *  mining page's "Past runs" list. `agent` is an AgentOption id. */
+export interface MineHistoryEntry {
+  id: string;
+  agent: string;
+  model: string;
+  effort: string;
+  days: number;
+  sources: string[];
+  startedUnix: number;
+  /** The prompt this run was launched with ("" for pre-capture runs). */
+  prompt: string;
+  status: string;
 }
 
 export interface MineStartArgs {
@@ -817,8 +843,10 @@ export interface MinerStatus {
 }
 export const minerStatus = () => http<MinerStatus>("GET", "mine/miner-status");
 export const mineState = () => http<MineState>("GET", "mine/state");
-/** The current run dir's files — the mining page's artifacts listing. */
+/** The active run dir's files — the mining page's artifacts listing. */
 export const mineFiles = () => http<MineFiles>("GET", "mine/files");
+/** Past runs (archived under history/<id>/), newest first — display-only. */
+export const mineHistory = () => http<MineHistoryEntry[]>("GET", "mine/history");
 export const mineStop = () => http<{ ok: boolean }>("POST", "mine/stop").then(() => {});
 /** The run's conversation: returns its live terminal, or revives the recorded
  *  agent session in a fresh one (works after the original pane was closed). */

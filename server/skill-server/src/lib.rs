@@ -610,6 +610,16 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             json_reply(skill::delete_path_impl(&s("root"), &s("rel")).map(|_| json!({ "ok": true })))
         }
         (Method::Post, "/api/read-image") => json_reply(skill::read_image_impl(&s("root"), &s("rel"))),
+        (Method::Post, "/api/write-asset") => {
+            // `data` is the media file base64-encoded (the JSON body must stay
+            // UTF-8 text — same convention as /api/import-zip). The server picks a
+            // non-clobbering name under `dir` and returns the path it wrote,
+            // relative to `root`, for the markdown link.
+            json_reply(
+                skill::write_asset_impl(&s("root"), &s("dir"), &s("name"), &s("data"))
+                    .map(|rel| json!({ "rel": rel })),
+            )
+        }
         (Method::Post, "/api/list-dir") => json_reply(skill::list_dir_impl(
             &s("path"),
             v.get("includeFiles").and_then(|x| x.as_bool()).unwrap_or(false),
@@ -702,9 +712,12 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let days = query_param(url, "days").and_then(|d| d.parse().ok()).unwrap_or(35);
             json_reply(Ok(mining::sources(days)))
         }
-        // The current run dir's files (the single retained run) — the mining
-        // page's artifacts listing.
+        // The active run dir's files (the history archive is excluded) — the
+        // mining page's artifacts listing.
         (Method::Get, "/api/mine/files") => json_reply(mining::files()),
+        // Past runs archived under history/<id>/ — the mining page's "Past
+        // runs" list (display-only: agent, id, when).
+        (Method::Get, "/api/mine/history") => json_reply(mining::history()),
         // Whether the installed skill-miner copies differ from the bundled
         // official version — the dialog only offers "reinstall" when they do.
         (Method::Get, "/api/mine/miner-status") => {
