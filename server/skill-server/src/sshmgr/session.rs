@@ -131,13 +131,25 @@ fn connect_flow(
 
     set_stage(state, generation, "installing", host, "Installing skill-server on the remote…");
     let bin = provision::ensure_installed(transport, &platform, app_version)?;
+    let version = provision::server_version(app_version);
 
     set_stage(state, generation, "launching", host, "Starting the remote server…");
+    // Keep-alive means a prior connect's server for this version can still be running
+    // (closing the laptop disconnects the client but leaves the remote server up). With a
+    // single client there's never a second user contending for it, so reattach to that
+    // warm server instead of launching a duplicate. ANY miss/failure falls through to a
+    // fresh launch below — so the worst case is exactly the pre-reattach behaviour.
+    if let Some((remote_port, token)) = probe_running(transport, &version) {
+        if let Ok(session) = reattach(transport, host, remote_port, &token) {
+            return Ok(session);
+        }
+    }
+
     let token = new_token();
     let mut last_err = String::new();
     // A few attempts to dodge a remote/local port collision (R is client-chosen).
     for attempt in 0..4u32 {
-        match launch(transport, host, &bin, &token, attempt) {
+        match launch(transport, host, &bin, &token, &version, attempt) {
             Ok(session) => return Ok(session),
             Err(LaunchError::PortConflict(e)) => last_err = e,
             Err(LaunchError::Fatal(e)) => return Err(e),
@@ -153,24 +165,84 @@ enum LaunchError {
     Fatal(String),
 }
 
-fn launch(transport: &Transport, host: &str, bin: &str, token: &str, attempt: u32) -> Result<Session, LaunchError> {
+fn launch(transport: &Transport, host: &str, bin: &str, token: &str, version: &str, attempt: u32) -> Result<Session, LaunchError> {
     let local_port = free_local_port().map_err(LaunchError::Fatal)?;
     // WSL shares the loopback with Windows, so the server listens on the same port the
     // client connects to (no `-L`). For ssh, R is client-chosen and forwarded.
     let remote_port = if transport.same_port() { local_port } else { pick_remote_port(attempt) };
-    // The token is delivered via an ENV VAR (not argv) so it never appears in the
-    // remote process's world-readable command line (/proc/<pid>/cmdline) — other
-    // users on a shared remote host can't read it from the process table. `bin` is
-    // remote-$HOME-expanded; `remote_port` is numeric; `token` is hex — all shell-safe.
-    let remote_cmd = format!(
-        "SKILL_STUDIO_SERVER_TOKEN={token} exec \"{bin}\" --host 127.0.0.1 --port {remote_port} --lifeline-stdin"
-    );
+    spawn_session(transport, host, &launch_script(version, bin, remote_port, token), local_port, remote_port, token)
+}
 
+/// Reattach to an already-running server (found by [`probe_running`]) instead of starting
+/// a second one: open the tunnel to its port and become the disconnect detector (announce
+/// READY, then hold stdin via `cat`). The warm server keeps running on its own lifeline;
+/// killing this child only drops our tunnel — consistent with the keep-alive intent.
+fn reattach(transport: &Transport, host: &str, remote_port: u16, token: &str) -> Result<Session, LaunchError> {
+    let local_port = if transport.same_port() { remote_port } else { free_local_port().map_err(LaunchError::Fatal)? };
+    spawn_session(transport, host, &reattach_script(remote_port), local_port, remote_port, token)
+}
+
+/// Ask the remote whether a server for this version is already running (kept alive past a
+/// prior disconnect) and, if so, return its `(port, token)` from the record the launch
+/// wrote — but only after confirming the recorded pid is alive AND is a `skill-server`
+/// (guards a reused pid). Any miss → `None` → the caller launches fresh.
+fn probe_running(transport: &Transport, version: &str) -> Option<(u16, String)> {
+    let out = super::ssh::capture(transport, &probe_script(version)).ok()?;
+    let mut it = out.split_whitespace();
+    let port: u16 = it.next()?.parse().ok()?;
+    let token = it.next()?.to_string();
+    (!token.is_empty()).then_some((port, token))
+}
+
+/// Launch remote command: record `pid port token` (so a later connect can REATTACH to this
+/// exact server rather than spawn a duplicate), then `exec` the server. `$$` is the shell
+/// pid, preserved across `exec`, so the record holds the server's real pid. Joined with `;`
+/// (never `&&`) so a record-write hiccup can't stop the server — at worst the record is
+/// missing and the next connect just launches fresh. Token via env (off the process table);
+/// `bin` is remote-`$HOME`-expanded, `remote_port` numeric, `token`/`version` shell-safe.
+fn launch_script(version: &str, bin: &str, remote_port: u16, token: &str) -> String {
+    format!(
+        "d=\"$HOME/.skill-studio/server/{version}\"; mkdir -p \"$d\"; \
+         printf '%s %s %s' \"$$\" {remote_port} {token} > \"$d/running\"; \
+         SKILL_STUDIO_SERVER_TOKEN={token} exec \"{bin}\" --host 127.0.0.1 --port {remote_port} --lifeline-stdin"
+    )
+}
+
+/// Reattach remote command: announce READY (so the client's startup wait succeeds) and hold
+/// stdin via `cat` — this child is purely the tunnel + disconnect detector; it starts no
+/// server.
+fn reattach_script(remote_port: u16) -> String {
+    format!("echo SKILL_SERVER_READY port={remote_port}; exec cat")
+}
+
+/// Probe remote command: echo `port token` iff the recorded pid is alive and is actually a
+/// `skill-server` (the comm check rejects a record whose pid was recycled by another
+/// process). Silent (exit 0, no output) on any miss.
+fn probe_script(version: &str) -> String {
+    format!(
+        "f=\"$HOME/.skill-studio/server/{version}/running\"; [ -f \"$f\" ] || exit 0; \
+         read pid port token < \"$f\"; [ -n \"$pid\" ] || exit 0; \
+         ps -p \"$pid\" -o comm= 2>/dev/null | grep -q skill-server || exit 0; \
+         echo \"$port $token\""
+    )
+}
+
+/// Spawn the transport child for `remote_cmd` (which either launches the server or, on a
+/// reattach, just tunnels), hold its stdin as the lifeline/keepalive, and block until the
+/// READY line before returning the live Session.
+fn spawn_session(
+    transport: &Transport,
+    host: &str,
+    remote_cmd: &str,
+    local_port: u16,
+    remote_port: u16,
+    token: &str,
+) -> Result<Session, LaunchError> {
     // The transport builds the right invocation: ssh with `-L` (and `--` so a host
     // beginning with `-` can't be read as an option), or `wsl.exe` with the script
     // base64-wrapped. The API also validates the host/distro up front.
     let mut child = transport
-        .launch_command(&remote_cmd, local_port, remote_port)
+        .launch_command(remote_cmd, local_port, remote_port)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -276,4 +348,42 @@ fn new_token() -> String {
     let mut buf = [0u8; 16];
     getrandom::getrandom(&mut buf).expect("getrandom failed");
     buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The launch must persist the (pid, port, token) record so a later connect can find
+    // and reattach to this exact server — and writing that record must never be able to
+    // stop the server from starting.
+    #[test]
+    fn launch_script_records_then_execs_server() {
+        let s = launch_script("0.1.4", "$HOME/.skill-studio/server/0.1.4/skill-server", 39544, "abc123");
+        assert!(s.contains("/.skill-studio/server/0.1.4"), "writes under the version dir: {s}");
+        assert!(s.contains("> \"$d/running\""), "persists the running record: {s}");
+        assert!(s.contains("\"$$\""), "records the server's own pid via $$: {s}");
+        assert!(s.contains("SKILL_STUDIO_SERVER_TOKEN=abc123"), "token via env, not argv: {s}");
+        assert!(s.contains("--port 39544") && s.contains("--lifeline-stdin"), "still launches the server: {s}");
+        assert!(!s.contains("&&"), "record write joined with ; so it can't block the exec: {s}");
+    }
+
+    // Reattach is tunnel-only: it announces READY and holds stdin, but starts NO server.
+    #[test]
+    fn reattach_script_tunnels_without_launching() {
+        let s = reattach_script(39544);
+        assert!(s.contains("SKILL_SERVER_READY port=39544"), "satisfies the client's READY wait: {s}");
+        assert!(s.contains("exec cat"), "holds stdin as the disconnect detector: {s}");
+        assert!(!s.contains("skill-server"), "must not launch a second server: {s}");
+    }
+
+    // The probe only reattaches to a LIVE server of the right identity — a recycled pid
+    // (now some other process) must not be mistaken for our server.
+    #[test]
+    fn probe_script_checks_liveness_and_identity() {
+        let s = probe_script("0.1.4");
+        assert!(s.contains("/.skill-studio/server/0.1.4/running"), "reads the version's record: {s}");
+        assert!(s.contains("ps -p \"$pid\"") && s.contains("grep -q skill-server"), "pid alive AND is a skill-server: {s}");
+        assert!(s.contains("echo \"$port $token\""), "yields port+token on a hit: {s}");
+    }
 }
