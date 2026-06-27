@@ -10,6 +10,18 @@ jobs:
     # tauri-action creates the GitHub Release and uploads assets — needs write.
     permissions:
       contents: write
+    # Bound every matrix leg. macOS notarization submits to Apple's notary
+    # service and `tauri build` waits on the result; first-time submissions for a
+    # new signing identity routinely get stuck "In Progress" for hours on Apple's
+    # side (tauri#8630, Apple forum 739751), and a healthy build+sign otherwise
+    # finishes in well under 15 min. Without this cap a stuck submission hangs the
+    # leg until the run is cancelled (~1h40m of 10x-billed macOS minutes wasted)
+    # and ships no DMG; with it the leg fails fast and — fail-fast:false plus the
+    # always() server-binaries job — the other artifacts still publish. If the
+    # hang persists once Apple's queue clears, switch notarization to App Store
+    # Connect API-key auth (APPLE_API_ISSUER/APPLE_API_KEY/APPLE_API_KEY_PATH),
+    # which is markedly more reliable than Apple-ID + app-specific-password.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
