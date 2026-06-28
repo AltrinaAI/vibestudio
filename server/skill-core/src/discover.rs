@@ -210,6 +210,13 @@ const PROJECT_PRUNE: &[&str] = &[
     "venv", "__pycache__", "site-packages", "Library", "AppData",
 ];
 
+// Top-level home folders that pop a macOS privacy prompt the first time they're
+// read AND never legitimately hold skills: Downloads (TCC-gated) and the media
+// library dirs (Music/Movies/Pictures). Pruned ONLY as a direct child of `home`.
+// Desktop and Documents are deliberately excluded — developers do keep repos
+// there, so we keep scanning them and accept the one justified TCC prompt.
+const HOME_TCC_DIRS: &[&str] = &["Downloads", "Music", "Movies", "Pictures"];
+
 fn is_marker(name: &str) -> bool {
     PROJECT_MARKERS.iter().any(|(m, _)| *m == name)
 }
@@ -234,6 +241,11 @@ fn prune_project_dir(path: &Path, home: &Path) -> bool {
     }
     // The home-level agent dotdirs are global; they're scanned separately.
     if is_marker(name) && path.parent() == Some(home) {
+        return true;
+    }
+    // macOS TCC-protected / media-library top-level home dirs — skills never
+    // live there, and descending into them triggers privacy prompts on first launch.
+    if path.parent() == Some(home) && HOME_TCC_DIRS.contains(&name) {
         return true;
     }
     false
@@ -458,6 +470,14 @@ mod tests {
         assert!(prune_project_dir(&p("/home/u/.agent"), &home));
         assert!(prune_project_dir(&p("/home/u/proj/node_modules"), &home));
         assert!(prune_project_dir(&p("/home/u/proj/.git"), &home));
+        // Privacy-prompting, never-skills home dirs are pruned at the home root…
+        assert!(prune_project_dir(&p("/home/u/Downloads"), &home));
+        assert!(prune_project_dir(&p("/home/u/Music"), &home));
+        // …but Desktop/Documents stay scanned (developers keep repos there)…
+        assert!(!prune_project_dir(&p("/home/u/Desktop"), &home));
+        assert!(!prune_project_dir(&p("/home/u/Documents"), &home));
+        // …and a same-named folder nested inside a repo is always scanned.
+        assert!(!prune_project_dir(&p("/home/u/proj/Documents"), &home));
         assert!(!prune_project_dir(&p("/home/u/proj/.claude"), &home));
         assert!(!prune_project_dir(&p("/home/u/proj/.agent"), &home));
         assert!(!prune_project_dir(&p("/home/u/proj/src"), &home));

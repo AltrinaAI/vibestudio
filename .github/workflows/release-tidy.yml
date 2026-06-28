@@ -4,12 +4,13 @@ name: release-tidy
 # clean, minimal set:
 #   * rename each installer to a stable, version-less name so the README's
 #     /releases/latest/download/<name> links never rot (Tauri names embed the version)
-#   * drop the redundant updater files: every .sig (signatures are embedded INLINE in
-#     latest.json, the updater never fetches the .sig) and the macOS .app.tar.gz
-#     (mac auto-update is deferred until notarization)
+#   * drop the redundant .sig files (signatures are embedded INLINE in latest.json,
+#     the updater never fetches them); the macOS .app.tar.gz is KEPT so mac
+#     auto-update works (builds are notarized as of v0.1.5)
 #   * rewrite latest.json so Windows/Linux auto-update reuses the renamed installers —
-#     minisign signs file CONTENT, not the name, so the inline signatures stay valid
-# Net per release: 4 installers + latest.json + the skill-server binaries.
+#     minisign signs file CONTENT, not the name, so the inline signatures stay valid;
+#     darwin entries are left untouched (they target the retained .app.tar.gz)
+# Net per release: 4 installers + the macOS .app.tar.gz + latest.json + skill-server binaries.
 # Isolated from build.yml so a bug here can never break the build/sign pipeline; if it
 # fails the release just keeps its raw assets. Idempotent — re-running is a no-op.
 on:
@@ -42,7 +43,7 @@ jobs:
               *.dmg)              new=Skill-Studio-macOS.dmg ;;
               *_x64-setup.exe)    new=Skill-Studio-Windows-x64-setup.exe ;;
               *_amd64.deb)        new=Skill-Studio-Linux-x86_64.deb ;;
-              *.sig|*.app.tar.gz) gh api -X DELETE "repos/$GH_REPO/releases/assets/$id" && echo "deleted $name"; continue ;;
+              *.sig)              gh api -X DELETE "repos/$GH_REPO/releases/assets/$id" && echo "deleted $name"; continue ;;
               *)                  continue ;;
             esac
             gh api -X PATCH "repos/$GH_REPO/releases/assets/$id" -f name="$new" >/dev/null && echo "renamed $name -> $new"
@@ -56,7 +57,6 @@ jobs:
             echo "no latest.json on this release — nothing to rewrite"; exit 0
           fi
           jq '.platforms |= (to_entries
-            | map(select(.key | startswith("darwin") | not))
             | map(
                 if (.key | test("windows")) then .value.url |= sub("/[^/]+$"; "/Skill-Studio-Windows-x64-setup.exe")
                 elif (.key | test("linux")) then .value.url |= sub("/[^/]+$"; "/Skill-Studio-Linux-x86_64.deb")
@@ -64,4 +64,4 @@ jobs:
             | from_entries)' latest.json > latest.tidied.json
           mv latest.tidied.json latest.json
           gh release upload "$TAG" latest.json --clobber
-          echo "rewrote latest.json (reuses installers; mac entries dropped)"
+          echo "rewrote latest.json (reuses installers; darwin entries kept)"

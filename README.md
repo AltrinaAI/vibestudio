@@ -32,9 +32,8 @@ Grab the latest build for your platform:
 
 ### First launch
 
-The builds aren't OS-notarized yet, so macOS and Windows warn the first time you open the app:
+Windows builds aren't code-signed yet, so each shows a one-time prompt:
 
-- **macOS** — the app is blocked as unverified. Open **System Settings → Privacy & Security**, scroll to the message about Skill Studio, and click **Open Anyway**. 
 - **Windows** — SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**.
 - **Linux** — install the package with `sudo apt install ./Skill-Studio-Linux-x86_64.deb`.
 
