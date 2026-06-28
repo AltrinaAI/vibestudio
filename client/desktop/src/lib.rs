@@ -198,6 +198,10 @@ pub fn run() {
                 .title("Skill Studio")
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(720.0, 480.0)
+                // Off by default in wry; enables Cmd/Ctrl +/-/0 whole-window zoom
+                // (native page zoom on Windows, an injected CSS-zoom polyfill on
+                // macOS/Linux). The terminal's DOM renderer stays crisp under it.
+                .zoom_hotkeys_enabled(true)
                 // `target="_blank"` links (release page, GitHub device flow) must
                 // open in the SYSTEM browser — wry's default silently drops them.
                 .on_new_window(|url, _features| {

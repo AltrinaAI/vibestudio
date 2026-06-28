@@ -106,6 +106,10 @@ pub struct SessionInfo {
     pub cwd: String,
     /// Unix seconds (as a string) when the session was created.
     pub created: String,
+    /// Unix seconds (as a string) of the session's most recent pane output (tmux
+    /// `window_activity`). Drives the rail's unread dot: the UI flags a
+    /// background terminal whose activity is newer than when it was last viewed.
+    pub activity: String,
 }
 
 // ─────────────────────────── base64 (single home) ───────────────────────────
@@ -294,8 +298,13 @@ fn basename(p: &str) -> String {
 /// List the app's live sessions (queries tmux, so this is correct within the
 /// current backend lifetime regardless of in-process attachment state).
 pub fn list_sessions() -> Result<Vec<SessionInfo>, String> {
+    // `window_activity`, not `session_activity`: the latter is frozen unless a
+    // client is attached, but the rail's unread dot is for *background*
+    // (unattached) sessions — so it must reflect raw pane output. Our sessions
+    // are single-window by construction, so the current window's activity is the
+    // session's activity.
     let fmt = format!(
-        "#{{session_name}}{s}#{{@ass_label}}{s}#{{@ass_agent}}{s}#{{@ass_cwd}}{s}#{{@ass_created}}",
+        "#{{session_name}}{s}#{{@ass_label}}{s}#{{@ass_agent}}{s}#{{@ass_cwd}}{s}#{{@ass_created}}{s}#{{window_activity}}",
         s = SEP
     );
     let out = match tmux().args(["list-sessions", "-F", &fmt]).output() {
@@ -329,6 +338,7 @@ pub fn list_sessions() -> Result<Vec<SessionInfo>, String> {
             agent: g(2),
             cwd: g(3),
             created: g(4),
+            activity: g(5),
         });
     }
     Ok(sessions)
@@ -677,6 +687,8 @@ fn create_session_inner(
         agent: opt.agent.clone(),
         cwd: cwd_resolved,
         created: secs.to_string(),
+        // A just-created session's last activity is its creation time.
+        activity: secs.to_string(),
     })
 }
 

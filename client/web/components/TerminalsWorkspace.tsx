@@ -10,6 +10,8 @@ import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
 
 const RAIL_KEY = "skillviewer-terminals-rail";
+/** Per-session "last viewed" activity marks (id → unix secs) for the unread dot. */
+const SEEN_KEY = "skillviewer-terminals-seen";
 
 function readRailW(): number {
   try {
@@ -18,6 +20,32 @@ function readRailW(): number {
   } catch {
     return 240;
   }
+}
+
+function readSeen(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(SEEN_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    return v && typeof v === "object" ? (v as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Stable, chronological order (oldest first) so the rail never reshuffles.
+ * tmux lists sessions alphabetically by name, and our names lead with the
+ * creating backend's pid — so a backend restart (app relaunch, version upgrade,
+ * remote reconnect) would otherwise reorder the whole list under you. Sorting by
+ * creation time keeps every existing row put and appends new terminals at the
+ * end; the id is a deterministic tiebreak when two share a second.
+ */
+function sortSessions(list: TermSession[]): TermSession[] {
+  return [...list].sort(
+    (a, b) =>
+      (Number(a.created) || 0) - (Number(b.created) || 0) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
 }
 
 function PlusIcon() {
@@ -67,9 +95,26 @@ export default function TerminalsWorkspace({
   const location = useLocation();
   const navigate = useNavigate();
 
+  // Unread tracking: a background terminal earns a dot when its tmux activity
+  // is newer than the last time it was viewed. The client only streams the
+  // active terminal, so the activity timestamp (from the server) is the only
+  // signal we have for what the other sessions are doing.
+  const seenRef = useRef<Record<string, number>>(readSeen());
+  const unread = useCallback(
+    (s: TermSession) => {
+      if (s.id === activeId) return false; // the one you're watching is never "new"
+      const act = Number(s.activity) || 0;
+      // Unseen sessions fall back to their own activity (i.e. start seen), so a
+      // reconnect doesn't light up every running terminal at once — they only
+      // dot on activity that arrives *after* we first list them.
+      return act > (seenRef.current[s.id] ?? act);
+    },
+    [activeId],
+  );
+
   const refresh = useCallback(async () => {
     try {
-      const list = await api.terminalList();
+      const list = sortSessions(await api.terminalList());
       setSessions(list);
       setActiveId((cur) => (cur && list.some((s) => s.id === cur) ? cur : list[0]?.id ?? null));
     } catch {
@@ -78,6 +123,26 @@ export default function TerminalsWorkspace({
       setLoading(false);
     }
   }, []);
+
+  // Keep the unread marks in step with each poll: seed newly-listed sessions,
+  // keep the active one current (so watching a chatty terminal never leaves a
+  // stale dot once you switch away), and drop marks for sessions that are gone.
+  useEffect(() => {
+    if (sessions.length === 0) return;
+    // Rebuilding from the live list also prunes marks for sessions that are gone.
+    const next: Record<string, number> = {};
+    for (const s of sessions) {
+      const act = Number(s.activity) || 0;
+      const prev = seenRef.current[s.id];
+      next[s.id] = prev == null || s.id === activeId ? act : prev;
+    }
+    seenRef.current = next;
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }, [sessions, activeId]);
 
   useEffect(() => {
     void refresh();
@@ -154,6 +219,9 @@ export default function TerminalsWorkspace({
   }, []);
 
   const active = sessions.find((s) => s.id === activeId) ?? null;
+  // Collapsed (narrow) layout hides the rail, so surface a single dot when any
+  // hidden session has new output.
+  const anyUnread = sessions.some(unread);
 
   const pane = active ? (
     <TerminalPane key={active.id} id={active.id} visible={visible} />
@@ -201,6 +269,13 @@ export default function TerminalsWorkspace({
         // Tight layout: the rail becomes a dropdown row above the terminal.
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center gap-1.5 border-b border-border bg-surface py-1.5 pl-2 pr-1.5">
+            {anyUnread && (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-info"
+                title="New output in a background terminal"
+                aria-label="New output in a background terminal"
+              />
+            )}
             <select
               value={activeId ?? ""}
               onChange={(e) => setActiveId(e.target.value)}
@@ -214,6 +289,7 @@ export default function TerminalsWorkspace({
               ) : (
                 sessions.map((s) => (
                   <option key={s.id} value={s.id}>
+                    {unread(s) ? "● " : ""}
                     {s.label}
                   </option>
                 ))
@@ -279,8 +355,16 @@ export default function TerminalsWorkspace({
                           s.id === activeId ? "bg-panel text-fg" : "text-muted hover:bg-panel hover:text-fg"
                         }`}
                       >
-                        <span className="w-full truncate text-sm">{s.label}</span>
-                        <span className="w-full truncate font-mono text-[0.65rem] text-faint" title={s.cwd}>
+                        <span className="flex w-full items-center gap-1.5">
+                          {/* Reserved slot so the label never shifts as the dot toggles. */}
+                          <span
+                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${unread(s) ? "bg-info" : "bg-transparent"}`}
+                            title={unread(s) ? "New output" : undefined}
+                            aria-label={unread(s) ? "New output" : undefined}
+                          />
+                          <span className="min-w-0 flex-1 truncate text-sm">{s.label}</span>
+                        </span>
+                        <span className="w-full truncate pl-3 font-mono text-[0.65rem] text-faint" title={s.cwd}>
                           {s.cwd}
                         </span>
                       </button>
@@ -312,7 +396,7 @@ export default function TerminalsWorkspace({
           onClose={() => setNewOpen(false)}
           onCreated={(s) => {
             setNewOpen(false);
-            setSessions((prev) => (prev.some((p) => p.id === s.id) ? prev : [s, ...prev]));
+            setSessions((prev) => (prev.some((p) => p.id === s.id) ? prev : sortSessions([...prev, s])));
             setActiveId(s.id);
           }}
         />

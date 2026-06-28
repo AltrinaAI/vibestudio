@@ -750,7 +750,11 @@ export interface TermSession {
   label: string;
   agent: string;
   cwd: string;
+  /** Unix seconds (string) when the session was created — the rail's stable sort key. */
   created: string;
+  /** Unix seconds (string) of the session's most recent tmux activity; the rail
+   *  compares it against a per-session "last viewed" mark for the unread dot. */
+  activity: string;
 }
 
 export interface CreateTermArgs {
