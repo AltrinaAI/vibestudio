@@ -1,6 +1,7 @@
 ---
 name: skill-miner
 description: "Mine past agent conversation(s) for high quality Agent Skills to generate / update. Use when asked to analyze past sessions for skill improvements, find what's worth turning into a skill or auto-generate/refresh skills from history. "
+license: MIT
 ---
 
 # Skill Miner
@@ -39,8 +40,7 @@ force a backend with `SKILL_MINER_LLM`.
 
 ## 1–2. Run the pipeline (scripts do the heavy, cheap-LLM work)
 
-Keep your working directory at the launch directory: all artifacts go under `./out`
-there — Skill Studio reads run progress from it.
+Keep your working directory at the launch directory: all artifacts go under `./out`.
 
 ```bash
 OUT=./out
@@ -119,14 +119,10 @@ repeated ask)**.
    to the repo root** (`src/pages/Run.tsx`), never machine-specific absolutes
    (`/home/<user>/…`) copied from a transcript. Where it lands:
    - **Extending an existing skill** → edit it **in place** at the skill path. Don't
-     fork or copy it. Skill Studio tracks every skill in git, so the user reviews
-     your uncommitted changes (flagged on its home page) and either saves a version
-     or reverts.
+     fork or copy it.
    - **A brand-new skill** → write it under
-     `~/.agents/skills/generated-skills/<name>/`. Skill Studio surfaces anything
-     staged there as a **Proposed** skill the user can **Accept** (promote into
-     `~/.agents/skills/`) or **Discard** — so don't drop new skills straight into a
-     live home.
+     `~/.agents/skills/generated-skills/<name>/`, staged for the user to review and
+     promote — don't drop new skills straight into a live home.
 5. **Report.** List what you created/modified and, for each, which dimension(s) it
    came from. For each notable rejected candidate, say in one line which dimension it
    missed. Include any repo docs you think should be updated instead of, or in
@@ -147,3 +143,12 @@ the normalized record (`_norm(...)`). The rest of the pipeline is unchanged. Cur
   `~/.agents/skills/generated-skills/`, edits go in place to the existing skill.
 - Sub-agent / review threads (Claude Code sidechains, Codex `thread_source:
   subagent`) are filtered out — only real user conversations are mined.
+
+## Viewing the results
+
+Run standalone, the results are plain files: the artifacts under `./out`, and the
+skills you changed (edited in place, or staged under `generated-skills/`). This skill
+also ships with [Skill Studio](https://github.com/AltrinaAI/skill-studio), a desktop
+app where the user watches the run live, reviews each new skill staged under
+`generated-skills/` as a **Proposed** card to **Accept** or **Discard**, and sees
+in-place edits as git-tracked changes to save as a version or revert.
