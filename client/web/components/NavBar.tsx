@@ -7,6 +7,7 @@ import { ThemeToggle } from "./ui";
 import RemoteMenu from "./RemoteMenu";
 import { secretsPath, studioPath } from "@/lib/routes";
 import { useRecents } from "@/lib/recents";
+import { useUpdate } from "@/lib/updates";
 import { toggleTheme } from "@/lib/theme";
 
 function TerminalIcon() {
@@ -90,6 +91,10 @@ export default function NavBar({
   const { pathname } = useLocation();
   const atHome = pathname === "/";
   const recents = useRecents();
+  // This desktop's own version (the update ledger's `current` — always local, never the
+  // connected remote's), so the running build is visible at a glance. "0.0.0" = an
+  // unstamped dev build; release tags stamp the real version.
+  const version = useUpdate()?.current;
 
   // "Studio" is a persistent destination with no singleton route (one repo per skill):
   // in a skill → its index (SKILL.md); else resume the last-opened skill; else Home.
@@ -107,6 +112,11 @@ export default function NavBar({
     <span className="flex items-center gap-1.5 text-brand">
       <AltrinaMark className="h-5 w-auto" />
       <span className="text-[0.95rem] font-semibold tracking-tight">Skill Studio</span>
+      {version && (
+        <span className="text-[0.7rem] font-normal tabular-nums text-muted" title={`Version ${version}`}>
+          {version}
+        </span>
+      )}
     </span>
   );
 
