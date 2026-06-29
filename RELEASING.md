@@ -61,9 +61,9 @@ Until you publish, **nothing reaches users** — a draft is invisible to the upd
      -q '.[] | select(.headBranch=="vX.Y.Z" and .name=="build") | .databaseId' | head -1)
    gh run watch "$RUN" --exit-status --interval 30
    ```
-   **macOS notarization is the long pole** (~5–20 min; Apple's notary service
+   **macOS notarization is usually the long pole** (~5–20 min; Apple's notary service
    occasionally hangs on a transient — re-run that leg if it stalls far past 20 min).
-   Linux finishes first, Windows next.
+   After desktop bundles finish, the `skill-server` matrix uploads standalone binaries.
 6. **Fix any errors.** If a leg fails: fix on `master`, push, then **delete and
    re-create the tag at the new HEAD** and re-push (`gh release delete vX.Y.Z --yes
    --cleanup-tag` if a draft was made; then re-tag). Re-running a leg is fine for
@@ -99,10 +99,10 @@ env -u SKILL_STUDIO_SERVER_TOKEN ./target/debug/skill-server --port 8799 &
 VITE_API_TARGET=http://127.0.0.1:8799 npx vite --port 1421 --strictPort &
 ```
 
-Then drive `http://localhost:1421` with `playwright-core` against the cached
-Chromium (`~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome`). Nav items
-are `<button role>` (e.g. `getByRole("button", { name: "Terminals" })`); Studio
-needs a real skill root from `GET /api/discover`, reached via `/#/studio/<encoded-root>`.
+Then drive `http://localhost:1421` with `playwright-core` if installed, or any
+headless Chromium/CDP harness against cached Chromium
+(`~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome`). Studio needs a real
+skill root from `GET /api/discover`, reached via `/#/studio/<encoded-root>`.
 
 ## Key facts & gotchas
 

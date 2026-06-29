@@ -382,12 +382,6 @@ export function validateSkill(input: ValidationInput): ValidationIssue[] {
           field: "references",
           message: `Body references "${ref}" but no such file exists in the skill.`,
         });
-      } else if (normalized.split("/").length > 2) {
-        issues.push({
-          level: "info",
-          field: "references",
-          message: `Reference "${ref}" is nested more than one directory deep; the spec recommends keeping references shallow.`,
-        });
       }
     }
   }
