@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -23,28 +23,28 @@ const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 const MIN_COLS = 20;
 const MIN_ROWS = 5;
 
-/** Write to the system clipboard from inside a user gesture. The async API first;
- *  if it's denied or missing (insecure-context LAN origins have no
- *  navigator.clipboard at all), fall back to a hidden-textarea execCommand copy,
- *  which only works during a gesture — exactly where this is called from. */
+/** Write to the system clipboard from inside a user gesture (the copy chord). The
+ *  synchronous hidden-textarea execCommand copy goes FIRST: it lands within the
+ *  gesture on WKWebView and on insecure-context LAN origins (which have no
+ *  navigator.clipboard at all), where the async Clipboard API is gesture-gated and
+ *  rejects a tick too late for a fallback to recover. Only if the legacy command is
+ *  unavailable (some browsers are retiring it) do we reach for the async API. */
 function copyText(text: string, refocus: () => void): void {
-  const fallback = () => {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand("copy");
-    } catch {
-      /* nothing left to try */
-    }
-    ta.remove();
-    refocus();
-  };
-  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(fallback);
-  else fallback();
+  let copied = false;
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  ta.remove();
+  refocus();
+  if (!copied) navigator.clipboard?.writeText(text).catch(() => {});
 }
 
 // Pull terminal colors from the app's CSS variables so it tracks the theme.
@@ -72,6 +72,21 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
   const hostRef = useRef<HTMLDivElement>(null);
   // Refreshed on each (re)attach; invoked when the pane becomes visible again.
   const refitRef = useRef<() => void>(() => {});
+  const termRef = useRef<Terminal | null>(null);
+
+  // Select mode: while on, a plain drag makes a NATIVE xterm selection instead of
+  // being forwarded to the agent's own mouse handling — the only way to drag-copy a
+  // region out of a full-screen, mouse-grabbing TUI (opencode) without tmux. The ref
+  // is what the (effect-scoped) shouldForceSelection override reads on each
+  // mousedown; the state drives the toggle's appearance. Toggling it never re-runs
+  // the attach effect (deps are stable), so the terminal is not torn down.
+  const selectModeRef = useRef(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const applySelectMode = useCallback((on: boolean) => {
+    selectModeRef.current = on;
+    setSelectMode(on);
+    termRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -82,10 +97,10 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       fontSize: 13,
       fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       scrollback: 8000,
-      // With `mouse on` (set server-side so the wheel scrolls tmux scrollback),
-      // tmux owns drag-selection — so give the user a native-selection escape
-      // hatch that doesn't depend on the OSC 52 clipboard hop below: Shift+drag
-      // (xterm's default) everywhere, and Option+drag on macOS.
+      // `mouse on` (server-side) lets the wheel scroll tmux scrollback, but means a
+      // plain drag is sent to the agent rather than selected. The Select toggle and
+      // Shift/Option+drag both force a native xterm selection instead — see the
+      // shouldForceSelection override after open().
       macOptionClickForcesSelection: true,
       theme: themeFromCss(),
     });
@@ -119,6 +134,12 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     // from inside this keystroke the clipboard write is allowed everywhere.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      // Esc leaves select mode (mirrors tmux copy-mode's q/Esc) without reaching the
+      // agent; outside select mode it passes through untouched.
+      if (e.key === "Escape" && selectModeRef.current) {
+        applySelectMode(false);
+        return false;
+      }
       const key = e.key.toLowerCase();
       // Paste chord (non-Mac; Cmd+V is already native on Mac): skip xterm so the
       // browser's default paste fires and rides the normal text/image path.
@@ -139,6 +160,24 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       return false;
     });
     term.open(host);
+    termRef.current = term;
+
+    // Force a NATIVE xterm selection (instead of forwarding the drag to the agent)
+    // when in select mode, or on Shift/Option-drag — the only way to drag-copy a
+    // region out of a full-screen mouse-grabbing TUI (opencode) without tmux.
+    // Reaches a private service like the fit addon reaches `_core`; guarded so a
+    // future xterm that drops it degrades instead of throwing.
+    const sel = (
+      term as unknown as {
+        _core?: { _selectionService?: { shouldForceSelection?: (e: MouseEvent) => boolean } };
+      }
+    )._core?._selectionService;
+    if (sel && typeof sel.shouldForceSelection === "function") {
+      sel.shouldForceSelection = (ev: MouseEvent) =>
+        selectModeRef.current || ev.shiftKey || (IS_MAC && ev.altKey);
+    } else {
+      log.warn("term", "xterm selection service unavailable — select mode inert");
+    }
 
     // xterm captures its colors at construction and renders to a canvas, so it
     // can't follow CSS the way the rest of the UI does — without this it keeps
@@ -254,9 +293,10 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       dataSub?.dispose();
       handle?.detach();
       term.dispose();
+      termRef.current = null;
       refitRef.current = () => {};
     };
-  }, [id]);
+  }, [id, applySelectMode]);
 
   // Kept alive across navigation via display:none, where the host has zero size
   // and fit() can't measure; re-fit (and resize the pty) once shown again.
@@ -264,5 +304,33 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     if (visible) requestAnimationFrame(() => refitRef.current());
   }, [visible]);
 
-  return <div ref={hostRef} className="h-full w-full overflow-hidden bg-surface p-1.5" />;
+  return (
+    <div className="group relative h-full w-full">
+      <button
+        type="button"
+        // preventDefault keeps the click from stealing focus / starting a drag in
+        // the terminal underneath; applySelectMode hands focus back to the term.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => applySelectMode(!selectMode)}
+        title={
+          selectMode
+            ? "Select mode on — drag to highlight, ⌘/Ctrl-C to copy, Esc to exit"
+            : "Select text — drag to highlight a region, then ⌘/Ctrl-C"
+        }
+        className={`absolute right-2 top-2 z-10 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm transition ${
+          selectMode
+            ? "bg-accent text-accent-fg"
+            : "pointer-events-none border border-border bg-surface/85 text-muted opacity-0 backdrop-blur hover:bg-panel hover:text-fg focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+        }`}
+      >
+        {selectMode ? "Selecting…" : "Select"}
+      </button>
+      <div
+        ref={hostRef}
+        className={`h-full w-full overflow-hidden bg-surface p-1.5 ${
+          selectMode ? "[&_.xterm-screen]:!cursor-text" : ""
+        }`}
+      />
+    </div>
+  );
 }
