@@ -772,9 +772,13 @@ export interface TermSession {
   cwd: string;
   /** Unix seconds (string) when the session was created — the rail's stable sort key. */
   created: string;
-  /** Unix seconds (string) of the session's most recent tmux activity; the rail
-   *  compares it against a per-session "last viewed" mark for the unread dot. */
+  /** Unix seconds (string) of the session's most recent tmux activity.
+   *  Informational — NOT the unread signal (an idle TUI keeps repainting). */
   activity: string;
+  /** Unix seconds (string) of the last turn-completion BELL the agent rang
+   *  ("0" until the first). The rail compares it against a per-session "last
+   *  viewed" mark for the unread dot — so the dot means "finished a turn". */
+  bellAt: string;
 }
 
 export interface CreateTermArgs {

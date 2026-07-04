@@ -107,9 +107,16 @@ pub struct SessionInfo {
     /// Unix seconds (as a string) when the session was created.
     pub created: String,
     /// Unix seconds (as a string) of the session's most recent pane output (tmux
-    /// `window_activity`). Drives the rail's unread dot: the UI flags a
-    /// background terminal whose activity is newer than when it was last viewed.
+    /// `window_activity`). Informational / ordering aid — NOT the unread signal
+    /// anymore: an idle agent TUI keeps repainting its pane, so output ≠ "new"
+    /// (see `bell_at`).
     pub activity: String,
+    /// Unix seconds (as a string) of the last terminal BELL the agent rang. tmux
+    /// `monitor-bell` + an `alert-bell` hook stamp it into `@ass_bell_at`; agents
+    /// we launch are configured to bell on turn-completion, so this means
+    /// "finished a turn / waiting for you" — what the rail's unread dot keys off.
+    /// "0" until the first bell.
+    pub bell_at: String,
 }
 
 // ─────────────────────────── base64 (single home) ───────────────────────────
@@ -304,7 +311,7 @@ pub fn list_sessions() -> Result<Vec<SessionInfo>, String> {
     // are single-window by construction, so the current window's activity is the
     // session's activity.
     let fmt = format!(
-        "#{{session_name}}{s}#{{@ass_label}}{s}#{{@ass_agent}}{s}#{{@ass_cwd}}{s}#{{@ass_created}}{s}#{{window_activity}}",
+        "#{{session_name}}{s}#{{@ass_label}}{s}#{{@ass_agent}}{s}#{{@ass_cwd}}{s}#{{@ass_created}}{s}#{{window_activity}}{s}#{{@ass_bell_at}}",
         s = SEP
     );
     let out = match tmux().args(["list-sessions", "-F", &fmt]).output() {
@@ -339,6 +346,9 @@ pub fn list_sessions() -> Result<Vec<SessionInfo>, String> {
             cwd: g(3),
             created: g(4),
             activity: g(5),
+            // Empty (→ "0" on the client) for sessions created before the bell
+            // hook existed, or any that haven't belled yet.
+            bell_at: g(6),
         });
     }
     Ok(sessions)
@@ -522,6 +532,25 @@ pub fn create_session(
             } else if skip_permissions {
                 argv.push("--dangerously-skip-permissions".into());
             }
+            // Ring the terminal bell when a turn finishes, so the rail's unread
+            // dot lights only when Claude is done and waiting (the alert-bell hook
+            // in create_session_inner turns that bell into the dot). `--settings`
+            // layers this for the launch only — the user's settings.json is left
+            // untouched.
+            argv.push("--settings".into());
+            argv.push(r#"{"preferredNotifChannel":"terminal_bell"}"#.into());
+        } else if opt.agent == "codex" {
+            // Same goal for Codex: force a real BEL on turn-completion. Its default
+            // `auto` method prefers an OSC-9 desktop notification tmux's bell
+            // monitor can't see, so pin `method=bel`; `condition=always` drops the
+            // focus gate (xterm has no audible bell, and the active terminal never
+            // dots anyway). Override syntax mirrors the existing effort override.
+            argv.push("-c".into());
+            argv.push("tui.notifications=true".into());
+            argv.push("-c".into());
+            argv.push(r#"tui.notification_method="bel""#.into());
+            argv.push("-c".into());
+            argv.push(r#"tui.notification_condition="always""#.into());
         }
         for a in extra_args {
             if !a.trim().is_empty() {
@@ -681,6 +710,23 @@ fn create_session_inner(
     }
     let _ = tmux().args(["kill-window", "-t", &stub]).output();
 
+    // Unread-dot signal: light the rail dot only when the agent FINISHES a turn,
+    // not on every line an idle TUI repaints. The agent is launched to ring the
+    // terminal BELL on turn-completion (see create_session); tmux `monitor-bell`
+    // catches it and this `alert-bell` hook stamps the bell's timestamp into
+    // `@ass_bell_at`, which list_sessions reports and the rail compares against
+    // "last viewed". monitor-bell is a WINDOW option, so it must be set now — on
+    // the real agent window (the session-option set()s above ran while only the
+    // throwaway stub window existed). set-option can't expand #{...} in a value,
+    // so run-shell does the expansion at bell time.
+    let _ = tmux().args(["set-option", "-t", &name, "monitor-bell", "on"]).output();
+    let _ = tmux().args(["set-option", "-t", &name, "@ass_bell_at", "0"]).output();
+    let bell_hook = format!(
+        "run-shell '{tmux} set-option -t {name} @ass_bell_at \"#{{window_activity}}\"'",
+        tmux = tmux_bin(),
+    );
+    let _ = tmux().args(["set-hook", "-t", &name, "alert-bell", &bell_hook]).output();
+
     Ok(SessionInfo {
         id: name,
         label,
@@ -689,6 +735,8 @@ fn create_session_inner(
         created: secs.to_string(),
         // A just-created session's last activity is its creation time.
         activity: secs.to_string(),
+        // No bell yet — the dot stays dark until the agent finishes a turn.
+        bell_at: "0".into(),
     })
 }
 

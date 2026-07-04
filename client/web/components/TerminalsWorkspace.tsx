@@ -98,13 +98,13 @@ export default function TerminalsWorkspace({
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Unread dot. A background session's tmux `activity` (window_activity) is the
-  // only signal we have for it — but it bumps on *any* pane repaint, including the
-  // redraw that attaching/resizing a terminal triggers. So "new" can't mean
-  // "activity since the last poll": a quick visit repaints the pane and would then
-  // leave a phantom dot behind. It means "activity since you last *viewed* it" — we
-  // stamp a session seen = now the instant you switch away from it (below), which
-  // covers both what you watched and the repaint your own attach caused.
+  // Unread dot. Keyed off the agent's turn-completion BELL (the server stamps it
+  // into `bellAt`), NOT raw output: an idle agent TUI (e.g. Codex) keeps
+  // repainting its pane, which bumped the old `window_activity` signal and left a
+  // phantom dot with nothing new to see. "Unread" = a bell rang since you last
+  // *viewed* the session — we stamp it seen = now the instant you switch away from
+  // it (below), so a turn you already watched, and the repaint your own attach
+  // causes, never light it.
   const [seen, setSeen] = useState<Record<string, number>>(readSeen);
   const markSeen = useCallback((id: string | null) => {
     if (id) setSeen((prev) => ({ ...prev, [id]: nowSecs() }));
@@ -112,11 +112,11 @@ export default function TerminalsWorkspace({
   const unread = useCallback(
     (s: TermSession) => {
       if (s.id === activeId) return false; // the one you're watching is never "new"
-      const act = Number(s.activity) || 0;
-      // Unseen sessions fall back to their own activity (i.e. start seen), so a
-      // reconnect doesn't light up every running terminal at once — they only
-      // dot on activity that arrives *after* we first list them.
-      return act > (seen[s.id] ?? act);
+      const bell = Number(s.bellAt) || 0;
+      // Unseen sessions fall back to their own bell time (i.e. start seen), so a
+      // reconnect doesn't light up every terminal that belled while you were away —
+      // they only dot on a bell that arrives *after* we first list them.
+      return bell > (seen[s.id] ?? bell);
     },
     [activeId, seen],
   );
@@ -153,9 +153,9 @@ export default function TerminalsWorkspace({
   }, []);
 
   // Seed a "seen" mark for each newly-listed session (start it seen = its own
-  // activity, so a reconnect doesn't light up every running terminal at once) and
-  // drop marks for sessions that are gone. Sessions you've actually viewed keep the
-  // stamp markSeen gave them; this only fills gaps and prunes.
+  // bell time, so a reconnect doesn't light up every terminal that belled while
+  // you were away) and drop marks for sessions that are gone. Sessions you've
+  // actually viewed keep the stamp markSeen gave them; this only fills gaps and prunes.
   useEffect(() => {
     if (sessions.length === 0) return;
     setSeen((prev) => {
@@ -163,7 +163,7 @@ export default function TerminalsWorkspace({
       let changed = Object.keys(prev).length !== sessions.length;
       for (const s of sessions) {
         if (prev[s.id] == null) changed = true;
-        next[s.id] = prev[s.id] ?? (Number(s.activity) || 0);
+        next[s.id] = prev[s.id] ?? (Number(s.bellAt) || 0);
       }
       return changed ? next : prev;
     });

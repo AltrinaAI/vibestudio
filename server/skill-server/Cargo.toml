@@ -12,9 +12,18 @@ path = "src/lib.rs"
 name = "skill-server"
 path = "src/main.rs"
 
+[features]
+# A full local backend (terminals + mining run locally via skill-term's native
+# pty). Default-on for the desktop and the standalone remote binary. A mobile
+# switchboard builds with `--no-default-features`: every /api/* is proxied to the
+# connected remote, so the local terminal/mining handlers — and portable-pty's
+# native deps (nix/libc/serial2) — are dropped entirely.
+default = ["local-backend"]
+local-backend = ["dep:skill-term"]
+
 [dependencies]
 skill-core = { path = "../skill-core" }
-skill-term = { path = "../skill-term" }
+skill-term = { path = "../skill-term", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"

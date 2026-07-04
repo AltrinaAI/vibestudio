@@ -268,6 +268,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
         // backend restarts by design — see skill-term), reap an inference
         // engine orphaned by a dead backend, then warm the model so the first
         // commit draft is fast.
+        #[cfg(feature = "local-backend")]
         skill_term::sweep_stale();
         engine::reap_orphans();
         engine::prefetch_model();
@@ -388,7 +389,10 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
 
         // ── local handling ──
         // Terminal output streams (SSE) block for the session's lifetime — run
-        // them on a dedicated thread so they never starve this worker.
+        // them on a dedicated thread so they never starve this worker. (Only a
+        // local-backend build serves terminals; a switchboard reaches them via the
+        // proxy branch above, so this is gated off there.)
+        #[cfg(feature = "local-backend")]
         if method == Method::Get && path == "/api/terminal/attach" {
             thread::spawn(move || stream_terminal(request, &url));
             continue;
@@ -655,9 +659,13 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
             json_reply(github::import_skill_from_remote(&s("url"), &s("target"), overwrite))
         }
-        // --- app-managed agent terminals (tmux-backed) ---
+        // --- app-managed agent terminals (tmux-backed) --- (local-backend only;
+        // a switchboard proxies every terminal route to the connected remote)
+        #[cfg(feature = "local-backend")]
         (Method::Get, "/api/terminal/agents") => json_reply(Ok(skill_term::detect_agents())),
+        #[cfg(feature = "local-backend")]
         (Method::Get, "/api/terminal/list") => json_reply(skill_term::list_sessions()),
+        #[cfg(feature = "local-backend")]
         (Method::Post, "/api/terminal/create") => {
             let u16f = |k: &str, d: u16| v.get(k).and_then(|x| x.as_u64()).map(|n| n as u16).unwrap_or(d);
             let boolf = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
@@ -692,19 +700,23 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 ))
             }
         }
+        #[cfg(feature = "local-backend")]
         (Method::Post, "/api/terminal/kill") => {
             json_reply(skill_term::kill_session(&s("id")).map(|_| json!({ "ok": true })))
         }
+        #[cfg(feature = "local-backend")]
         (Method::Post, "/api/terminal/input") => {
             let data = skill_term::b64_decode(&s("data"));
             json_reply(skill_term::write(&s("id"), &data).map(|_| json!({ "ok": true })))
         }
+        #[cfg(feature = "local-backend")]
         (Method::Post, "/api/terminal/resize") => {
             let u16f = |k: &str, d: u16| v.get(k).and_then(|x| x.as_u64()).map(|n| n as u16).unwrap_or(d);
             json_reply(
                 skill_term::resize(&s("id"), u16f("cols", 80), u16f("rows", 24)).map(|_| json!({ "ok": true })),
             )
         }
+        #[cfg(feature = "local-backend")]
         (Method::Post, "/api/terminal/paste-image") => {
             // `data` is the image base64-encoded (the JSON body must stay UTF-8
             // text — same convention as /api/import-zip). Returns the temp-file
@@ -742,6 +754,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let improve = v.get("improve").and_then(|x| x.as_bool()).unwrap_or(true);
             json_reply(mining::preview_prompt(days, improve).map(|p| json!({ "prompt": p })))
         }
+        #[cfg(feature = "local-backend")]
         (Method::Post, "/api/mine/start") => {
             let days = v.get("days").and_then(|x| x.as_u64()).unwrap_or(35);
             let sources: Vec<String> = v
@@ -789,6 +802,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         // live in it, else revived — via the terminal API's resume path
         // (create_session_resume), the same one `terminal/create {resume:true}`
         // takes.
+        #[cfg(feature = "local-backend")]
         (Method::Post, "/api/mine/continue") => {
             let exists = |id: &str| {
                 skill_term::list_sessions()
@@ -805,6 +819,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                     .map(|id| json!({ "terminalId": id })),
             )
         }
+        #[cfg(feature = "local-backend")]
         (Method::Get, "/api/mine/state") => {
             let exists = |id: &str| {
                 skill_term::list_sessions()
@@ -814,6 +829,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let running = |id: &str| !skill_term::agent_exited(id);
             json_reply(mining::state(exists, running))
         }
+        #[cfg(feature = "local-backend")]
         (Method::Post, "/api/mine/stop") => {
             json_reply(mining::stop(skill_term::kill_session).map(|_| json!({ "ok": true })))
         }
@@ -1026,7 +1042,9 @@ pub(crate) fn reply_status(request: Request, status: u16, error: &str) {
 }
 
 /// Handle `GET /api/terminal/attach?id=&cols=&rows=` on its own thread (it blocks
-/// for the session's lifetime, so it must not occupy a pooled worker).
+/// for the session's lifetime, so it must not occupy a pooled worker). Local-backend
+/// only — a switchboard proxies the attach SSE to the remote (`proxy::proxy_sse`).
+#[cfg(feature = "local-backend")]
 fn stream_terminal(request: Request, url: &str) {
     let _slot = match acquire_stream_slot() {
         Some(s) => s,
