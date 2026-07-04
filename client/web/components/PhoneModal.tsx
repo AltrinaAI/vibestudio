@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Spinner, btnGhost, btnPrimary } from "@/components/ui";
 import * as api from "@/lib/api";
+import { useRemote } from "@/lib/remote";
 
 export function PhoneIcon({ className = "" }: { className?: string }) {
   return (
@@ -46,6 +47,10 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false); // enable/disable in flight
   const [fail, setFail] = useState<EnableFailure | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // While SSH-connected, /api/phone/* proxies to the remote server (tailscale runs
+  // THERE), so the copy names the host instead of the local tray lifecycle.
+  const { status: remote } = useRemote();
+  const remoteHost = remote.state === "connected" ? (remote.host ?? null) : null;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -120,9 +125,11 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
           <>
             <p className="text-sm text-fg">
               Phone access works over Tailscale, a free private network between your devices — it isn't installed on
-              this computer yet.
+              {remoteHost ? ` the remote (${remoteHost})` : " this computer"} yet.
             </p>
-            <p className="text-sm text-muted">Install it here and on your phone (same account), then check again.</p>
+            <p className="text-sm text-muted">
+              Install it {remoteHost ? "there" : "here"} and on your phone (same account), then check again.
+            </p>
             <div className="flex justify-end gap-2 pt-1">
               <button type="button" onClick={() => void load()} className={btnGhost}>
                 Check again
@@ -139,9 +146,12 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
           </>
         ) : status.tailscale === "stopped" ? (
           <>
-            <p className="text-sm text-fg">Tailscale is installed but not running.</p>
+            <p className="text-sm text-fg">
+              Tailscale is installed{remoteHost ? ` on the remote (${remoteHost})` : ""} but not running.
+            </p>
             <p className="text-sm text-muted">
-              Start it with <code className={`${codeCls} px-1.5 py-0.5`}>tailscale up</code>, then check again.
+              Start it{remoteHost ? " there" : ""} with <code className={`${codeCls} px-1.5 py-0.5`}>tailscale up</code>,
+              then check again.
             </p>
             <div className="flex justify-end pt-1">
               <button type="button" onClick={() => void load()} className={btnPrimary}>
@@ -166,12 +176,14 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
             {error && <p className="text-sm text-danger">{error}</p>}
             <div className="flex items-center justify-between gap-3 pt-1">
               <p className="text-xs text-faint">
-                Served by Skill Studio
+                Served by {remoteHost ?? "Skill Studio"}
                 {live.server.version && !["dev", "0.0.0"].includes(live.server.version)
                   ? ` v${live.server.version}`
                   : ""}{" "}
-                on port {live.server.port} — available while the app is running (closing the window keeps it in your
-                tray).
+                on port {live.server.port} —{" "}
+                {remoteHost
+                  ? "runs on the remote and stays reachable when this computer is off."
+                  : "available while the app is running (closing the window keeps it in your tray)."}
               </p>
               <button type="button" onClick={() => void doDisable()} disabled={busy} className={`${btnGhost} shrink-0`}>
                 {busy ? "Turning off…" : "Turn off"}
@@ -185,7 +197,10 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
             </p>
             {fail?.stage === "operator" && fail.command ? (
               <div className="space-y-2">
-                <p className="text-sm text-muted">Tailscale needs a one-time permission. Run this once, then retry:</p>
+                <p className="text-sm text-muted">
+                  Tailscale needs a one-time permission. Run this once
+                  {remoteHost ? ` on the remote (${remoteHost})` : ""}, then retry:
+                </p>
                 <div className="flex items-center gap-2">
                   <code className={`${codeCls} min-w-0 flex-1 overflow-x-auto whitespace-nowrap`}>{fail.command}</code>
                   <CopyButton text={fail.command} />
@@ -193,7 +208,8 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
               </div>
             ) : fail?.stage === "consent" && fail.consentUrl ? (
               <p className="text-sm text-muted">
-                Tailscale needs your approval to serve from this computer. Approve it, then retry.
+                Tailscale needs your approval to serve from{" "}
+                {remoteHost ? `the remote (${remoteHost})` : "this computer"}. Approve it, then retry.
               </p>
             ) : fail ? (
               <p className="text-sm text-danger">{fail.message}</p>

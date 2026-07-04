@@ -198,13 +198,20 @@ fn probe_running(transport: &Transport, version: &str) -> Option<(u16, String)> 
 /// exact server rather than spawn a duplicate), then `exec` the server. `$$` is the shell
 /// pid, preserved across `exec`, so the record holds the server's real pid. Joined with `;`
 /// (never `&&`) so a record-write hiccup can't stop the server — at worst the record is
-/// missing and the next connect just launches fresh. Token via env (off the process table);
+/// missing and the next connect just launches fresh.
+///
+/// TOKENLESS since the phone inversion: the remote server is the hub a phone
+/// reaches directly through the remote's own `tailscale serve`, and a browser
+/// can't send a bearer — so the loopback bind + tailnet is the trust boundary,
+/// same as the local server. The token is still generated and RECORDED: the
+/// proxy keeps injecting it (a `None`-token server ignores it), which keeps
+/// reattach compatible with older, token-enforcing servers.
 /// `bin` is remote-`$HOME`-expanded, `remote_port` numeric, `token`/`version` shell-safe.
 fn launch_script(version: &str, bin: &str, remote_port: u16, token: &str) -> String {
     format!(
         "d=\"$HOME/.skill-studio/server/{version}\"; mkdir -p \"$d\"; \
          printf '%s %s %s' \"$$\" {remote_port} {token} > \"$d/running\"; \
-         SKILL_STUDIO_SERVER_TOKEN={token} exec \"{bin}\" --host 127.0.0.1 --port {remote_port} --lifeline-stdin"
+         exec \"{bin}\" --host 127.0.0.1 --port {remote_port} --lifeline-stdin"
     )
 }
 

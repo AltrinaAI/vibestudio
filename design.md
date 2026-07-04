@@ -157,20 +157,28 @@ exits. Icon present = reachable; icon gone = nothing of ours running. Every OTHE
 restart, plain Cmd+Q, crash) still leaves tmux agents running for the next launch to pick up —
 update restarts must never kill a working agent. There is **no separate daemon process**.
 
-**"Open on your phone" (`/api/phone/*`, `server/skill-server/src/phone.rs`).** Remote dialog →
-*Open on your phone* → QR (the tray's item deep-links the same modal via `#/?phone=1`).
-`PhoneControl.enable()` fronts **this very server** with `tailscale serve` and returns the
-`https://<magicdns>` URL + QR SVG. Guided failures: `operator` (one-time
-`tailscale set --operator`), `consent` (tailnet HTTPS approval link), `tailscale`
-missing/stopped. The desktop binds `PHONE_PORT` (8765) by preference — the serve mapping
-persists in tailscaled, so a stable port lets it find the app on the next launch — with an
-ephemeral fallback when taken (`status()` then reports not-serving rather than a dead QR).
-`/api/phone/*` and `/api/health` (`{version, pid}`) are always-local, never proxied. `embed-ui`
-builds compile `dist/` into the binary (`include_dir`; `build.rs` re-runs on dist changes —
-without it a rebuild silently ships a stale SPA) so the standalone/headless binary serves the
-UI with no dist on disk. skill-term sets tmux `exit-empty off` (server-scoped) at session
-creation: backends come and go (dev + app share the tmux server), and the server must survive
-zero-session gaps.
+**"Open on your phone" (`/api/phone/*`, `server/skill-server/src/phone.rs`) — the HUB is the
+server.** Remote dialog → *Open on your phone* → QR (the tray's item deep-links the same modal
+via `#/?phone=1`). `PhoneControl.enable()` fronts **the answering server** with the
+`tailscale serve` of **the machine it runs on** and returns that machine's `https://<magicdns>`
+URL + QR SVG. The phone routes are **ordinary routes — proxied like everything else**: switched
+onto a remote, the *remote's* PhoneControl answers, so the QR points at the remote itself and
+the phone reaches the stable machine directly — the client is an accessor, never a relay; it
+can sleep/shut down without costing the phone anything. (The desktop client itself always
+accesses remotes over SSH — reliability — never the tailnet.) Every loopback server carries a
+PhoneControl, provisioned remotes included; remote launches are **tokenless** (a browser can't
+send a bearer; loopback + tailnet is the trust boundary, same as local — the token is still
+recorded/injected for reattach compat with older servers). Guided failures describe the hub's
+machine: `operator` (one-time `tailscale set --operator`), `consent` (tailnet HTTPS approval
+link), `tailscale` missing/stopped. The desktop binds `PHONE_PORT` (8765) by preference — the
+serve mapping persists in tailscaled, so a stable port lets it find the app on the next launch
+— with an ephemeral fallback when taken; `enable()` re-runs `serve` against the current port,
+so a version bump's new remote port can't leave a stale mapping (`status()` reports
+not-serving rather than a dead QR). `embed-ui` builds compile `dist/` into the binary
+(`include_dir`; `build.rs` re-runs on dist changes — without it a rebuild silently ships a
+stale SPA) so the standalone/headless binary serves the UI with no dist on disk. skill-term
+sets tmux `exit-empty off` (server-scoped) at session creation: backends come and go (dev +
+app share the tmux server), and the server must survive zero-session gaps.
 
 **Browser-only constraints.** The SPA and API are root-absolute (Vite base `/`, `API_BASE=""`),
 so the server must sit at the origin root — no sub-path mounts. Tokens don't work from a plain
@@ -183,6 +191,18 @@ live on a loopback standalone server. Auto-resume of the last SSH remote is loop
 (`remote.ts maybeResume`), so a phone hitting the shared URL never silently flips the server's
 backing data. Multi-viewer polish (a second browser observing a remote connect/disconnect) is
 deliberately not handled yet.
+
+**Roadmap — account-backed access (not built).** The Tailscale prerequisite is three services in
+a trench coat — trust (reachability = auth), browser-valid certs, and NAT traversal — and a
+Skill Studio account could take over all three: cookie login (the keystone; it also unlocks LAN
+mode and phone→remote direct), Let's Encrypt via DNS-01 on a domain we control
+(`<user>.tunnel.…` — the `ts.net` trick: our DNS publishes the ACME TXT record, the private key
+never leaves the user's machine), and an outbound relay the app dials so NAT'd machines are
+reachable with zero router config (SNI passthrough only — the relay stays a blind pipe).
+Tailscale then demotes from prerequisite to the self-host/BYO-network path. Pairs with the
+account-backed secrets direction; a natural first paid tier (relay bandwidth is a real cost).
+Do **not** rebuild the mesh itself (WireGuard / hole punching / DERP) — relay-only is the 95%
+shortcut; browser-P2P (WebRTC) only if relay bandwidth ever forces it.
 
 ## Terminals: persistent by design
 
@@ -228,14 +248,15 @@ A **local proxy switchboard**; the webview never changes origin.
 - `/api/remote/{list,connect,disconnect,status,last}` is **always local** (`SshRemoteControl`,
   `server/skill-server/src/sshmgr/`); shells out to `ssh`, or `wsl.exe` for `wsl:<distro>`
   targets. A `Transport` enum abstracts the two (a WSL distro is just Linux).
-- While connected, **every other `/api/*` (incl. the `/api/terminal/attach` SSE) is
-  reverse-proxied** to the remote (`proxy.rs`) with the bearer token injected upstream — **so
-  the token never reaches the browser**. Also pinned local: `/api/update/*` and
-  `/api/client-log`. Non-`/api` GETs serve the local UI.
+- While connected, **every other `/api/*` (incl. the `/api/terminal/attach` SSE and
+  `/api/phone/*` — the phone hub is the remote) is reverse-proxied** to the remote (`proxy.rs`)
+  with the recorded token injected upstream (current servers launch tokenless — see the phone
+  section — but the header keeps reattach compatible with older, token-enforcing servers).
+  Pinned local: `/api/update/*` and `/api/client-log`. Non-`/api` GETs serve the local UI.
 - **Connect flow:** list targets (`~/.ssh/config` + WSL distros) → detect arch (`uname`) →
   ensure a version-pinned static-musl `skill-server` (checksum-verified) → launch loopback-bound
-  with a token via env → one transport child is both tunnel and lifeline (held stdin EOFs the
-  remote on disconnect/crash). ssh uses `ssh -L`; WSL shares Windows loopback (no `-L`). On
+  (tokenless; the token is generated + recorded for legacy reattach) → one transport child is
+  both tunnel and lifeline. ssh uses `ssh -L`; WSL shares Windows loopback (no `-L`). On
   "connected" the SPA reloads; tmux terminals survive reconnects.
 - **Resume/recents:** the last host is remembered on the connecting machine (`/api/remote/last`,
   `sshmgr/lastconn.rs`) and auto-reconnected; `disconnect(forget=true)` clears it. Recents

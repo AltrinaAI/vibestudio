@@ -69,9 +69,12 @@ fn main() {
     } else {
         None
     };
-    // Same gate as remoting: an interactive loopback server the user controls
-    // offers "Open on your phone" — enable() fronts THIS server with tailscale.
-    let phone = if !lifeline_stdin && is_loopback {
+    // Every loopback server offers "Open on your phone" — enable() fronts THIS
+    // server with the tailscale of the machine it runs on. That includes a
+    // provisioned remote: the stable server is the hub the phone reaches
+    // directly, so a sleeping client machine costs nothing. (The desktop client
+    // itself still connects over SSH, never the tailnet.)
+    let phone = if is_loopback {
         Some(std::sync::Arc::new(PhoneControl::new(env!("CARGO_PKG_VERSION").to_string())))
     } else {
         None

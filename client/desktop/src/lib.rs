@@ -297,7 +297,9 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |app, event| {
+        // `_app` is used only by the macOS Reopen arm; the underscore keeps it
+        // warning-free on the other platforms where that arm is compiled out.
+        .run(move |_app, event| {
             match event {
                 // Any non-tray exit (update restart, Cmd+Q, OS shutdown) tears down
                 // what only THIS process can use — the inference engine child and any
@@ -312,7 +314,7 @@ pub fn run() {
                 }
                 // macOS: clicking the dock icon with the window hidden re-shows it.
                 #[cfg(target_os = "macos")]
-                tauri::RunEvent::Reopen { .. } => show_main(app),
+                tauri::RunEvent::Reopen { .. } => show_main(_app),
                 _ => {}
             }
         });

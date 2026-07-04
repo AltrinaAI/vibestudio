@@ -13,16 +13,20 @@ const CANDIDATES: &[&str] = &[
 ];
 
 fn bin() -> Option<&'static str> {
-    static BIN: OnceLock<Option<&'static str>> = OnceLock::new();
-    *BIN.get_or_init(|| {
-        CANDIDATES.iter().copied().find(|c| {
-            Command::new(c)
-                .arg("version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        })
-    })
+    // Cache only success: while missing we re-probe, so the modal's "Check
+    // again" works right after the user installs Tailscale (no app restart).
+    static BIN: OnceLock<&'static str> = OnceLock::new();
+    if let Some(b) = BIN.get() {
+        return Some(b);
+    }
+    let found = CANDIDATES.iter().copied().find(|c| {
+        Command::new(c)
+            .arg("version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })?;
+    Some(BIN.get_or_init(|| found))
 }
 
 pub enum TsState {

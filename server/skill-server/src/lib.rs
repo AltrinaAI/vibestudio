@@ -384,35 +384,6 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
             send_reply(request, handle(&method, &url, &body, ctx));
             continue;
         }
-        // Identity of THIS process — ALWAYS local. `PhoneControl` probes the
-        // phone port with it and may kill the reported pid on version skew; a
-        // proxied reply would name the remote's pid and get an innocent local
-        // process killed.
-        if path == "/api/health" {
-            send_reply(
-                request,
-                json_reply(Ok(json!({
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "pid": std::process::id(),
-                }))),
-            );
-            continue;
-        }
-        // "Open on your phone" — ALWAYS local: it configures THIS machine's
-        // tailscale serve + local daemon, regardless of any connected remote.
-        if path.starts_with("/api/phone/") {
-            let reply = match (&ctx.phone, method.clone(), path.as_str()) {
-                (Some(p), Method::Get, "/api/phone/status") => json_reply(Ok(p.status())),
-                (Some(p), Method::Post, "/api/phone/enable") => json_reply(Ok(p.enable())),
-                (Some(p), Method::Post, "/api/phone/disable") => json_reply(Ok(p.disable())),
-                (Some(_), _, _) | (None, _, _) => {
-                    reply_status(request, 404, "phone access not available on this server");
-                    continue;
-                }
-            };
-            send_reply(request, reply);
-            continue;
-        }
         // While a remote is connected, every other /api/* is reverse-proxied to it.
         // (Must precede the local attach branch so the SSE stream proxies too.) BOTH
         // proxy paths run on their OWN thread, so a slow/hung remote can never pin a
@@ -724,6 +695,18 @@ fn serve_static(dist: &Path, url_path: &str) -> Reply {
             content_type: "text/plain; charset=utf-8".into(),
             extra: vec![],
         },
+    }
+}
+
+/// 404 for `/api/phone/*` on a server with no `PhoneControl` — the UI reads
+/// this as "hide the feature".
+fn phone_unavailable() -> Reply {
+    Reply {
+        status: 404,
+        body: serde_json::to_vec(&json!({ "error": "phone access not available on this server" }))
+            .unwrap_or_default(),
+        content_type: "application/json".into(),
+        extra: vec![],
     }
 }
 
@@ -1145,6 +1128,28 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 Err(e) => json_reply::<()>(Err(e)),
             }
         }
+        // The answering server's identity (informational; proxies like any route,
+        // so a connected switchboard reports the hub's version, not its own).
+        (Method::Get, "/api/health") => json_reply(Ok(json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "pid": std::process::id(),
+        }))),
+        // "Open on your phone" — answered by the HUB: proxied to the connected
+        // remote (whose PhoneControl runs tailscale on ITS machine and serves
+        // ITS port), or handled here when Local. The stable server is what the
+        // phone reaches; this client machine is never a relay.
+        (Method::Get, "/api/phone/status") => match &ctx.phone {
+            Some(p) => json_reply(Ok(p.status())),
+            None => phone_unavailable(),
+        },
+        (Method::Post, "/api/phone/enable") => match &ctx.phone {
+            Some(p) => json_reply(Ok(p.enable())),
+            None => phone_unavailable(),
+        },
+        (Method::Post, "/api/phone/disable") => match &ctx.phone {
+            Some(p) => json_reply(Ok(p.disable())),
+            None => phone_unavailable(),
+        },
         // Unknown /api routes must not fall through to the SPA fallback — a JSON
         // client probing an endpoint would get index.html with a 200.
         (_, p) if p.starts_with("/api/") => Reply {
