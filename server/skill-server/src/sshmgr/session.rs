@@ -347,10 +347,9 @@ fn read_stderr(child: &mut Child) -> String {
     s
 }
 
-/// A per-session bearer token (128 bits, hex). The proxy injects it on upstream
-/// requests; it never reaches the browser, and it's delivered to the remote via an
-/// env var (not argv) so it stays off the process table. Guards the loopback-bound
-/// remote server against other users on a shared remote host.
+/// A per-session token (128 bits, hex). Recorded in the `running` file and injected
+/// by the proxy on upstream requests — new servers launch tokenless and ignore it,
+/// but reattach to an older, token-enforcing server still works.
 fn new_token() -> String {
     let mut buf = [0u8; 16];
     getrandom::getrandom(&mut buf).expect("getrandom failed");
@@ -370,7 +369,8 @@ mod tests {
         assert!(s.contains("/.skill-studio/server/0.1.4"), "writes under the version dir: {s}");
         assert!(s.contains("> \"$d/running\""), "persists the running record: {s}");
         assert!(s.contains("\"$$\""), "records the server's own pid via $$: {s}");
-        assert!(s.contains("SKILL_STUDIO_SERVER_TOKEN=abc123"), "token via env, not argv: {s}");
+        assert!(s.contains(" abc123 > "), "token recorded for reattach compat: {s}");
+        assert!(!s.contains("SKILL_STUDIO_SERVER_TOKEN"), "tokenless launch — no env token: {s}");
         assert!(s.contains("--port 39544") && s.contains("--lifeline-stdin"), "still launches the server: {s}");
         assert!(!s.contains("&&"), "record write joined with ; so it can't block the exec: {s}");
     }
