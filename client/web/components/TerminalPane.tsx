@@ -508,12 +508,12 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
           {selectMode ? "Selecting…" : "Select"}
         </button>
       </div>
-      <div
-        ref={hostRef}
-        className={`h-full w-full overflow-hidden bg-surface p-1.5 ${
-          selectMode ? "[&_.xterm-screen]:!cursor-text" : ""
-        }`}
-      />
+      {/* Padding lives on the wrapper, NOT the fit-measured host: the fit addon
+          reads the host's computed height, which under border-box includes its
+          own padding — counting it as usable space adds a clipped extra row. */}
+      <div className="h-full w-full overflow-hidden bg-surface p-1.5">
+        <div ref={hostRef} className={`h-full w-full ${selectMode ? "[&_.xterm-screen]:!cursor-text" : ""}`} />
+      </div>
     </div>
   );
 }
