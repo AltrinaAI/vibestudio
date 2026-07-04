@@ -746,6 +746,13 @@ body {
   height: 100vh;
   height: 100dvh;
 }
+/* Soft keyboard up on WebKit (which pans instead of resizing the layout
+   viewport): lib/softKeyboard.ts stamps data-kb + --app-vvh together, pinning
+   full-height surfaces to the visual viewport so the terminal shifts above the
+   keyboard at focus time, not at the first keystroke. */
+:root[data-kb] .h-dvh {
+  height: var(--app-vvh);
+}
 .min-h-dvh {
   min-height: 100vh;
   min-height: 100dvh;
