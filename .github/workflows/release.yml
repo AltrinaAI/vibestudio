@@ -153,6 +153,8 @@ jobs:
       # Updater .sig files are redundant as release assets — tauri-action embeds each
       # signature INLINE in latest.json (the updater never fetches the .sig). Drop them
       # at the source, right after this leg's upload, so the draft never carries them.
+      # NB: the release is still a DRAFT here, and `releases/tags/<tag>` resolves only
+      # published releases — look the draft up via the list endpoint instead.
       - name: Drop redundant .sig assets
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -160,8 +162,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh api "repos/$GH_REPO/releases/tags/${{ github.ref_name }}" \
-            --jq '.assets[] | select(.name | endswith(".sig")) | .id' |
+          rid=$(gh api "repos/$GH_REPO/releases?per_page=30" \
+            --jq "[.[] | select(.tag_name == \"$GITHUB_REF_NAME\")][0].id // empty")
+          [ -n "$rid" ] || { echo "no release for $GITHUB_REF_NAME yet — nothing to drop"; exit 0; }
+          gh api "repos/$GH_REPO/releases/$rid/assets?per_page=100" \
+            --jq '.[] | select(.name | endswith(".sig")) | .id' |
           while read -r id; do
             gh api -X DELETE "repos/$GH_REPO/releases/assets/$id" && echo "deleted sig asset $id"
           done
