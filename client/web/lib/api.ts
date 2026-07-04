@@ -936,6 +936,74 @@ export const terminalCreate = (a: CreateTermArgs) => http<TermSession>("POST", "
 export const terminalKill = (id: string) =>
   http<{ ok: boolean }>("POST", "terminal/kill", { id }).then(() => {});
 
+// --- agent turn-finish notifications ---
+// The SPA decides WHEN a bell deserves a notification (lib/terminals.ts); these
+// routes are pinned LOCAL (never proxied) because a toast/badge belongs to the
+// machine whose screen you're looking at. A server with no native surface
+// (standalone binary, browser mode) 404s them — the notifier falls back to the
+// Web Notification API where the platform has one.
+
+/** Whether this origin's server can show native OS notifications (the desktop
+ *  shell). 404 = no. */
+export const notifyStatus = () => http<{ native: boolean }>("GET", "notify/status");
+export const notifyNative = (title: string, body: string) =>
+  http<{ ok: boolean }>("POST", "notify", { title, body }).then(() => {});
+/** Ask the OS for notification permission (macOS prompts; elsewhere a no-op). */
+export const notifyPrime = () => http<{ ok: boolean }>("POST", "notify/prime").then(() => {});
+/** Dock/taskbar unread-count badge; 0 clears. */
+export const notifyBadge = (count: number) =>
+  http<{ ok: boolean }>("POST", "notify/badge", { count }).then(() => {});
+
+/** One terminal lifecycle event from `GET /api/events`. `at` is the session's
+ *  `bellAt` (unix secs, string) at emit time. */
+export interface TermEvent {
+  id: string;
+  label: string;
+  agent: string;
+  cwd: string;
+  at: string;
+}
+
+/**
+ * Subscribe to the server's terminal lifecycle events (SSE): `bell` (an agent
+ * finished a turn), `opened`, `closed`. Events are edge HINTS — callers should
+ * re-fetch `terminalList` on each one rather than trusting the payload as state.
+ * EventSource retries transient drops itself; a fatal close (route missing on an
+ * older server, topology change mid-stream) fires `onDown` once and the caller
+ * decides whether/when to resubscribe.
+ */
+export function terminalEvents(
+  onEvent: (kind: "bell" | "opened" | "closed", e: TermEvent) => void,
+  onDown: () => void,
+): { close(): void } {
+  const es = new EventSource(`${API_BASE}/api/events`);
+  let done = false;
+  const forward = (kind: "bell" | "opened" | "closed") => (m: MessageEvent) => {
+    try {
+      onEvent(kind, JSON.parse(m.data as string) as TermEvent);
+    } catch {
+      /* malformed frame — skip */
+    }
+  };
+  es.addEventListener("bell", forward("bell"));
+  es.addEventListener("opened", forward("opened"));
+  es.addEventListener("closed", forward("closed"));
+  es.onerror = () => {
+    log.debug("sse", `events readyState=${es.readyState}`);
+    if (es.readyState === EventSource.CLOSED && !done) {
+      done = true;
+      es.close();
+      onDown();
+    }
+  };
+  return {
+    close: () => {
+      done = true;
+      es.close();
+    },
+  };
+}
+
 // base64 ↔ bytes for the text-only transports (SSE data: frames / JSON input).
 function bytesToB64(bytes: Uint8Array): string {
   let bin = "";

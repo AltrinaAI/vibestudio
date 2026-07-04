@@ -7,6 +7,7 @@ import FolderPicker from "@/components/FolderPicker";
 import * as api from "@/lib/api";
 import type { AgentOption } from "@/lib/api";
 import { loadTerminalPrefs, saveTerminalPrefs } from "@/lib/terminalPrefs";
+import { primeNotifications } from "@/lib/terminals";
 
 function optionLabel(a: AgentOption): string {
   if (a.agent === "shell") return "Shell (bash)";
@@ -102,6 +103,10 @@ export default function NewTerminalDialog({
 
   const create = async () => {
     if (!selected) return;
+    // Ask for notification permission NOW, while the OS prompt has an obvious
+    // "why" (you just launched an agent) and the click still counts as a user
+    // gesture (the browser's requestPermission needs one — no awaits first).
+    primeNotifications();
     setBusy(true);
     setError(null);
     try {

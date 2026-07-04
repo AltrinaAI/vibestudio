@@ -8,10 +8,9 @@ import ResizeHandle from "@/components/ResizeHandle";
 import TerminalPane from "@/components/TerminalPane";
 import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
+import * as terminals from "@/lib/terminals";
 
 const RAIL_KEY = "skillviewer-terminals-rail";
-/** Per-session "last viewed" activity marks (id → unix secs) for the unread dot. */
-const SEEN_KEY = "skillviewer-terminals-seen";
 
 function readRailW(): number {
   try {
@@ -20,35 +19,6 @@ function readRailW(): number {
   } catch {
     return 240;
   }
-}
-
-function readSeen(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(SEEN_KEY);
-    const v = raw ? JSON.parse(raw) : null;
-    return v && typeof v === "object" ? (v as Record<string, number>) : {};
-  } catch {
-    return {};
-  }
-}
-
-/** Wall-clock seconds, to compare against tmux activity timestamps. */
-const nowSecs = () => Math.floor(Date.now() / 1000);
-
-/**
- * Stable, chronological order (oldest first) so the rail never reshuffles.
- * tmux lists sessions alphabetically by name, and our names lead with the
- * creating backend's pid — so a backend restart (app relaunch, version upgrade,
- * remote reconnect) would otherwise reorder the whole list under you. Sorting by
- * creation time keeps every existing row put and appends new terminals at the
- * end; the id is a deterministic tiebreak when two share a second.
- */
-function sortSessions(list: TermSession[]): TermSession[] {
-  return [...list].sort(
-    (a, b) =>
-      (Number(a.created) || 0) - (Number(b.created) || 0) ||
-      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-  );
 }
 
 function PlusIcon() {
@@ -62,8 +32,10 @@ function PlusIcon() {
 /**
  * The Terminals workspace: a rail of live tmux-backed sessions plus the
  * active terminal. Sessions persist across UI disconnects and are reaped when
- * the backend process exits (see skill-term). Polls the list so externally
- * exited / watchdog-reaped sessions drop out.
+ * the backend process exits (see skill-term). The list lives in the shared
+ * store (lib/terminals.ts), pushed fresh by its /api/events stream; this
+ * component adds a 5s poll as the backstop, so externally exited /
+ * watchdog-reaped sessions drop out even without the stream.
  *
  * Two render modes, one implementation: the full /terminals page (NavBar,
  * `?id=` deep link), and `embedded` — chrome-less, fills its parent — for
@@ -90,34 +62,21 @@ export default function TerminalsWorkspace({
    *  page" affordance can carry the selection along. */
   onActiveChange?: (id: string | null) => void;
 }) {
-  const [sessions, setSessions] = useState<TermSession[]>([]);
+  // Sessions, the seen marks, and the unread math live in the shared store
+  // (lib/terminals.ts) so the NavBar dot and the turn-finish notifier keep
+  // working when no workspace is mounted; this component renders that store and
+  // owns only its own selection + layout state.
+  const { sessions, loading, seen } = terminals.useTerminals();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
 
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Unread dot. Keyed off the agent's turn-completion BELL (the server stamps it
-  // into `bellAt`), NOT raw output: an idle agent TUI (e.g. Codex) keeps
-  // repainting its pane, which bumped the old `window_activity` signal and left a
-  // phantom dot with nothing new to see. "Unread" = a bell rang since you last
-  // *viewed* the session — we stamp it seen = now the instant you switch away from
-  // it (below), so a turn you already watched, and the repaint your own attach
-  // causes, never light it.
-  const [seen, setSeen] = useState<Record<string, number>>(readSeen);
-  const markSeen = useCallback((id: string | null) => {
-    if (id) setSeen((prev) => ({ ...prev, [id]: nowSecs() }));
-  }, []);
+  // Unread dot — the predicate (and its bell-not-activity rationale) lives with
+  // the store; this just binds it to this workspace's own selection.
   const unread = useCallback(
-    (s: TermSession) => {
-      if (s.id === activeId) return false; // the one you're watching is never "new"
-      const bell = Number(s.bellAt) || 0;
-      // Unseen sessions fall back to their own bell time (i.e. start seen), so a
-      // reconnect doesn't light up every terminal that belled while you were away —
-      // they only dot on a bell that arrives *after* we first list them.
-      return bell > (seen[s.id] ?? bell);
-    },
+    (s: TermSession) => terminals.isUnread(s, seen, activeId),
     [activeId, seen],
   );
 
@@ -128,50 +87,33 @@ export default function TerminalsWorkspace({
   const prevActiveRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const prev = prevActiveRef.current;
-    if (prev && prev !== activeId) markSeen(prev);
+    if (prev && prev !== activeId) terminals.markSeen(prev);
     prevActiveRef.current = activeId;
-  }, [activeId, markSeen]);
+  }, [activeId]);
 
+  // Tell the store which session is on-screen (feeds the NavBar count and the
+  // watched session's auto-mark-seen); release on hide/unmount without
+  // clobbering a watch another visible workspace holds.
   useEffect(() => {
-    try {
-      localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
-    } catch {
-      /* ignore */
-    }
-  }, [seen]);
+    if (!visible) return;
+    terminals.setWatched(activeId);
+    return () => terminals.releaseWatched(activeId);
+  }, [visible, activeId]);
 
-  const refresh = useCallback(async () => {
-    try {
-      const list = sortSessions(await api.terminalList());
-      setSessions(list);
-      setActiveId((cur) => (cur && list.some((s) => s.id === cur) ? cur : list[0]?.id ?? null));
-    } catch {
-      /* transient */
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const refresh = useCallback(() => terminals.refresh(), []);
 
-  // Seed a "seen" mark for each newly-listed session (start it seen = its own
-  // bell time, so a reconnect doesn't light up every terminal that belled while
-  // you were away) and drop marks for sessions that are gone. Sessions you've
-  // actually viewed keep the stamp markSeen gave them; this only fills gaps and prunes.
+  // Keep the selection valid as the store's list changes (killed/reaped sessions
+  // drop out; the first session is selected once the initial fetch lands).
   useEffect(() => {
-    if (sessions.length === 0) return;
-    setSeen((prev) => {
-      const next: Record<string, number> = {};
-      let changed = Object.keys(prev).length !== sessions.length;
-      for (const s of sessions) {
-        if (prev[s.id] == null) changed = true;
-        next[s.id] = prev[s.id] ?? (Number(s.bellAt) || 0);
-      }
-      return changed ? next : prev;
-    });
-  }, [sessions]);
+    if (loading) return;
+    setActiveId((cur) => (cur && sessions.some((s) => s.id === cur) ? cur : sessions[0]?.id ?? null));
+  }, [sessions, loading]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  // 5s poll: the backstop behind the store's /api/events stream (and the only
+  // signal against a server that doesn't have it).
   useEffect(() => {
     const t = setInterval(() => void refresh(), 5000);
     return () => clearInterval(t);
@@ -421,7 +363,7 @@ export default function TerminalsWorkspace({
           onClose={() => setNewOpen(false)}
           onCreated={(s) => {
             setNewOpen(false);
-            setSessions((prev) => (prev.some((p) => p.id === s.id) ? prev : sortSessions([...prev, s])));
+            terminals.noteCreated(s);
             setActiveId(s.id);
           }}
         />

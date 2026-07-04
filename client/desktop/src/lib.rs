@@ -13,6 +13,7 @@
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
 use skill_core::engine;
@@ -76,6 +77,44 @@ impl skill_core::update::UpdateControl for ShellUpdater {
     }
 }
 
+/// The shell's half of `skill_server::NotifyControl`: the SPA decides WHEN a
+/// turn-finish deserves a toast (it owns focus + seen state) and posts to the
+/// pinned-local `/api/notify*` routes; only this process can talk to the OS
+/// notification center, so display runs here via `tauri-plugin-notification`.
+struct ShellNotifier {
+    app: tauri::AppHandle,
+}
+
+impl skill_server::NotifyControl for ShellNotifier {
+    fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+        self.app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|e| e.to_string())
+    }
+
+    fn prime(&self) {
+        // Permission prompts can block until answered — never on a server worker.
+        let app = self.app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = app.notification().request_permission() {
+                log::warn!("notification permission request failed: {e}");
+            }
+        });
+    }
+
+    fn set_badge(&self, count: u32) {
+        // Dock badge (macOS) / launcher count (some Linux DEs). Windows has no
+        // numeric badge — the Err is deliberately dropped (quiet degradation).
+        if let Some(w) = self.app.get_webview_window("main") {
+            let _ = w.set_badge_count((count > 0).then_some(count as i64));
+        }
+    }
+}
+
 /// Download → install → relaunch. On Windows the plugin hands off to the NSIS
 /// installer and exits this process itself — `RunEvent::Exit` never fires — so
 /// `on_before_exit` must repeat the Exit handler's teardown. macOS/Linux installs
@@ -124,6 +163,7 @@ pub fn run() {
     let remote_slot_setup = remote_slot.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build()) // self-update; driven from ShellUpdater, no JS API
+        .plugin(tauri_plugin_notification::init()) // OS toasts; driven from ShellNotifier, no JS API
         .setup(move |app| {
             // Logger first, so even early startup is captured. Tee to a small on-disk
             // file (durable for the packaged app, where stderr goes nowhere) + stderr
@@ -172,6 +212,8 @@ pub fn run() {
                 app: app.handle().clone(),
                 remote_slot: remote_slot_setup.clone(),
             }) as std::sync::Arc<dyn skill_core::update::UpdateControl>;
+            let notifier = std::sync::Arc::new(ShellNotifier { app: app.handle().clone() })
+                as std::sync::Arc<dyn skill_server::NotifyControl>;
             let make_cfg = |port: u16| ServerConfig {
                 host: "127.0.0.1".into(),
                 port,
@@ -184,6 +226,8 @@ pub fn run() {
                 // Hand the server's update module its installer (see ShellUpdater).
                 updater: Some(updater.clone()),
                 phone: Some(phone.clone()),
+                // OS toasts + dock badge for the SPA's turn-finish notifier.
+                notifier: Some(notifier.clone()),
                 ..Default::default()
             };
             // Bind the stable phone port first (it's also dev's Vite proxy target),

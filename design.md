@@ -248,11 +248,15 @@ A **local proxy switchboard**; the webview never changes origin.
 - `/api/remote/{list,connect,disconnect,status,last}` is **always local** (`SshRemoteControl`,
   `server/skill-server/src/sshmgr/`); shells out to `ssh`, or `wsl.exe` for `wsl:<distro>`
   targets. A `Transport` enum abstracts the two (a WSL distro is just Linux).
-- While connected, **every other `/api/*` (incl. the `/api/terminal/attach` SSE and
-  `/api/phone/*` — the phone hub is the remote) is reverse-proxied** to the remote (`proxy.rs`)
-  with the recorded token injected upstream (current servers launch tokenless — see the phone
-  section — but the header keeps reattach compatible with older, token-enforcing servers).
-  Pinned local: `/api/update/*` and `/api/client-log`. Non-`/api` GETs serve the local UI.
+- While connected, **every other `/api/*` (incl. the `/api/terminal/attach` and `/api/events`
+  SSE streams and `/api/phone/*` — the phone hub is the remote) is reverse-proxied** to the
+  remote (`proxy.rs`) with the recorded token injected upstream (current servers launch
+  tokenless — see the phone section — but the header keeps reattach compatible with older,
+  token-enforcing servers).
+  Pinned local: `/api/update/*`, `/api/client-log`, and `/api/notify*` (a toast/dock badge
+  belongs to the machine whose screen you're looking at — and only to its own webview: a
+  tailscale-served phone request gets the 404 and uses the Web Notification API instead).
+  Non-`/api` GETs serve the local UI.
 - **Connect flow:** list targets (`~/.ssh/config` + WSL distros) → detect arch (`uname`) →
   ensure a version-pinned static-musl `skill-server` (checksum-verified) → launch loopback-bound
   (tokenless; the token is generated + recorded for legacy reattach) → one transport child is

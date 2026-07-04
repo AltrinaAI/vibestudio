@@ -7,6 +7,7 @@ import { ThemeToggle } from "./ui";
 import RemoteMenu from "./RemoteMenu";
 import { secretsPath, studioPath } from "@/lib/routes";
 import { useRecents } from "@/lib/recents";
+import { useTerminals } from "@/lib/terminals";
 import { useUpdate } from "@/lib/updates";
 import { toggleTheme } from "@/lib/theme";
 
@@ -37,20 +38,40 @@ function StudioIcon() {
 }
 
 /** A persistent app-nav link (Terminals, Secrets) shown on every page; the entry
- *  for the current page reads as active. */
-function NavLink({ icon, label, active, onClick }: { icon: ReactNode; label: string; active: boolean; onClick: () => void }) {
+ *  for the current page reads as active. `dot` is the same blue unread dot as the
+ *  terminal rail's — "an agent finished a turn somewhere you aren't looking". */
+function NavLink({
+  icon,
+  label,
+  active,
+  onClick,
+  dot = false,
+}: {
+  icon: ReactNode;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  dot?: boolean;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={label}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
+      className={`relative flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
         active ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel hover:text-fg"
       }`}
     >
       {icon}
       <span className="hidden text-xs sm:inline">{label}</span>
+      {dot && (
+        <span
+          className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-info"
+          title="An agent finished a turn"
+          aria-label="An agent finished a turn"
+        />
+      )}
     </button>
   );
 }
@@ -91,6 +112,7 @@ export default function NavBar({
   const { pathname } = useLocation();
   const atHome = pathname === "/";
   const recents = useRecents();
+  const termUnread = useTerminals().unreadCount > 0;
   // This desktop's own version (the update ledger's `current` — always local, never the
   // connected remote's), so the running build is visible at a glance. "0.0.0" = an
   // unstamped dev build; release tags stamp the real version.
@@ -157,6 +179,7 @@ export default function NavBar({
           label="Terminals"
           active={onTerminals ? !!terminalsOpen : pathname === "/terminals"}
           onClick={onTerminalsClick}
+          dot={termUnread}
         />
         <NavLink icon={<KeyIcon />} label="Secrets" active={pathname === "/secrets"} onClick={() => navigate(secretsPath())} />
         <span className="mx-1 h-5 w-px bg-border" aria-hidden />

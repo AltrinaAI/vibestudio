@@ -27,6 +27,8 @@ use skill_core::{
 };
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+#[cfg(feature = "local-backend")]
+mod events;
 mod phone;
 mod proxy;
 mod remote_api;
@@ -173,6 +175,22 @@ pub trait RemoteControl: Send + Sync {
     }
 }
 
+/// The desktop shell's native-notification surface (OS toasts + dock/taskbar
+/// badge), driven by the SPA over the pinned-local `/api/notify*` routes.
+/// Implemented in `client/desktop` (same one-way dependency rule as
+/// [`RemoteControl`]); a server without one (standalone binary, browser mode)
+/// 404s those routes and the SPA falls back to the Web Notification API where
+/// the platform has one.
+pub trait NotifyControl: Send + Sync {
+    /// Show an OS notification. Must not block the calling worker.
+    fn notify(&self, title: &str, body: &str) -> Result<(), String>;
+    /// Ask the OS for notification permission at a moment the user expects it
+    /// (macOS prompts; Windows/Linux need nothing). Must not block.
+    fn prime(&self) {}
+    /// Unread-count badge on the dock/taskbar icon; 0 clears. Best-effort.
+    fn set_badge(&self, _count: u32) {}
+}
+
 /// How to run the server. Build with `..Default::default()` and override fields.
 pub struct ServerConfig {
     /// Bind host. Desktop and CLI both use `127.0.0.1`.
@@ -214,6 +232,10 @@ pub struct ServerConfig {
     /// phone port + configure `tailscale serve`. `None` = feature hidden (404),
     /// e.g. a provisioned remote server.
     pub phone: Option<Arc<PhoneControl>>,
+    /// Native notifications (desktop only): OS toasts + dock badge for agent
+    /// turn-finish events. `None` (standalone/browser) = `/api/notify*` 404s
+    /// and the SPA falls back to the Web Notification API.
+    pub notifier: Option<Arc<dyn NotifyControl>>,
 }
 
 impl Default for ServerConfig {
@@ -230,6 +252,7 @@ impl Default for ServerConfig {
             remote: None,
             updater: None,
             phone: None,
+            notifier: None,
         }
     }
 }
@@ -294,6 +317,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
         token: cfg.token,
         remote: cfg.remote,
         phone: cfg.phone,
+        notifier: cfg.notifier,
     });
 
     let mut workers = Vec::with_capacity(cfg.workers);
@@ -313,6 +337,7 @@ struct ServerCtx {
     token: Option<String>,
     remote: Option<Arc<dyn RemoteControl>>,
     phone: Option<Arc<PhoneControl>>,
+    notifier: Option<Arc<dyn NotifyControl>>,
 }
 
 /// Bearer-token guard. `None` token ⇒ always authorized (loopback default).
@@ -384,6 +409,25 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
             send_reply(request, handle(&method, &url, &body, ctx));
             continue;
         }
+        // Native notifications — ALWAYS handled locally (never proxied): a toast
+        // or dock badge belongs to the machine whose screen the user is looking
+        // at, not to the connected remote. And only to its OWN webview/browser:
+        // a tailscale-served phone client shares this origin, but its toast must
+        // pop on the phone, not this desktop — fronted requests get the same 404
+        // as a notifier-less server, which sends the SPA to the Web Notification
+        // API fallback.
+        if path == "/api/notify" || path.starts_with("/api/notify/") {
+            if !from_this_machine(&request) {
+                send_reply(request, notify_unavailable());
+                continue;
+            }
+            let mut body = String::new();
+            if method == Method::Post {
+                let _ = request.as_reader().read_to_string(&mut body);
+            }
+            send_reply(request, handle(&method, &url, &body, ctx));
+            continue;
+        }
         // While a remote is connected, every other /api/* is reverse-proxied to it.
         // (Must precede the local attach branch so the SSE stream proxies too.) BOTH
         // proxy paths run on their OWN thread, so a slow/hung remote can never pin a
@@ -392,7 +436,9 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
         if path.starts_with("/api/") {
             if let Some(target) = ctx.remote.as_ref().and_then(|r| r.active_target()) {
                 let url = url.clone();
-                if method == Method::Get && path == "/api/terminal/attach" {
+                // Both SSE routes must stream, not buffer — `proxy_buffered` would
+                // block forever collecting an unending body.
+                if method == Method::Get && (path == "/api/terminal/attach" || path == "/api/events") {
                     thread::spawn(move || proxy::proxy_sse(request, &url, &target));
                 } else {
                     let method = method.clone();
@@ -410,6 +456,13 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
         #[cfg(feature = "local-backend")]
         if method == Method::Get && path == "/api/terminal/attach" {
             thread::spawn(move || stream_terminal(request, &url));
+            continue;
+        }
+        // The terminal-events stream (SSE) blocks for the subscription's lifetime —
+        // same dedicated-thread treatment as the attach stream.
+        #[cfg(feature = "local-backend")]
+        if method == Method::Get && path == "/api/events" {
+            thread::spawn(move || stream_events(request));
             continue;
         }
         let mut body = String::new();
@@ -466,6 +519,16 @@ fn host_part(s: &str) -> String {
 /// (SPA on `localhost:1420`, API here) — the only legit cross-origin callers.
 fn is_loopback_origin(origin: &str) -> bool {
     matches!(host_part(origin).as_str(), "localhost" | "127.0.0.1" | "::1")
+}
+
+/// True when the request reached this server's loopback bind directly — i.e.
+/// from THIS machine's webview or browser. A `tailscale serve`-fronted request
+/// arrives with forwarding headers and/or a ts.net `Host`, and must not count:
+/// tailscaled proxies from 127.0.0.1, so the peer address can't tell them apart.
+fn from_this_machine(request: &Request) -> bool {
+    header_value(request, "X-Forwarded-Host").is_none()
+        && header_value(request, "X-Forwarded-For").is_none()
+        && header_value(request, "Host").as_deref().map(is_loopback_origin).unwrap_or(false)
 }
 
 /// Cross-site write guard: browsers attach `Origin` to POSTs. Accept requests
@@ -704,6 +767,18 @@ fn phone_unavailable() -> Reply {
     Reply {
         status: 404,
         body: serde_json::to_vec(&json!({ "error": "phone access not available on this server" }))
+            .unwrap_or_default(),
+        content_type: "application/json".into(),
+        extra: vec![],
+    }
+}
+
+/// 404 for `/api/notify*` on a server with no `NotifyControl` — the SPA reads
+/// this as "no native surface, use the Web Notification API".
+fn notify_unavailable() -> Reply {
+    Reply {
+        status: 404,
+        body: serde_json::to_vec(&json!({ "error": "native notifications not available on this server" }))
             .unwrap_or_default(),
         content_type: "application/json".into(),
         extra: vec![],
@@ -1150,6 +1225,32 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             Some(p) => json_reply(Ok(p.disable())),
             None => phone_unavailable(),
         },
+        // Native notifications — pinned LOCAL by worker_loop (never proxied): the
+        // toast/badge belongs to this machine's screen. No notifier (standalone
+        // binary, browser mode) → 404, which the SPA reads as "fall back to the
+        // Web Notification API".
+        (Method::Get, "/api/notify/status") => match &ctx.notifier {
+            Some(_) => json_reply(Ok(json!({ "native": true }))),
+            None => notify_unavailable(),
+        },
+        (Method::Post, "/api/notify") => match &ctx.notifier {
+            Some(n) => json_reply(n.notify(&s("title"), &s("body")).map(|_| json!({ "ok": true }))),
+            None => notify_unavailable(),
+        },
+        (Method::Post, "/api/notify/prime") => match &ctx.notifier {
+            Some(n) => {
+                n.prime();
+                json_reply(Ok(json!({ "ok": true })))
+            }
+            None => notify_unavailable(),
+        },
+        (Method::Post, "/api/notify/badge") => match &ctx.notifier {
+            Some(n) => {
+                n.set_badge(v.get("count").and_then(|x| x.as_u64()).unwrap_or(0).min(9999) as u32);
+                json_reply(Ok(json!({ "ok": true })))
+            }
+            None => notify_unavailable(),
+        },
         // Unknown /api routes must not fall through to the SPA fallback — a JSON
         // client probing an endpoint would get index.html with a 200.
         (_, p) if p.starts_with("/api/") => Reply {
@@ -1291,4 +1392,33 @@ fn stream_terminal(request: Request, url: &str) {
     }
     let _ = write_chunk(w.as_mut(), b""); // terminating 0-length chunk
     drop(att); // detach (the tmux session keeps running)
+}
+
+/// Handle `GET /api/events` on its own thread (it blocks for the subscription's
+/// lifetime). Local-backend only — a connected switchboard proxies this stream
+/// to the remote (whose terminals are the ones on screen), like the attach SSE.
+#[cfg(feature = "local-backend")]
+fn stream_events(request: Request) {
+    let _slot = match acquire_stream_slot() {
+        Some(s) => s,
+        None => return reply_status(request, 503, "Too many event streams are open."),
+    };
+    let rx = events::subscribe();
+    let head = sse_head(&request);
+    let mut w = request.into_writer();
+    if w.write_all(head.as_bytes()).is_err() || w.flush().is_err() {
+        return;
+    }
+    use std::sync::mpsc::RecvTimeoutError;
+    loop {
+        let frame = match rx.recv_timeout(std::time::Duration::from_secs(15)) {
+            Ok(f) => f,
+            Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_string(),
+            Err(RecvTimeoutError::Disconnected) => break, // registry pruned us
+        };
+        if write_chunk(w.as_mut(), frame.as_bytes()).is_err() {
+            break; // client gone — dropping rx lets the next emit prune our sender
+        }
+    }
+    let _ = write_chunk(w.as_mut(), b"");
 }
