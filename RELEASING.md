@@ -42,6 +42,8 @@ Until you publish, **nothing reaches users** — a draft is invisible to the upd
    npm run lint           # eslint
    cargo test --workspace
    ```
+   Also review the full diff since the last **published** release
+   (`git diff vPREV..HEAD`) for potential bugs before proceeding.
 2. **Visual check — the 3 key pages.** Render and *look* (tsc won't catch layout
    bugs). Screenshot **Home**, **Studio**, **Terminals** and confirm no console
    errors. See "Screenshot harness" below. **Gotcha: the SPA is a hash router** —
