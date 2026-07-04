@@ -3,7 +3,7 @@
 // over the tailnet. Everything shells out — we never speak to tailscaled
 // directly, so whatever auth/consent state the CLI reports is what we surface.
 
-use std::process::Command;
+use skill_core::process::hidden_command;
 use std::sync::OnceLock;
 
 /// Where the CLI might live. GUI installs on macOS don't put it on PATH.
@@ -20,7 +20,7 @@ fn bin() -> Option<&'static str> {
         return Some(b);
     }
     let found = CANDIDATES.iter().copied().find(|c| {
-        Command::new(c)
+        hidden_command(c)
             .arg("version")
             .output()
             .map(|o| o.status.success())
@@ -38,7 +38,7 @@ pub enum TsState {
 
 pub fn state() -> TsState {
     let Some(b) = bin() else { return TsState::Missing };
-    let Ok(out) = Command::new(b).args(["status", "--json"]).output() else {
+    let Ok(out) = hidden_command(b).args(["status", "--json"]).output() else {
         return TsState::Stopped;
     };
     let v: serde_json::Value = match serde_json::from_slice(&out.stdout) {
@@ -71,7 +71,7 @@ pub fn serve_on(port: u16) -> Result<(), ServeError> {
     let Some(b) = bin() else {
         return Err(ServeError::Other("tailscale CLI not found".into()));
     };
-    let out = Command::new(b)
+    let out = hidden_command(b)
         .args(["serve", "--bg", &port.to_string()])
         .output()
         .map_err(|e| ServeError::Other(e.to_string()))?;
@@ -105,7 +105,7 @@ pub fn serve_on(port: u16) -> Result<(), ServeError> {
 /// True when `tailscale serve status` shows a proxy to our loopback port.
 pub fn serve_status(port: u16) -> bool {
     let Some(b) = bin() else { return false };
-    Command::new(b)
+    hidden_command(b)
         .args(["serve", "status"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("127.0.0.1:{port}")))
@@ -114,7 +114,7 @@ pub fn serve_status(port: u16) -> bool {
 
 pub fn serve_off() -> Result<(), String> {
     let Some(b) = bin() else { return Err("tailscale CLI not found".into()) };
-    let out = Command::new(b)
+    let out = hidden_command(b)
         .args(["serve", "--https=443", "off"])
         .output()
         .map_err(|e| e.to_string())?;
