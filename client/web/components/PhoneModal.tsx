@@ -86,9 +86,10 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await api.phoneDisable();
+      const r = await api.phoneDisable();
       setFail(null);
-      await load();
+      await load(); // resets error, so surface the failure after the reload
+      if (!r.ok) setError(r.message || "Couldn't turn off phone access.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't turn off phone access.");
     } finally {
@@ -161,10 +162,12 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
           </>
         ) : live ? (
           <>
-            {/* Our own server's SVG; white padding so the code scans in dark mode. */}
-            <div
-              className="mx-auto h-[200px] w-[200px] rounded-lg bg-white p-3 [&_svg]:h-full [&_svg]:w-full"
-              dangerouslySetInnerHTML={{ __html: live.qrSvg }}
+            {/* While SSH-connected this SVG comes from the remote, so render it as an
+                <img> (scripts never run) — never raw HTML. White padding for dark mode. */}
+            <img
+              className="mx-auto h-[200px] w-[200px] rounded-lg bg-white p-3"
+              alt="QR code for the phone link"
+              src={`data:image/svg+xml;utf8,${encodeURIComponent(live.qrSvg)}`}
             />
             <p className="text-center text-sm text-muted">
               Scan with your phone's camera. Works from any device signed in to your Tailscale network.

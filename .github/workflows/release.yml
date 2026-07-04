@@ -201,6 +201,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
       - name: Install musl toolchain (Linux)
         if: matrix.musl
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -220,12 +225,17 @@ jobs:
         shell: bash
         run: bash scripts/stamp-version.sh "${GITHUB_REF_NAME#v}"
 
+      # The standalone binary is the phone's hub while SSH-connected, so it must
+      # carry the SPA: build dist/, then compile it in via embed-ui (include_dir).
+      - name: Build the UI (embedded into the binary)
+        run: npm ci && npm run build
+
       # Builds ONLY skill-server (+ skill-core/skill-term) — no tauri/webkit deps, so
       # the static musl link is clean and fast.
       - name: Build skill-server
         env:
           CARGO_NET_RETRY: 10
-        run: cargo build --release -p skill-server --bin skill-server --target ${{ matrix.target }}
+        run: cargo build --release -p skill-server --bin skill-server --features embed-ui --target ${{ matrix.target }}
 
       - name: Package + checksum
         shell: bash

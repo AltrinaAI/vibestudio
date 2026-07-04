@@ -174,7 +174,7 @@ export const phoneStatus = (): Promise<PhoneStatus | null> =>
     throw e;
   });
 export const phoneEnable = () => http<PhoneEnableResult>("POST", "phone/enable");
-export const phoneDisable = () => http<{ ok: boolean }>("POST", "phone/disable");
+export const phoneDisable = () => http<{ ok: boolean; message?: string }>("POST", "phone/disable");
 
 // --- recents (server-side; a NORMAL /api/* route, so it follows the active server —
 //     each machine has its own list, the same whether reached locally or over SSH) ---

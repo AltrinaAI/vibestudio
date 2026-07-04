@@ -28,28 +28,10 @@ function ServerIcon({ className = "" }: { className?: string }) {
 export default function RemoteMenu() {
   const { status, available } = useRemote();
   const [open, setOpen] = useState(false);
+  // The tray's `#/?phone=1` deep link is handled in AppShell, NOT here: a second
+  // RemoteMenu lives inside the hidden always-mounted Terminals subtree, and its
+  // copy of the listener would consume the one-shot param into an invisible modal.
   const [phoneOpen, setPhoneOpen] = useState(false);
-
-  // The tray's "Open on your phone…" item deep-links to `#/?phone=1`. With HashRouter
-  // the query rides inside the hash, so parse it ourselves; open the modal once and
-  // strip the param (replaceState doesn't re-fire hashchange, so no loop).
-  useEffect(() => {
-    const check = () => {
-      const hash = window.location.hash;
-      const q = hash.indexOf("?");
-      if (q === -1) return;
-      const params = new URLSearchParams(hash.slice(q + 1));
-      if (params.get("phone") !== "1") return;
-      params.delete("phone");
-      const rest = params.toString();
-      const url = window.location.pathname + window.location.search + hash.slice(0, q) + (rest ? `?${rest}` : "");
-      history.replaceState(null, "", url);
-      setPhoneOpen(true);
-    };
-    check();
-    window.addEventListener("hashchange", check);
-    return () => window.removeEventListener("hashchange", check);
-  }, []);
 
   if (!available) return null;
 
