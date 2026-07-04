@@ -968,15 +968,19 @@ export interface TermEvent {
  * Subscribe to the server's terminal lifecycle events (SSE): `bell` (an agent
  * finished a turn), `opened`, `closed`. Events are edge HINTS — callers should
  * re-fetch `terminalList` on each one rather than trusting the payload as state.
- * EventSource retries transient drops itself; a fatal close (route missing on an
- * older server, topology change mid-stream) fires `onDown` once and the caller
- * decides whether/when to resubscribe.
+ * EventSource retries transient drops itself; those silent reconnects fire
+ * `onOpen` (as does the first connect) so the caller can refetch what the gap
+ * may have swallowed. A fatal close (route missing on an older server, topology
+ * change mid-stream) fires `onDown` once and the caller decides whether/when to
+ * resubscribe.
  */
 export function terminalEvents(
   onEvent: (kind: "bell" | "opened" | "closed", e: TermEvent) => void,
   onDown: () => void,
+  onOpen?: () => void,
 ): { close(): void } {
   const es = new EventSource(`${API_BASE}/api/events`);
+  es.onopen = () => onOpen?.();
   let done = false;
   const forward = (kind: "bell" | "opened" | "closed") => (m: MessageEvent) => {
     try {

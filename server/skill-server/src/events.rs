@@ -81,7 +81,15 @@ pub(crate) fn diff(prev: &HashMap<String, SessionInfo>, now: &[SessionInfo]) -> 
 /// subscriber means events from the unobserved gap never burst-replay.
 fn watcher_loop() {
     let mut prev: Option<HashMap<String, SessionInfo>> = None;
+    let mut tick: u32 = 0;
     loop {
+        // A dead stream's Sender lingers until a send fails, which a quiet server
+        // may never do — periodically push a comment frame purely to prune, so the
+        // last closed tab can't leave tmux polled at 1 Hz forever.
+        tick = tick.wrapping_add(1);
+        if tick.is_multiple_of(30) {
+            emit(": prune\n\n".to_string());
+        }
         if subscribers().is_empty() {
             prev = None;
             std::thread::sleep(TICK);

@@ -353,6 +353,10 @@ function connectEvents(): void {
       esHandle = null;
       setTimeout(connectEvents, 30_000);
     },
+    // (Re)connect edge: events are hints with no server replay, so the client
+    // owns catching up here — a bell landing during a network gap (wifi blip,
+    // phone asleep) must still surface as a dot/badge after reconnect.
+    () => void refresh(),
   );
 }
 
