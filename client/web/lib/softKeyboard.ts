@@ -15,10 +15,12 @@
 /** Below this the shrink is URL-bar churn or rounding, not a keyboard. */
 const KB_MIN_PX = 80;
 
-/** Don't clamp below this visual height (landscape phones): the shrunken pane
- *  would fail TerminalPane's minimum-size gates (host < 80px / < 5 rows) and
- *  pin a stale pty — Safari's native caret pan is the better fallback there. */
-const MIN_APP_PX = 180;
+/** Don't clamp below this visual height (landscape phones): the terminal HOST
+ *  is the visual height minus ~100px of chrome (NavBar + session row + padding;
+ *  embedded panels stack more), and the host must clear TerminalPane's
+ *  minimum-size gates (host < 80px / < 5 rows) or the clamp pins a stale or
+ *  garbled pty — Safari's native caret pan is the better fallback there. */
+const MIN_APP_PX = 280;
 
 function editing(): HTMLElement | null {
   const el = document.activeElement;
@@ -46,12 +48,19 @@ export function initSoftKeyboard(): void {
   if (!vv) return;
   const root = document.documentElement;
   const apply = () => {
-    // Pinch-zoom (scale !== 1) must neither engage nor release: a zoomed
-    // visual height is not a keyboard, and releasing mid-zoom would
-    // SIGWINCH-thrash the pty while the keyboard is still up. State thaws on
-    // the vv resize that lands when zoom returns to 1.
-    if (vv.scale !== 1) return;
     const el = editing();
+    // Pinch-zoom (scale !== 1) never engages — a zoomed visual height is not a
+    // keyboard — and holds an engaged clamp only while the editable is still
+    // focused (releasing under a live keyboard would SIGWINCH-thrash the pty).
+    // Blur/keyboard-close must release even mid-zoom: the user may never return
+    // to exactly scale 1, and a stranded clamp squishes every .h-dvh page.
+    if (vv.scale !== 1) {
+      if (!el && "kb" in root.dataset) {
+        delete root.dataset.kb;
+        root.style.removeProperty("--app-vvh");
+      }
+      return;
+    }
     // Baseline is the ICB (root clientHeight), NOT innerHeight: on mobile the
     // layout viewport grows past the ICB when content overflows, which would
     // read as a phantom keyboard.
