@@ -168,7 +168,10 @@ jobs:
           gh api "repos/$GH_REPO/releases/$rid/assets?per_page=100" \
             --jq '.[] | select(.name | endswith(".sig")) | .id' |
           while read -r id; do
-            gh api -X DELETE "repos/$GH_REPO/releases/assets/$id" && echo "deleted sig asset $id"
+            # Legs run in parallel and each sweeps ALL sigs — a 404 here just
+            # means another leg won the race, which is the desired end state.
+            gh api -X DELETE "repos/$GH_REPO/releases/assets/$id" 2>/dev/null \
+              && echo "deleted sig asset $id" || echo "sig asset $id already gone"
           done
 
       - name: Upload desktop bundles
