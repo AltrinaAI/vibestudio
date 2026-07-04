@@ -37,6 +37,38 @@ Windows builds aren't code-signed yet, so each shows a one-time prompt:
 - **Windows** — SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**.
 - **Linux** — install the package with `sudo apt install ./Skill-Studio-Linux-x86_64.deb`.
 
+## Use from a browser (phone included)
+
+The backend serves the full app over plain HTTP — a browser pointed at a running
+`skill-server` **is** Skill Studio, terminals included.
+
+**In the app:** click the **Local** pill → **Open on your phone…** → scan the QR.
+The app fronts its own server with [Tailscale](https://tailscale.com) (free) and
+walks you through the two one-time Tailscale permissions if needed. Any device
+signed in to your Tailscale network can open the URL. Closing the window keeps
+Skill Studio (and phone access) running in your tray; right-click the tray icon
+to quit entirely.
+
+**By hand** (headless machines, or no desktop app):
+
+```bash
+npm run build                 # SPA → ./dist
+cargo run -p skill-server     # serves UI + API on 127.0.0.1:8765
+tailscale serve --bg 8765     # https://<machine>.<tailnet>.ts.net → any device
+```
+
+Notes:
+
+- Run `skill-server` from the repo/app directory (bundled skills and example
+  paths resolve relative to the working dir).
+- The server must sit at the **root** of the origin (plain `tailscale serve`
+  does this); sub-path mounts aren't supported.
+- Leave `--token` off for browser use — reachability is the auth boundary
+  (loopback bind + your tailnet). Anyone who can open the URL has full control
+  of skills, terminals, and onward SSH remotes, so treat the tailnet as trusted.
+- The installed desktop app can be fronted the same way: launch it with
+  `SKILL_STUDIO_PORT=8765` to pin its (otherwise ephemeral) local server port.
+
 ## Build from source
 
 Install Rust, Node.js/npm, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS, then:

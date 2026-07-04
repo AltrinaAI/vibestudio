@@ -27,10 +27,13 @@ use skill_core::{
 };
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+mod phone;
 mod proxy;
 mod remote_api;
 mod sshmgr;
+mod tailscale;
 
+pub use phone::{PhoneControl, PHONE_PORT};
 pub use sshmgr::SshRemoteControl;
 
 /// Install the process-wide logger: stderr sink, level via `RUST_LOG`. Idempotent
@@ -207,6 +210,10 @@ pub struct ServerConfig {
     /// `skill_core::update::init`, which runs the background release check.
     /// `None` (standalone/dev) = `/api/update/status` reports `canAuto: false`.
     pub updater: Option<Arc<dyn update::UpdateControl>>,
+    /// "Open on your phone" (`/api/phone/*`): ensure a persistent daemon on the
+    /// phone port + configure `tailscale serve`. `None` = feature hidden (404),
+    /// e.g. a provisioned remote server.
+    pub phone: Option<Arc<PhoneControl>>,
 }
 
 impl Default for ServerConfig {
@@ -222,6 +229,7 @@ impl Default for ServerConfig {
             startup_maintenance: true,
             remote: None,
             updater: None,
+            phone: None,
         }
     }
 }
@@ -285,6 +293,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
         examples_base: cfg.examples_base,
         token: cfg.token,
         remote: cfg.remote,
+        phone: cfg.phone,
     });
 
     let mut workers = Vec::with_capacity(cfg.workers);
@@ -303,6 +312,7 @@ struct ServerCtx {
     examples_base: Option<PathBuf>,
     token: Option<String>,
     remote: Option<Arc<dyn RemoteControl>>,
+    phone: Option<Arc<PhoneControl>>,
 }
 
 /// Bearer-token guard. `None` token ⇒ always authorized (loopback default).
@@ -333,6 +343,11 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
         // preflight carries no Authorization, so it stays unauthenticated.
         if method != Method::Options && !authorized(&ctx.token, &request) {
             reply_status(request, 401, "Unauthorized");
+            continue;
+        }
+        // Writes get the cross-site origin check at the same choke point.
+        if method == Method::Post && !origin_allowed(&request) {
+            reply_status(request, 403, "Cross-origin request rejected");
             continue;
         }
 
@@ -367,6 +382,35 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
                 let _ = request.as_reader().read_to_string(&mut body);
             }
             send_reply(request, handle(&method, &url, &body, ctx));
+            continue;
+        }
+        // Identity of THIS process — ALWAYS local. `PhoneControl` probes the
+        // phone port with it and may kill the reported pid on version skew; a
+        // proxied reply would name the remote's pid and get an innocent local
+        // process killed.
+        if path == "/api/health" {
+            send_reply(
+                request,
+                json_reply(Ok(json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "pid": std::process::id(),
+                }))),
+            );
+            continue;
+        }
+        // "Open on your phone" — ALWAYS local: it configures THIS machine's
+        // tailscale serve + local daemon, regardless of any connected remote.
+        if path.starts_with("/api/phone/") {
+            let reply = match (&ctx.phone, method.clone(), path.as_str()) {
+                (Some(p), Method::Get, "/api/phone/status") => json_reply(Ok(p.status())),
+                (Some(p), Method::Post, "/api/phone/enable") => json_reply(Ok(p.enable())),
+                (Some(p), Method::Post, "/api/phone/disable") => json_reply(Ok(p.disable())),
+                (Some(_), _, _) | (None, _, _) => {
+                    reply_status(request, 404, "phone access not available on this server");
+                    continue;
+                }
+            };
+            send_reply(request, reply);
             continue;
         }
         // While a remote is connected, every other /api/* is reverse-proxied to it.
@@ -423,18 +467,75 @@ fn log_reply(request: &Request, status: u16, body: &[u8]) {
     log::warn!("{} {} -> {} {}", request.method().as_str(), request.url(), status, detail);
 }
 
-/// Serialize a `Reply` onto the wire with the standard CORS + no-store headers, then
-/// any reply-specific `extra` headers. Shared by local handlers and the proxy.
+/// A request header's value, if present. (`equiv` needs the `'static` name.)
+fn header_value(request: &Request, name: &'static str) -> Option<String> {
+    request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv(name))
+        .map(|h| h.value.as_str().to_string())
+}
+
+/// The host part of an origin/authority string, lowercased, port stripped
+/// (`https://Host:port` / `[::1]:port` / bare `host:port` all accepted).
+fn host_part(s: &str) -> String {
+    let rest = s
+        .strip_prefix("http://")
+        .or_else(|| s.strip_prefix("https://"))
+        .unwrap_or(s);
+    let host = if let Some(v6) = rest.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        rest.split(':').next().unwrap_or(rest)
+    };
+    host.to_ascii_lowercase()
+}
+
+/// True for the loopback origins the browser-local dev split uses
+/// (SPA on `localhost:1420`, API here) — the only legit cross-origin callers.
+fn is_loopback_origin(origin: &str) -> bool {
+    matches!(host_part(origin).as_str(), "localhost" | "127.0.0.1" | "::1")
+}
+
+/// Cross-site write guard: browsers attach `Origin` to POSTs. Accept requests
+/// without one (curl, the desktop proxy), same-origin ones (Origin host matches
+/// Host / X-Forwarded-Host, however the server is fronted — tailscale serve, a
+/// LAN IP), and the loopback dev origins. Everything else is some other website
+/// driving a browser at this API — CORS already hides responses, but "simple"
+/// POSTs would still execute server-side, so refuse them outright.
+fn origin_allowed(request: &Request) -> bool {
+    let Some(origin) = header_value(request, "Origin") else { return true };
+    if is_loopback_origin(&origin) {
+        return true;
+    }
+    let origin_host = host_part(&origin);
+    [header_value(request, "X-Forwarded-Host"), header_value(request, "Host")]
+        .into_iter()
+        .flatten()
+        .any(|h| host_part(&h) == origin_host)
+}
+
+/// Serialize a `Reply` onto the wire with the standard headers, then any
+/// reply-specific `extra` headers (an extra `Cache-Control` replaces the default
+/// `no-store`, so static assets can opt into caching). CORS headers are emitted
+/// only for loopback origins (the dev split); same-origin traffic never needs
+/// them, and reflecting arbitrary origins would hand the API to any website open
+/// in a browser that can reach this server. Shared by local handlers and the proxy.
 pub(crate) fn send_reply(request: Request, reply: Reply) {
     log_reply(&request, reply.status, &reply.body);
     let mut response = Response::from_data(reply.body).with_status_code(reply.status);
-    let headers = [
-        ("Content-Type", reply.content_type.as_str()),
-        ("Access-Control-Allow-Origin", "*"),
-        ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-        ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
-        ("Cache-Control", "no-store"),
-    ];
+    let mut headers: Vec<(&str, &str)> = vec![("Content-Type", reply.content_type.as_str())];
+    let origin = header_value(&request, "Origin");
+    if let Some(origin) = origin.as_deref().filter(|o| is_loopback_origin(o)) {
+        headers.push(("Access-Control-Allow-Origin", origin));
+        headers.push(("Access-Control-Allow-Methods", "GET, POST, OPTIONS"));
+        headers.push(("Access-Control-Allow-Headers", "Content-Type, Authorization"));
+        headers.push(("Vary", "Origin"));
+    }
+    let has_cache = reply.extra.iter().any(|(k, _)| k.eq_ignore_ascii_case("cache-control"));
+    if !has_cache {
+        headers.push(("Cache-Control", "no-store"));
+    }
     for (k, val) in headers {
         if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
             response.add_header(h);
@@ -524,8 +625,63 @@ fn web_mime(path: &str) -> &'static str {
     }
 }
 
-/// Serve a static asset from `dist`, falling back to index.html (SPA).
+/// The SPA compiled into the binary (`embed-ui` builds; see Cargo.toml). Disk
+/// `dist` wins when present, so a dev checkout still serves fresh builds.
+#[cfg(feature = "embed-ui")]
+static EMBEDDED_UI: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../dist");
+
+/// Serve `url_path` from the embedded SPA, mirroring `serve_static` semantics
+/// (SPA fallback, extension-miss 404, immutable assets/).
+#[cfg(feature = "embed-ui")]
+fn serve_embedded(url_path: &str) -> Reply {
+    let rel = url_path.trim_start_matches('/');
+    let lookup = if rel.is_empty() || rel.contains("..") { "index.html" } else { rel };
+    let looks_like_file = lookup.rsplit('/').next().unwrap_or("").contains('.');
+    let (path, file) = match EMBEDDED_UI.get_file(lookup) {
+        Some(f) => (lookup, f),
+        None if looks_like_file => {
+            return Reply {
+                status: 404,
+                body: b"Not found.".to_vec(),
+                content_type: "text/plain; charset=utf-8".into(),
+                extra: vec![],
+            };
+        }
+        None => match EMBEDDED_UI.get_file("index.html") {
+            Some(f) => ("index.html", f),
+            None => {
+                return Reply {
+                    status: 404,
+                    body: b"This build embeds no UI.".to_vec(),
+                    content_type: "text/plain; charset=utf-8".into(),
+                    extra: vec![],
+                };
+            }
+        },
+    };
+    let cache = if path.starts_with("assets/") && path == lookup {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    Reply {
+        status: 200,
+        content_type: web_mime(path).into(),
+        body: file.contents().to_vec(),
+        extra: vec![("Cache-Control".into(), cache.into())],
+    }
+}
+
+/// Serve a static asset from `dist`, falling back to index.html (SPA). Misses
+/// that look like a file (extension in the last segment) 404 instead — an SPA
+/// fallback there hands HTML to probes like iOS's GET /apple-touch-icon.png.
+/// With no usable `dist` on disk, an `embed-ui` build serves the compiled-in SPA.
 fn serve_static(dist: &Path, url_path: &str) -> Reply {
+    #[cfg(feature = "embed-ui")]
+    if !dist.join("index.html").is_file() {
+        return serve_embedded(url_path);
+    }
     let rel = url_path.trim_start_matches('/');
     // Empty path or a traversal attempt → fall back to the SPA index; only ever
     // serve within dist.
@@ -534,17 +690,33 @@ fn serve_static(dist: &Path, url_path: &str) -> Reply {
     } else {
         dist.join(rel)
     };
-    let target = if candidate.is_file() {
+    let looks_like_file = rel.rsplit('/').next().unwrap_or("").contains('.');
+    let hit = candidate.is_file();
+    let target = if hit {
         candidate
+    } else if looks_like_file {
+        return Reply {
+            status: 404,
+            body: b"Not found.".to_vec(),
+            content_type: "text/plain; charset=utf-8".into(),
+            extra: vec![],
+        };
     } else {
         dist.join("index.html")
+    };
+    // Vite content-hashes everything under assets/, so those can cache forever;
+    // index.html (and the few root files) must revalidate so new builds land.
+    let cache = if hit && rel.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
     };
     match std::fs::read(&target) {
         Ok(body) => Reply {
             status: 200,
             content_type: web_mime(target.to_str().unwrap_or("")).into(),
             body,
-            extra: vec![],
+            extra: vec![("Cache-Control".into(), cache.into())],
         },
         Err(_) => Reply {
             status: 404,
@@ -973,6 +1145,15 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 Err(e) => json_reply::<()>(Err(e)),
             }
         }
+        // Unknown /api routes must not fall through to the SPA fallback — a JSON
+        // client probing an endpoint would get index.html with a 200.
+        (_, p) if p.starts_with("/api/") => Reply {
+            status: 404,
+            body: serde_json::to_vec(&json!({ "error": format!("unknown API route {p}") }))
+                .unwrap_or_default(),
+            content_type: "application/json".into(),
+            extra: vec![],
+        },
         (Method::Get, _) => serve_static(&ctx.dist, path),
         _ => Reply {
             status: 404,
@@ -1033,12 +1214,36 @@ pub(crate) fn reply_status(request: Request, status: u16, error: &str) {
     }
     let body = serde_json::to_vec(&json!({ "error": error })).unwrap_or_default();
     let mut resp = Response::from_data(body).with_status_code(StatusCode(status));
-    for (k, val) in [("Content-Type", "application/json"), ("Access-Control-Allow-Origin", "*")] {
+    let origin = header_value(&request, "Origin");
+    let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
+    if let Some(origin) = origin.as_deref().filter(|o| is_loopback_origin(o)) {
+        headers.push(("Access-Control-Allow-Origin", origin));
+        headers.push(("Vary", "Origin"));
+    }
+    for (k, val) in headers {
         if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
             resp.add_header(h);
         }
     }
     let _ = request.respond(resp);
+}
+
+/// Response head for the hand-rolled SSE paths (`stream_terminal` / `proxy_sse`
+/// take over the socket, bypassing `send_reply`) — same CORS policy as there:
+/// echo loopback dev origins only, so a foreign website can never read a
+/// terminal stream cross-origin.
+pub(crate) fn sse_head(request: &Request) -> String {
+    let cors = header_value(request, "Origin")
+        .filter(|o| is_loopback_origin(o))
+        .map(|o| format!("Access-Control-Allow-Origin: {o}\r\nVary: Origin\r\n"))
+        .unwrap_or_default();
+    format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/event-stream\r\n\
+         Cache-Control: no-store\r\n\
+         Transfer-Encoding: chunked\r\n\
+         {cors}X-Accel-Buffering: no\r\n\r\n"
+    )
 }
 
 /// Handle `GET /api/terminal/attach?id=&cols=&rows=` on its own thread (it blocks
@@ -1060,16 +1265,8 @@ fn stream_terminal(request: Request, url: &str) {
         Err(e) => return reply_status(request, 400, &e),
     };
 
+    let head = sse_head(&request);
     let mut w = request.into_writer();
-    let head = concat!(
-        "HTTP/1.1 200 OK\r\n",
-        "Content-Type: text/event-stream\r\n",
-        "Cache-Control: no-store\r\n",
-        "Transfer-Encoding: chunked\r\n",
-        "Access-Control-Allow-Origin: *\r\n",
-        "X-Accel-Buffering: no\r\n",
-        "\r\n",
-    );
     if w.write_all(head.as_bytes()).is_err() || w.flush().is_err() {
         return; // drops `att` → detaches
     }

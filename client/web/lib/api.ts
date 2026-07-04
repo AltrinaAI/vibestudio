@@ -143,6 +143,39 @@ export const remoteLast = () => http<{ host: string | null }>("GET", "remote/las
 export const remoteConnect = (host: string) => http<{ ok: boolean }>("POST", "remote/connect", { host });
 export const remoteDisconnect = () => http<{ ok: boolean }>("POST", "remote/disconnect");
 
+// --- "Open on your phone" (desktop only): serve the app over the user's Tailscale
+//     network and show a QR code a phone can scan. Absent (404) on standalone
+//     remote servers — the caller treats that as "unavailable". ---
+export interface PhoneStatus {
+  tailscale: "ok" | "missing" | "stopped";
+  serving: boolean;
+  /** The app's own in-process server — always present, it IS the responding process. */
+  server: { version: string | null; port: number };
+  /** Null unless `serving` and tailscale is "ok". */
+  url: string | null;
+  /** The URL as an inline SVG QR code; null on the same terms as `url`. */
+  qrSvg: string | null;
+}
+export type PhoneEnableResult =
+  | ({ ok: true } & PhoneStatus)
+  | {
+      ok: false;
+      stage: "tailscale" | "operator" | "consent" | "serve";
+      message: string;
+      /** stage="consent": approve serving in the Tailscale admin console here. */
+      consentUrl?: string;
+      /** stage="operator": one-time shell command that grants tailscale access. */
+      command?: string;
+    };
+/** Resolves null when this server has no phone feature (`/api/phone/*` 404s). */
+export const phoneStatus = (): Promise<PhoneStatus | null> =>
+  http<PhoneStatus>("GET", "phone/status").catch((e: unknown) => {
+    if ((e as { status?: number } | null)?.status === 404) return null;
+    throw e;
+  });
+export const phoneEnable = () => http<PhoneEnableResult>("POST", "phone/enable");
+export const phoneDisable = () => http<{ ok: boolean }>("POST", "phone/disable");
+
 // --- recents (server-side; a NORMAL /api/* route, so it follows the active server —
 //     each machine has its own list, the same whether reached locally or over SSH) ---
 export interface Recent {

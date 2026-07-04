@@ -19,7 +19,7 @@ export default function AppShell() {
   return (
     <>
       <div style={{ display: onTerminals ? "none" : "contents" }}>
-        <Suspense fallback={<div className="grid h-screen place-items-center"><Spinner /></div>}>
+        <Suspense fallback={<div className="grid h-dvh place-items-center"><Spinner /></div>}>
           <Outlet />
         </Suspense>
       </div>

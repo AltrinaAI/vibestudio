@@ -14,7 +14,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon: window-close hides to the tray (the tray governs the lifecycle);
+# image-png decodes the bundled icon for the tray.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 skill-core = { path = "../../server/skill-core" }
 skill-term = { path = "../../server/skill-term" }
 # Backend (incl. the SSH connection manager) — the desktop wires it into its

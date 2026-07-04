@@ -111,7 +111,7 @@ export default function NavBar({
   const brand = (
     <span className="flex items-center gap-1.5 text-brand">
       <AltrinaMark className="h-5 w-auto" />
-      <span className="text-[0.95rem] font-semibold tracking-tight">Skill Studio</span>
+      <span className="whitespace-nowrap text-[0.95rem] font-semibold tracking-tight">Skill Studio</span>
       {version && (
         <span className="text-[0.7rem] font-normal tabular-nums text-muted" title={`Version ${version}`}>
           {version}

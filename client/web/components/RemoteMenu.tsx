@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Modal } from "@/components/Modal";
+import PhoneModal, { PhoneIcon } from "@/components/PhoneModal";
 import { btnGhost, btnPrimary, Spinner } from "@/components/ui";
 import * as api from "@/lib/api";
 import { useRemote } from "@/lib/remote";
@@ -27,6 +28,29 @@ function ServerIcon({ className = "" }: { className?: string }) {
 export default function RemoteMenu() {
   const { status, available } = useRemote();
   const [open, setOpen] = useState(false);
+  const [phoneOpen, setPhoneOpen] = useState(false);
+
+  // The tray's "Open on your phone…" item deep-links to `#/?phone=1`. With HashRouter
+  // the query rides inside the hash, so parse it ourselves; open the modal once and
+  // strip the param (replaceState doesn't re-fire hashchange, so no loop).
+  useEffect(() => {
+    const check = () => {
+      const hash = window.location.hash;
+      const q = hash.indexOf("?");
+      if (q === -1) return;
+      const params = new URLSearchParams(hash.slice(q + 1));
+      if (params.get("phone") !== "1") return;
+      params.delete("phone");
+      const rest = params.toString();
+      const url = window.location.pathname + window.location.search + hash.slice(0, q) + (rest ? `?${rest}` : "");
+      history.replaceState(null, "", url);
+      setPhoneOpen(true);
+    };
+    check();
+    window.addEventListener("hashchange", check);
+    return () => window.removeEventListener("hashchange", check);
+  }, []);
+
   if (!available) return null;
 
   const connecting = CONNECTING.has(status.state);
@@ -55,12 +79,21 @@ export default function RemoteMenu() {
         {connected && <span className="h-1.5 w-1.5 rounded-full bg-ok" aria-hidden />}
         {errored && <span className="h-1.5 w-1.5 rounded-full bg-warn" aria-hidden />}
       </button>
-      {open && <RemoteDialog onClose={() => setOpen(false)} />}
+      {open && (
+        <RemoteDialog
+          onClose={() => setOpen(false)}
+          onOpenPhone={() => {
+            setOpen(false);
+            setPhoneOpen(true);
+          }}
+        />
+      )}
+      {phoneOpen && <PhoneModal onClose={() => setPhoneOpen(false)} />}
     </>
   );
 }
 
-function RemoteDialog({ onClose }: { onClose: () => void }) {
+function RemoteDialog({ onClose, onOpenPhone }: { onClose: () => void; onOpenPhone: () => void }) {
   const { status, connect, disconnect, cancel } = useRemote();
   const [hosts, setHosts] = useState<api.RemoteHost[] | null>(null);
   const [value, setValue] = useState("");
@@ -77,8 +110,13 @@ function RemoteDialog({ onClose }: { onClose: () => void }) {
   const wslHosts = (hosts ?? []).filter((h) => h.name.startsWith("wsl:"));
   const sshHosts = (hosts ?? []).filter((h) => !h.name.startsWith("wsl:"));
 
+  // Whether this server has the phone feature — probed when the dialog opens
+  // (never on page load), so the item only shows where /api/phone answers.
+  const [phone, setPhone] = useState(false);
+
   useEffect(() => {
     api.remoteList().then(setHosts).catch(() => setHosts([]));
+    api.phoneStatus().then((s) => setPhone(s != null)).catch(() => setPhone(false));
   }, []);
   // Surface a backend connect failure inside the dialog.
   useEffect(() => {
@@ -198,6 +236,18 @@ function RemoteDialog({ onClose }: { onClose: () => void }) {
                 </button>
               </div>
             </>
+          )}
+          {phone && (
+            <div className="border-t border-border pt-2">
+              <button
+                type="button"
+                onClick={onOpenPhone}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted transition-colors hover:bg-panel hover:text-fg"
+              >
+                <PhoneIcon className="shrink-0" />
+                Open on your phone…
+              </button>
+            </div>
           )}
         </div>
     </Modal>

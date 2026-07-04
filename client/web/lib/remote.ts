@@ -150,6 +150,11 @@ const RESUME_KEY = "skillstudio-remote-resumed";
 async function maybeResume(): Promise<void> {
   if (!snapshot.available) return; // this server has no remoting
   if (snapshot.status.state !== "idle") return; // already connecting/connected/errored
+  // Only on a loopback origin (the desktop webview / browser-local dev). On a
+  // shared origin — a tailscale-served or LAN server — one viewer's page load
+  // must not silently flip the server onward to the last-connected SSH host
+  // under every other viewer.
+  if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(window.location.hostname)) return;
   try {
     if (sessionStorage.getItem(RESUME_KEY)) return; // already attempted this launch
   } catch {

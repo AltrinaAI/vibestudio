@@ -80,6 +80,23 @@ export default function StudioLayout() {
   const [exportOpen, setExportOpen] = useState(false);
   const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
 
+  // Phone-narrow layouts trade the fixed sidebar column for an overlay drawer,
+  // toggled from the top bar. Measured on the layout root, not the viewport
+  // (same pattern as TerminalsWorkspace), so any embedding adapts as it resizes.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setNarrow(el.clientWidth > 0 && el.clientWidth < 640));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!narrow) setSidebarOpen(false);
+  }, [narrow]);
+
   // The side-panel agent conversation. Proposed skills (staged under
   // generated-skills/) open with the panel already showing — the conversation
   // that proposed them is the natural companion for reviewing. Manual close is
@@ -97,6 +114,7 @@ export default function StudioLayout() {
   }, [mining, data.root]);
 
   const onSelect = (rel: string) => {
+    setSidebarOpen(false); // a drawer tap always dismisses, even re-selecting the open file
     if (rel === selected) return; // no-op re-select; avoid a spurious discard prompt
     navigate(rel === "SKILL.md" ? studioPath(data.root) : studioFilePath(data.root, rel));
   };
@@ -173,8 +191,10 @@ export default function StudioLayout() {
     navigate("/");
   };
 
+  const sidebar = <Sidebar data={data} selected={selected} onSelect={onSelect} onDelete={onDelete} />;
+
   return (
-    <div className="flex h-screen flex-col bg-app text-fg">
+    <div ref={rootRef} className="flex h-dvh flex-col bg-app text-fg">
       <TopBar
         skillName={skillName(data)}
         selected={selected}
@@ -182,14 +202,23 @@ export default function StudioLayout() {
         showReview={showReview}
         previewing={preview != null}
         terminalsOpen={agentOpen}
+        narrow={narrow}
+        sidebarOpen={sidebarOpen}
         onToggleReview={toggleReview}
         onTerminals={() => setAgentOpen((o) => !o)}
+        onToggleSidebar={() => setSidebarOpen((o) => !o)}
         onManage={() => setManageOpen(true)}
         onExport={onExport}
       />
       <PreviewBanner />
-      <div className="flex min-h-0 flex-1">
-        <Sidebar data={data} selected={selected} onSelect={onSelect} onDelete={onDelete} />
+      <div className={narrow ? "relative flex min-h-0 flex-1" : "flex min-h-0 flex-1"}>
+        {!narrow && sidebar}
+        {narrow && sidebarOpen && (
+          <div className="absolute inset-0 z-10 flex">
+            {sidebar}
+            <div className="min-w-0 flex-1 bg-black/40" onClick={() => setSidebarOpen(false)} />
+          </div>
+        )}
         {/* The scroll pane (main) + the change overview ruler on its right edge.
             The left change bars + per-chunk Revert buttons are in-editor gutter
             decorations now (see LiveEditor); only the ruler stays an overlay (it

@@ -146,7 +146,7 @@ export function Component() {
   const hasRun = mining != null && mining.status !== "idle";
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-dvh flex-col">
       <NavBar
         breadcrumb={
           <>

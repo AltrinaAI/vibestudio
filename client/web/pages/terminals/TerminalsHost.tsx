@@ -17,7 +17,7 @@ export default function TerminalsHost({ active }: { active: boolean }) {
   // /terminals so the live ptys/xterm survive navigation (contents = no box).
   return (
     <div style={{ display: active ? "contents" : "none" }}>
-      <Suspense fallback={<div className="grid h-screen place-items-center"><Spinner /></div>}>
+      <Suspense fallback={<div className="grid h-dvh place-items-center"><Spinner /></div>}>
         <TerminalsWorkspace visible={active} />
       </Suspense>
     </div>

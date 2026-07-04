@@ -80,7 +80,7 @@ export default function TerminalsWorkspace({
 }: {
   visible: boolean;
   /** Chrome-less variant for embedding: no NavBar/deep-link, compact rail
-   *  with its own New button, h-full instead of h-screen. */
+   *  with its own New button, h-full instead of h-dvh. */
   embedded?: boolean;
   /** Select this session whenever it's set (e.g. the mining conversation). */
   focusId?: string | null;
@@ -266,7 +266,7 @@ export default function TerminalsWorkspace({
   );
 
   return (
-    <div ref={rootRef} className={`flex ${embedded ? "h-full" : "h-screen"} flex-col bg-app text-fg`}>
+    <div ref={rootRef} className={`flex ${embedded ? "h-full" : "h-dvh"} flex-col bg-app text-fg`}>
       {!embedded && (
         <NavBar
           breadcrumb={

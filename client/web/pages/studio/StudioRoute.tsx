@@ -243,7 +243,7 @@ export function Component() {
 
 function SkillLoadingShell() {
   return (
-    <div className="flex h-screen flex-col bg-app text-fg">
+    <div className="flex h-dvh flex-col bg-app text-fg">
       <NavBar />
       <div role="status" aria-live="polite" className="flex flex-1 items-center justify-center text-muted">
         <Spinner /> <span className="ml-2">Loading skill…</span>
@@ -255,7 +255,7 @@ function SkillLoadingShell() {
 function SkillErrorShell({ root, message }: { root: string; message: string }) {
   const navigate = useNavigate();
   return (
-    <div className="flex h-screen flex-col bg-app text-fg">
+    <div className="flex h-dvh flex-col bg-app text-fg">
       <NavBar />
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <p className="text-sm text-danger">{message}</p>

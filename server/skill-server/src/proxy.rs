@@ -162,16 +162,8 @@ pub fn proxy_sse(request: Request, url: &str, target: &RemoteTarget) {
     };
     let mut up = resp.into_reader();
 
+    let head = crate::sse_head(&request);
     let mut w = request.into_writer();
-    let head = concat!(
-        "HTTP/1.1 200 OK\r\n",
-        "Content-Type: text/event-stream\r\n",
-        "Cache-Control: no-store\r\n",
-        "Transfer-Encoding: chunked\r\n",
-        "Access-Control-Allow-Origin: *\r\n",
-        "X-Accel-Buffering: no\r\n",
-        "\r\n",
-    );
     if w.write_all(head.as_bytes()).is_err() || w.flush().is_err() {
         return; // client gone before we started
     }

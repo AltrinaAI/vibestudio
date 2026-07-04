@@ -679,6 +679,13 @@ fn create_session_inner(
     }
     let stub = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
+    // Server-scoped, set while the server is guaranteed alive: several backends
+    // (desktop, daemon, dev) share one tmux server, and the default `exit-empty
+    // on` kills it — everyone's sessions — when ONE backend's last session
+    // exits (a daemon legitimately holds zero between agent runs). The cost is
+    // an idle tmux server lingering after the user kills their last terminal.
+    let _ = tmux().args(["set-option", "-s", "exit-empty", "off"]).output();
+
     let label = format!("{} · {}", opt.label, basename(&cwd_resolved));
     // Sanitize every stored value: tabs/newlines (legal in paths) would corrupt
     // the tab-separated `list-sessions` parse.

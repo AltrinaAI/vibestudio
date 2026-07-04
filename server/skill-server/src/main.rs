@@ -21,7 +21,7 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use skill_server::{init_logging, spawn, RemoteControl, ServerConfig, SshRemoteControl};
+use skill_server::{init_logging, spawn, PhoneControl, RemoteControl, ServerConfig, SshRemoteControl};
 
 fn main() {
     // Install the logger first (stderr; level via RUST_LOG) so even early failures
@@ -69,6 +69,13 @@ fn main() {
     } else {
         None
     };
+    // Same gate as remoting: an interactive loopback server the user controls
+    // offers "Open on your phone" — enable() fronts THIS server with tailscale.
+    let phone = if !lifeline_stdin && is_loopback {
+        Some(std::sync::Arc::new(PhoneControl::new(env!("CARGO_PKG_VERSION").to_string())))
+    } else {
+        None
+    };
 
     let cfg = ServerConfig {
         host,
@@ -77,6 +84,7 @@ fn main() {
         token: token.clone(),
         startup_maintenance: true,
         remote,
+        phone: phone.clone(),
         ..Default::default()
     };
     let handle = match spawn(cfg) {
@@ -86,6 +94,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Some(p) = &phone {
+        p.set_port(handle.addr.port());
+    }
 
     // Machine-readable ready line FIRST (flushed), so the desktop can read back the
     // ephemeral port even when other logging follows. The token is NOT echoed here —

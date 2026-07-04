@@ -134,7 +134,7 @@ export function Component() {
   }, [dir, name, abs]);
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-dvh flex-col">
       <NavBar
         breadcrumb={
           <span className="truncate font-mono text-xs text-faint" title={abs}>

@@ -29,8 +29,11 @@ export default function TopBar({
   showReview,
   previewing,
   terminalsOpen,
+  narrow,
+  sidebarOpen,
   onToggleReview,
   onTerminals,
+  onToggleSidebar,
   onManage,
   onExport,
 }: {
@@ -46,8 +49,12 @@ export default function TopBar({
    *  destination) is open — the nav's Terminal link toggles it here instead of
    *  leaving the skill; the full page is reachable from the panel's expand button. */
   terminalsOpen: boolean;
+  /** Container is phone-narrow: the sidebar column is an overlay drawer, toggled here. */
+  narrow: boolean;
+  sidebarOpen: boolean;
   onToggleReview: () => void;
   onTerminals: () => void;
+  onToggleSidebar: () => void;
   onManage: () => void;
   onExport: () => void;
 }) {
@@ -74,6 +81,22 @@ export default function TopBar({
     >
       {/* Studio page chrome (NavBar category 2): rendered into the bar for now;
           conceptually belongs to the page and could move into the page body later. */}
+      {narrow && (
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          aria-pressed={sidebarOpen}
+          title="Files & versions"
+          className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
+            sidebarOpen ? "bg-accent text-accent-fg hover:opacity-90" : "text-muted hover:bg-panel hover:text-fg"
+          }`}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M9 4v16" />
+          </svg>
+        </button>
+      )}
       <AutosaveIndicator />
       {showReview && (
         <button

@@ -846,7 +846,7 @@ export function Component() {
   const totalFound = groups.reduce((n, g) => n + g.skills.length, 0);
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-dvh flex-col">
       <NavBar>
         <button
           type="button"

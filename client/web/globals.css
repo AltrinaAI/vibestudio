@@ -738,3 +738,15 @@ body {
 .diff-ruler-mark:hover {
   background: var(--accent);
 }
+
+/* dvh fallback for older WebKit (macOS < 12.3, the app's 10.15 floor): the vh
+   declaration stands wherever dvh fails to parse; both same specificity, so the
+   valid-latest wins on modern engines either way. */
+.h-dvh {
+  height: 100vh;
+  height: 100dvh;
+}
+.min-h-dvh {
+  min-height: 100vh;
+  min-height: 100dvh;
+}

@@ -18,6 +18,13 @@ const COPY_STASH_MS = 60_000;
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
+/** Touch panning: xterm 6 has no touch support, so vertical pans are converted
+ *  into synthetic wheel ticks — one per this many pixels of pan. */
+const TOUCH_SCROLL_PX = 25;
+/** A pan must move this far before committing to an axis (vertical = scroll,
+ *  horizontal = ignored). */
+const TOUCH_AXIS_LOCK_PX = 6;
+
 /** No real pane is ever this small — below it is a transient layout artifact.
  *  skill-term enforces the same floor as a backstop. */
 const MIN_COLS = 20;
@@ -88,6 +95,66 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     termRef.current?.focus();
   }, []);
 
+  // Coarse-pointer tap affordances: chords and native clipboard events don't
+  // exist under a finger. The attach effect publishes the pieces they need.
+  const [canCopy, setCanCopy] = useState(false);
+  const tapOpsRef = useRef<{
+    copySource: () => string;
+    pasteImage: (blob: Blob, mime: string) => Promise<void>;
+    note: (msg: string) => void;
+  } | null>(null);
+
+  /** Async-clipboard first — the inverse of the chord's copyText — because iOS
+   *  Safari ignores textarea.select(), letting execCommand "succeed" while
+   *  copying nothing. Inside a tap gesture writeText is allowed on secure
+   *  origins; copyText stays the fallback where navigator.clipboard is absent. */
+  const tapCopy = useCallback(() => {
+    const term = termRef.current;
+    const text = tapOpsRef.current?.copySource() ?? "";
+    if (!term || !text) return;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => copyText(text, () => term.focus()));
+    } else {
+      copyText(text, () => term.focus());
+    }
+    term.clearSelection();
+    term.focus();
+  }, []);
+
+  /** The tap is the user gesture clipboard.read() demands. Images ride the same
+   *  backend upload as the paste-event path; text goes straight into the pty. */
+  const tapPaste = useCallback(() => {
+    const term = termRef.current;
+    const ops = tapOpsRef.current;
+    if (!term || !ops) return;
+    void (async () => {
+      try {
+        if (navigator.clipboard?.read) {
+          const [item] = await navigator.clipboard.read();
+          const imgType = item?.types.find((t) => t.startsWith("image/"));
+          // Text wins when both are present, matching the paste-event path.
+          if (item?.types.includes("text/plain")) {
+            const text = await (await item.getType("text/plain")).text();
+            if (text) term.paste(text);
+          } else if (item && imgType) {
+            await ops.pasteImage(await item.getType(imgType), imgType);
+          }
+          term.focus();
+          return;
+        }
+      } catch {
+        // read() denied or exotic types — fall through to the text-only API.
+      }
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) term.paste(text);
+        term.focus();
+      } catch {
+        ops.note("clipboard read blocked — allow clipboard access for this site and retry");
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -110,6 +177,16 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     // OSC 52 write — honor it so copy-mode copies land on the system clipboard.
     // Releasing a mouse-drag IS the copy in tmux: there is no Ctrl+C step.
     let lastCopy = { text: "", at: 0 };
+    // canCopy shows the coarse-pointer Copy button: a native selection, or a
+    // stash that hasn't aged out yet — re-checked when it does.
+    let staleTimer: ReturnType<typeof setTimeout> | undefined;
+    const updateCanCopy = () => {
+      const fresh = Date.now() - lastCopy.at < COPY_STASH_MS;
+      setCanCopy(term.hasSelection() || fresh);
+      clearTimeout(staleTimer);
+      if (fresh) staleTimer = setTimeout(updateCanCopy, lastCopy.at + COPY_STASH_MS - Date.now());
+    };
+    const selSub = term.onSelectionChange(updateCanCopy);
     term.parser.registerOscHandler(52, (data) => {
       const semi = data.indexOf(";");
       const payload = semi < 0 ? "" : data.slice(semi + 1);
@@ -125,6 +202,7 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       // chord below replays the stash from inside a real keystroke when that
       // happens. The rejection is async, so a try/catch could never see it.
       lastCopy = { text, at: Date.now() };
+      updateCanCopy();
       navigator.clipboard?.writeText(text).catch((e) => log.debug("term", "OSC52 clipboard write denied", e));
       return true;
     });
@@ -198,6 +276,14 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     let handle: api.TerminalHandle | null = null;
     let dataSub: { dispose: () => void } | null = null;
     let sent = { cols: 0, rows: 0 };
+    // Ctrl+W is readline delete-word but also the browser's tab-close chord,
+    // which no key handler can intercept — make the close ask first. Safe to
+    // register unconditionally: the Tauri desktop webview ignores beforeunload,
+    // and tmux keeps the session alive either way (this guards accidents only).
+    const guardUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
     const syncSize = (why: string) => {
       const w = host.clientWidth;
       const h = host.clientHeight;
@@ -222,6 +308,7 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
           onClose: () => term.write("\r\n\x1b[2m[disconnected — the session may have ended]\x1b[0m\r\n"),
         });
         dataSub = term.onData((d) => handle!.write(d));
+        window.addEventListener("beforeunload", guardUnload);
         log.debug("term-size", `attach ${term.cols}×${term.rows} (${why}), id=${id}`);
       } else if (term.cols !== sent.cols || term.rows !== sent.rows) {
         handle.resize(term.cols, term.rows);
@@ -236,13 +323,30 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     // Images can't ride the text paste path: ship the bytes to the backend
     // (where the agent runs — possibly a remote host with no access to this
     // machine's clipboard) and paste the returned file path, the same shape
-    // drag-and-drop produces in a native terminal. When the clipboard carries
-    // both text and an image (e.g. spreadsheet cells), text wins and xterm's
-    // own paste handler takes it.
+    // drag-and-drop produces in a native terminal. Shared by the paste event
+    // below and the coarse-pointer Paste button.
     let gone = false;
     const note = (msg: string) => {
       if (!gone) term.write(`\r\n\x1b[2m[${msg}]\x1b[0m\r\n`);
     };
+    const pasteImage = async (blob: Blob, mime: string) => {
+      // Reject oversized images here, before encoding ~1.33× their bytes into a
+      // JSON body and shipping it through the SSH tunnel only for the server's
+      // identical cap to 400 it. Keep the limit in sync with save_pasted_image.
+      if (blob.size > MAX_PASTE_BYTES) {
+        note("image too large (max 32 MB)");
+        return;
+      }
+      try {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const { path } = await api.terminalPasteImage(bytes, mime);
+        if (!gone) term.paste(path);
+      } catch (err) {
+        note(`couldn't paste image: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    // When the clipboard carries both text and an image (e.g. spreadsheet
+    // cells), text wins and xterm's own paste handler takes it.
     const onPaste = (e: ClipboardEvent) => {
       const dt = e.clipboardData;
       const img = dt && Array.from(dt.items).find((it) => it.kind === "file" && it.type.startsWith("image/"));
@@ -255,24 +359,61 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       // DataTransferItem is neutered once this handler returns, so `img.type`
       // reads "" after the first await — which the server's allowlist rejects.
       const mime = file.type || img.type;
-      // Reject oversized images here, before encoding ~1.33× their bytes into a
-      // JSON body and shipping it through the SSH tunnel only for the server's
-      // identical cap to 400 it. Keep the limit in sync with save_pasted_image.
-      if (file.size > MAX_PASTE_BYTES) {
-        note("image too large (max 32 MB)");
-        return;
-      }
-      void (async () => {
-        try {
-          const bytes = new Uint8Array(await file.arrayBuffer());
-          const { path } = await api.terminalPasteImage(bytes, mime);
-          if (!gone) term.paste(path);
-        } catch (err) {
-          note(`couldn't paste image: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      })();
+      void pasteImage(file, mime);
     };
     host.addEventListener("paste", onPaste, true);
+
+    // xterm 6 has no touch handling, so vertical pans are re-issued as synthetic
+    // wheel events (one tick per TOUCH_SCROLL_PX of pan) at the screen element,
+    // riding the normal wheel → tmux copy-mode scroll path. DOM_DELTA_LINE
+    // deltas dodge the trackpad damping in xterm's consumeWheelEvent that can
+    // swallow small pixel deltas; pan down ⇒ deltaY < 0 ⇒ back into history.
+    let pan: { x: number; y: number; acc: number; axis: "v" | "h" | null } | null = null;
+    const onTouchStart = (e: TouchEvent) => {
+      pan =
+        e.touches.length === 1
+          ? { x: e.touches[0].clientX, y: e.touches[0].clientY, acc: 0, axis: null }
+          : null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pan || !handle || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - pan.x;
+      const dy = t.clientY - pan.y;
+      if (pan.axis === null) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < TOUCH_AXIS_LOCK_PX) return;
+        pan.axis = Math.abs(dy) >= Math.abs(dx) ? "v" : "h";
+      }
+      if (pan.axis === "h") return; // horizontal pans are not ours
+      e.preventDefault(); // ours: keep the page from scrolling / pull-to-refresh
+      pan.acc += dy;
+      pan.x = t.clientX;
+      pan.y = t.clientY;
+      const screen = host.querySelector(".xterm-screen");
+      if (!screen) return;
+      while (Math.abs(pan.acc) >= TOUCH_SCROLL_PX) {
+        const back = pan.acc > 0;
+        pan.acc -= back ? TOUCH_SCROLL_PX : -TOUCH_SCROLL_PX;
+        screen.dispatchEvent(
+          new WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            clientX: t.clientX,
+            clientY: t.clientY,
+            deltaY: back ? -1 : 1,
+            deltaMode: WheelEvent.DOM_DELTA_LINE,
+          }),
+        );
+      }
+    };
+    const endPan = () => {
+      pan = null;
+    };
+    host.addEventListener("touchstart", onTouchStart, { passive: true });
+    // passive:false — the preventDefault above must be honored mid-gesture.
+    host.addEventListener("touchmove", onTouchMove, { passive: false });
+    host.addEventListener("touchend", endPan);
+    host.addEventListener("touchcancel", endPan);
 
     let raf = 0;
     const ro = new ResizeObserver(() => {
@@ -283,10 +424,25 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     term.focus();
 
     refitRef.current = () => syncSize("shown");
+    tapOpsRef.current = {
+      copySource: () => {
+        if (term.hasSelection()) return term.getSelection();
+        return Date.now() - lastCopy.at < COPY_STASH_MS ? lastCopy.text : "";
+      },
+      pasteImage,
+      note,
+    };
 
     return () => {
       gone = true;
       host.removeEventListener("paste", onPaste, true);
+      host.removeEventListener("touchstart", onTouchStart);
+      host.removeEventListener("touchmove", onTouchMove);
+      host.removeEventListener("touchend", endPan);
+      host.removeEventListener("touchcancel", endPan);
+      window.removeEventListener("beforeunload", guardUnload);
+      clearTimeout(staleTimer);
+      selSub.dispose();
       cancelAnimationFrame(raf);
       themeObs.disconnect();
       ro.disconnect();
@@ -295,6 +451,8 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       term.dispose();
       termRef.current = null;
       refitRef.current = () => {};
+      tapOpsRef.current = null;
+      setCanCopy(false);
     };
   }, [id, applySelectMode]);
 
@@ -306,25 +464,50 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
 
   return (
     <div className="group relative h-full w-full">
-      <button
-        type="button"
-        // preventDefault keeps the click from stealing focus / starting a drag in
-        // the terminal underneath; applySelectMode hands focus back to the term.
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => applySelectMode(!selectMode)}
-        title={
-          selectMode
-            ? "Select mode on — drag to highlight, ⌘/Ctrl-C to copy, Esc to exit"
-            : "Select text — drag to highlight a region, then ⌘/Ctrl-C"
-        }
-        className={`absolute right-2 top-2 z-10 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm transition ${
-          selectMode
-            ? "bg-accent text-accent-fg"
-            : "pointer-events-none border border-border bg-surface/85 text-muted opacity-0 backdrop-blur hover:bg-panel hover:text-fg focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
-        }`}
-      >
-        {selectMode ? "Selecting…" : "Select"}
-      </button>
+      {/* pointer-events-none on the row (the property inherits) so the overlay
+          never blocks the terminal; each button opts back in. Copy/Paste are
+          coarse-pointer only — mouse-and-keyboard users have the chords. */}
+      <div className="pointer-events-none absolute right-2 top-2 z-10 flex gap-1.5">
+        {canCopy && (
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={tapCopy}
+            title="Copy the selection (or the last tmux copy)"
+            className="pointer-events-auto hidden rounded-md border border-border bg-surface/85 px-2 py-0.5 text-xs font-medium text-muted shadow-sm backdrop-blur pointer-coarse:block"
+          >
+            Copy
+          </button>
+        )}
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={tapPaste}
+          title="Paste from the clipboard"
+          className="pointer-events-auto hidden rounded-md border border-border bg-surface/85 px-2 py-0.5 text-xs font-medium text-muted shadow-sm backdrop-blur pointer-coarse:block"
+        >
+          Paste
+        </button>
+        <button
+          type="button"
+          // preventDefault keeps the click from stealing focus / starting a drag in
+          // the terminal underneath; applySelectMode hands focus back to the term.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => applySelectMode(!selectMode)}
+          title={
+            selectMode
+              ? "Select mode on — drag to highlight, ⌘/Ctrl-C to copy, Esc to exit"
+              : "Select text — drag to highlight a region, then ⌘/Ctrl-C"
+          }
+          className={`rounded-md px-2 py-0.5 text-xs font-medium shadow-sm transition ${
+            selectMode
+              ? "pointer-events-auto bg-accent text-accent-fg"
+              : "pointer-events-none border border-border bg-surface/85 text-muted opacity-0 backdrop-blur hover:bg-panel hover:text-fg focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100"
+          }`}
+        >
+          {selectMode ? "Selecting…" : "Select"}
+        </button>
+      </div>
       <div
         ref={hostRef}
         className={`h-full w-full overflow-hidden bg-surface p-1.5 ${

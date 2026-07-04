@@ -5,6 +5,13 @@
 // only jobs are: host the window, seed the bundled-engine path, own the engine +
 // terminal lifecycle (the in-process server runs with `startup_maintenance:false`,
 // so these fire exactly once), and reap on exit.
+//
+// Lifecycle is TRAY-governed: closing the window hides it (server + phone access
+// stay up); the tray's Quit is the one explicit full-teardown — terminals
+// included. Every other exit (update restart, crash, plain Cmd+Q) leaves tmux
+// agents running for the next launch to pick up.
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -159,31 +166,50 @@ pub fn run() {
                 .clone()
                 .map(|r| r.join("dist"))
                 .unwrap_or_else(|| std::path::PathBuf::from("dist"));
-            let cfg = ServerConfig {
+            let phone =
+                std::sync::Arc::new(skill_server::PhoneControl::new(app.package_info().version.to_string()));
+            let updater = std::sync::Arc::new(ShellUpdater {
+                app: app.handle().clone(),
+                remote_slot: remote_slot_setup.clone(),
+            }) as std::sync::Arc<dyn skill_core::update::UpdateControl>;
+            let make_cfg = |port: u16| ServerConfig {
                 host: "127.0.0.1".into(),
-                // Dev: fixed 8765 so Vite's existing /api proxy target matches.
-                // Prod: an ephemeral port, read back from the handle.
-                port: if tauri::is_dev() { 8765 } else { 0 },
-                dist,
+                port,
+                dist: dist.clone(),
                 bundled_skills: resource_dir.clone().map(|r| r.join("skills")),
-                examples_base: resource_dir, // resolve bundled examples by relative path
+                examples_base: resource_dir.clone(), // resolve bundled examples by relative path
                 startup_maintenance: false,
                 // Plug the SSH connection manager into the local switchboard.
                 remote: Some(remote.clone() as std::sync::Arc<dyn skill_server::RemoteControl>),
                 // Hand the server's update module its installer (see ShellUpdater).
-                updater: Some(std::sync::Arc::new(ShellUpdater {
-                    app: app.handle().clone(),
-                    remote_slot: remote_slot_setup.clone(),
-                }) as std::sync::Arc<dyn skill_core::update::UpdateControl>),
+                updater: Some(updater.clone()),
+                phone: Some(phone.clone()),
                 ..Default::default()
             };
-            let port = match skill_server::spawn(cfg) {
-                Ok(h) => h.addr.port(),
+            // Bind the stable phone port first (it's also dev's Vite proxy target),
+            // so a persisted `tailscale serve` mapping finds the app again on the
+            // next launch. Prod falls back to an ephemeral port when it's taken
+            // (the phone mapping goes stale until re-enabled, the app still works);
+            // dev tolerates the failure outright — an external skill-server may
+            // already hold 8765 and back the Vite proxy.
+            let preferred = std::env::var("SKILL_STUDIO_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(skill_server::PHONE_PORT);
+            let port = match skill_server::spawn(make_cfg(preferred)) {
+                Ok(h) => {
+                    phone.set_port(h.addr.port());
+                    h.addr.port()
+                }
+                Err(e) if !tauri::is_dev() => {
+                    log::warn!("port {preferred} taken ({e}); falling back to an ephemeral port");
+                    let h = skill_server::spawn(make_cfg(0))?;
+                    phone.set_port(h.addr.port());
+                    h.addr.port()
+                }
                 Err(e) => {
-                    // Dev tolerates this — an external skill-server may already hold
-                    // 8765 and back the Vite proxy. Prod logs the failure.
                     log::error!("in-process server did not start: {e}");
-                    8765
+                    preferred
                 }
             };
 
@@ -213,20 +239,90 @@ pub fn run() {
                     tauri::webview::NewWindowResponse::Deny
                 })
                 .build()?;
+
+            // ── tray: the lifecycle owner. Closing the window only hides it (the
+            // server, terminals, and phone access stay up); Quit here is the ONE
+            // explicit full teardown — every studio terminal on this machine, the
+            // live SSH session, and the engine end with it. Update restarts and
+            // plain window closes never touch the terminals.
+            let open_item = MenuItemBuilder::with_id("open", "Open Skill Studio").build(app)?;
+            let phone_item = MenuItemBuilder::with_id("phone", "Open on your phone…").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit Skill Studio").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .item(&open_item)
+                .item(&phone_item)
+                .separator()
+                .item(&quit_item)
+                .build()?;
+            let remote_for_tray = remote.clone();
+            let mut tray = TrayIconBuilder::with_id("main-tray")
+                .tooltip("Skill Studio")
+                .menu(&menu)
+                .on_menu_event(move |app, event| match event.id().as_ref() {
+                    "open" => show_main(app),
+                    "phone" => {
+                        show_main(app);
+                        // The SPA opens the phone modal when it sees this param
+                        // (and strips it) — see RemoteMenu.tsx.
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.eval("window.location.hash = '#/?phone=1'");
+                        }
+                    }
+                    "quit" => {
+                        if let Ok(sessions) = skill_term::list_sessions() {
+                            for s in sessions {
+                                let _ = skill_term::kill_session(&s.id);
+                            }
+                        }
+                        remote_for_tray.shutdown();
+                        engine::shutdown();
+                        app.exit(0);
+                    }
+                    _ => {}
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Close = hide to tray; the tray's Quit is how you actually leave.
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |_app, event| {
-            // Closing the desktop app tears down what only THIS process can use —
-            // the inference engine child and any live SSH session — but leaves the
-            // tmux terminals running: agents keep working after quit and are picked
-            // up by the next launch (or any other client). See skill-term's docs.
-            if let tauri::RunEvent::Exit = event {
-                if let Some(r) = remote_slot.get() {
-                    r.shutdown();
+        .run(move |app, event| {
+            match event {
+                // Any non-tray exit (update restart, Cmd+Q, OS shutdown) tears down
+                // what only THIS process can use — the inference engine child and any
+                // live SSH session — but leaves the tmux terminals running: agents
+                // keep working and are picked up by the next launch (or any other
+                // client). Only the tray's Quit also ends the terminals.
+                tauri::RunEvent::Exit => {
+                    if let Some(r) = remote_slot.get() {
+                        r.shutdown();
+                    }
+                    engine::shutdown(); // reap the inference engine child
                 }
-                engine::shutdown(); // reap the inference engine child
+                // macOS: clicking the dock icon with the window hidden re-shows it.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => show_main(app),
+                _ => {}
             }
         });
+}
+
+/// Show + focus the main window (tray "Open", macOS dock reopen).
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }

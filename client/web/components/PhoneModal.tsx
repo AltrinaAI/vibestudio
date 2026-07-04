@@ -1,0 +1,228 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { Modal } from "@/components/Modal";
+import { Spinner, btnGhost, btnPrimary } from "@/components/ui";
+import * as api from "@/lib/api";
+
+export function PhoneIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+      <rect x="7" y="2" width="10" height="20" rx="2" />
+      <path d="M11 18h2" />
+    </svg>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className={btnGhost}
+      onClick={() => {
+        void navigator.clipboard?.writeText(text);
+        setCopied(true);
+      }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+const codeCls = "rounded-md border border-border bg-panel px-2.5 py-1.5 font-mono text-xs text-fg";
+
+type EnableFailure = Extract<api.PhoneEnableResult, { ok: false }>;
+
+/**
+ * "Open on your phone" — serves the app over the user's Tailscale network and
+ * shows a QR code the phone scans. Opened from the Remote dialog, which only
+ * offers it once `/api/phone/status` answered (the feature 404s on standalone
+ * remote servers), or via the tray's `#/?phone=1` deep link.
+ */
+export default function PhoneModal({ onClose }: { onClose: () => void }) {
+  const [status, setStatus] = useState<api.PhoneStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false); // enable/disable in flight
+  const [fail, setFail] = useState<EnableFailure | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setStatus(await api.phoneStatus());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't check phone access.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const doEnable = async () => {
+    setBusy(true);
+    setFail(null);
+    setError(null);
+    try {
+      const r = await api.phoneEnable();
+      if (r.ok) setStatus(r);
+      else setFail(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't enable phone access.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDisable = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.phoneDisable();
+      setFail(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't turn off phone access.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Narrowed serving view-model; per the contract url/qrSvg are only set while
+  // serving with tailscale "ok".
+  const live =
+    status && status.serving && status.tailscale === "ok" && status.url && status.qrSvg
+      ? { url: status.url, qrSvg: status.qrSvg, server: status.server }
+      : null;
+
+  return (
+    <Modal title="Open on your phone" titleLeading={<PhoneIcon />} onClose={onClose}>
+      <div className="space-y-4 px-5 py-4">
+        {loading ? (
+          <p className="flex items-center gap-2 text-sm text-muted">
+            <Spinner className="h-4 w-4" /> Checking…
+          </p>
+        ) : status == null ? (
+          <>
+            <p className="text-sm text-muted">{error ?? "Phone access isn't available on this server."}</p>
+            {error && (
+              <div className="flex justify-end pt-1">
+                <button type="button" onClick={() => void load()} className={btnPrimary}>
+                  Retry
+                </button>
+              </div>
+            )}
+          </>
+        ) : status.tailscale === "missing" ? (
+          <>
+            <p className="text-sm text-fg">
+              Phone access works over Tailscale, a free private network between your devices — it isn't installed on
+              this computer yet.
+            </p>
+            <p className="text-sm text-muted">Install it here and on your phone (same account), then check again.</p>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => void load()} className={btnGhost}>
+                Check again
+              </button>
+              <a
+                href="https://tailscale.com/download"
+                target="_blank"
+                rel="noreferrer noopener"
+                className={`${btnPrimary} inline-block`}
+              >
+                Get Tailscale ↗
+              </a>
+            </div>
+          </>
+        ) : status.tailscale === "stopped" ? (
+          <>
+            <p className="text-sm text-fg">Tailscale is installed but not running.</p>
+            <p className="text-sm text-muted">
+              Start it with <code className={`${codeCls} px-1.5 py-0.5`}>tailscale up</code>, then check again.
+            </p>
+            <div className="flex justify-end pt-1">
+              <button type="button" onClick={() => void load()} className={btnPrimary}>
+                Check again
+              </button>
+            </div>
+          </>
+        ) : live ? (
+          <>
+            {/* Our own server's SVG; white padding so the code scans in dark mode. */}
+            <div
+              className="mx-auto h-[200px] w-[200px] rounded-lg bg-white p-3 [&_svg]:h-full [&_svg]:w-full"
+              dangerouslySetInnerHTML={{ __html: live.qrSvg }}
+            />
+            <p className="text-center text-sm text-muted">
+              Scan with your phone's camera. Works from any device signed in to your Tailscale network.
+            </p>
+            <div className="flex items-center gap-2">
+              <span className={`${codeCls} min-w-0 flex-1 select-all truncate`}>{live.url}</span>
+              <CopyButton text={live.url} />
+            </div>
+            {error && <p className="text-sm text-danger">{error}</p>}
+            <div className="flex items-center justify-between gap-3 pt-1">
+              <p className="text-xs text-faint">
+                Served by Skill Studio
+                {live.server.version && !["dev", "0.0.0"].includes(live.server.version)
+                  ? ` v${live.server.version}`
+                  : ""}{" "}
+                on port {live.server.port} — available while the app is running (closing the window keeps it in your
+                tray).
+              </p>
+              <button type="button" onClick={() => void doDisable()} disabled={busy} className={`${btnGhost} shrink-0`}>
+                {busy ? "Turning off…" : "Turn off"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-fg">
+              Get a QR code your phone can scan to open Skill Studio, over your Tailscale network.
+            </p>
+            {fail?.stage === "operator" && fail.command ? (
+              <div className="space-y-2">
+                <p className="text-sm text-muted">Tailscale needs a one-time permission. Run this once, then retry:</p>
+                <div className="flex items-center gap-2">
+                  <code className={`${codeCls} min-w-0 flex-1 overflow-x-auto whitespace-nowrap`}>{fail.command}</code>
+                  <CopyButton text={fail.command} />
+                </div>
+              </div>
+            ) : fail?.stage === "consent" && fail.consentUrl ? (
+              <p className="text-sm text-muted">
+                Tailscale needs your approval to serve from this computer. Approve it, then retry.
+              </p>
+            ) : fail ? (
+              <p className="text-sm text-danger">{fail.message}</p>
+            ) : null}
+            {error && <p className="text-sm text-danger">{error}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              {fail?.stage === "consent" && fail.consentUrl ? (
+                <>
+                  <button type="button" onClick={() => void doEnable()} disabled={busy} className={btnGhost}>
+                    {busy ? "Retrying…" : "Retry"}
+                  </button>
+                  <a
+                    href={fail.consentUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className={`${btnPrimary} inline-block`}
+                  >
+                    Approve on Tailscale ↗
+                  </a>
+                </>
+              ) : (
+                <button type="button" onClick={() => void doEnable()} disabled={busy} className={btnPrimary}>
+                  {busy ? "Enabling…" : fail || error ? "Retry" : "Enable phone access"}
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}

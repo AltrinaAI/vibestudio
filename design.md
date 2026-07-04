@@ -140,19 +140,59 @@ conflicts stay rare.
 | Browser/desktop, **remote** backend | skill-server on the remote host | `VITE_API_TARGET=http://<remote>:8765 npm run dev:vite` | `localhost:1420` |
 | Native desktop | the shell spawns a loopback `skill-server` | `npm run tauri dev` | the native window |
 | Production / remote | `npm run build` then run skill-server | (served by skill-server) | skill-server's port (UI + API, one origin) |
+| **Browser-only / phone** (tailnet) | skill-server on `127.0.0.1:8765` + `tailscale serve --bg 8765` | (served by skill-server) | `https://<machine>.<tailnet>.ts.net` |
 
 The Vite `/api` proxy (`vite.config.ts`, target via `VITE_API_TARGET`) defaults to `:8765`;
 `tauri dev` spawns its own loopback server there. Desktop runs the server in-process via
 `skill_server::spawn(ServerConfig)` (`client/desktop/src/lib.rs`); `ServerConfig` carries the
 bearer `token` + `examples_base`.
 
+## Tray-governed lifecycle + "Open on your phone"
+
+The desktop app is **tray-resident** (`client/desktop/src/lib.rs`): closing the window hides it
+— the in-process server, terminals, and phone access stay up — and the tray's **Quit** is the
+one explicit full teardown: it kills every studio terminal on the machine
+(`skill_term::list_sessions` → `kill_session`), the live SSH session, and the engine, then
+exits. Icon present = reachable; icon gone = nothing of ours running. Every OTHER exit (update
+restart, plain Cmd+Q, crash) still leaves tmux agents running for the next launch to pick up —
+update restarts must never kill a working agent. There is **no separate daemon process**.
+
+**"Open on your phone" (`/api/phone/*`, `server/skill-server/src/phone.rs`).** Remote dialog →
+*Open on your phone* → QR (the tray's item deep-links the same modal via `#/?phone=1`).
+`PhoneControl.enable()` fronts **this very server** with `tailscale serve` and returns the
+`https://<magicdns>` URL + QR SVG. Guided failures: `operator` (one-time
+`tailscale set --operator`), `consent` (tailnet HTTPS approval link), `tailscale`
+missing/stopped. The desktop binds `PHONE_PORT` (8765) by preference — the serve mapping
+persists in tailscaled, so a stable port lets it find the app on the next launch — with an
+ephemeral fallback when taken (`status()` then reports not-serving rather than a dead QR).
+`/api/phone/*` and `/api/health` (`{version, pid}`) are always-local, never proxied. `embed-ui`
+builds compile `dist/` into the binary (`include_dir`; `build.rs` re-runs on dist changes —
+without it a rebuild silently ships a stale SPA) so the standalone/headless binary serves the
+UI with no dist on disk. skill-term sets tmux `exit-empty off` (server-scoped) at session
+creation: backends come and go (dev + app share the tmux server), and the server must survive
+zero-session gaps.
+
+**Browser-only constraints.** The SPA and API are root-absolute (Vite base `/`, `API_BASE=""`),
+so the server must sit at the origin root — no sub-path mounts. Tokens don't work from a plain
+browser (the SPA never sends `Authorization`, and the attach SSE is an `EventSource`, which
+can't): browser mode = `token: None`, with reachability (loopback bind + tailnet) as the auth
+boundary. CORS is loopback-only and POSTs from foreign origins are refused at the choke point
+(`origin_allowed`), so a random website in a tailnet browser can't drive the API; anyone who can
+*open* the URL, though, has full control — including the Remote-SSH switchboard, which stays
+live on a loopback standalone server. Auto-resume of the last SSH remote is loopback-origin-only
+(`remote.ts maybeResume`), so a phone hitting the shared URL never silently flips the server's
+backing data. Multi-viewer polish (a second browser observing a remote connect/disconnect) is
+deliberately not handled yet.
+
 ## Terminals: persistent by design
 
 Agent terminals are tmux sessions (`ass-*`); the backend is only a **bridge** (`tmux attach`
 in a PTY).
 
-1. **A terminal outlives everything but an explicit kill** — closing a tab, quitting the app,
-   dropping SSH, or restarting/upgrading a backend never stops the agent inside.
+1. **A terminal outlives everything but an explicit kill** — closing a tab, closing the app
+   window, dropping SSH, or restarting/upgrading a backend never stops the agent inside. The
+   tray's **Quit** is an explicit kill: it ends every studio terminal (see the tray-governed
+   lifecycle section) — that's the desktop's "off switch", not an incidental exit.
 2. **The `ass-*` namespace is machine-wide, unfiltered:** every backend lists/attaches/kills all
    studio sessions, so any client picks up any agent. The pid in `ass-<pid>-<secs>-<seq>` only
    prevents name collisions; `@ass_owner_pid` is provenance, not a lifecycle key.

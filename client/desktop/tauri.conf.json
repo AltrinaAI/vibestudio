@@ -3,9 +3,15 @@
   "productName": "Skill Studio",
   "identifier": "ai.generalagency.skillstudio",
   "build": {
-    "beforeDevCommand": { "script": "npm run dev:vite", "cwd": "../.." },
+    "beforeDevCommand": {
+      "script": "npm run dev:vite",
+      "cwd": "../.."
+    },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": { "script": "npm run build", "cwd": "../.." },
+    "beforeBuildCommand": {
+      "script": "npm run build",
+      "cwd": "../.."
+    },
     "frontendDist": "../../dist"
   },
   "app": {
@@ -26,14 +32,24 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": ["https://github.com/AltrinaAI/skill-studio/releases/latest/download/latest.json"],
+      "endpoints": [
+        "https://github.com/AltrinaAI/skill-studio/releases/latest/download/latest.json"
+      ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU1ODBFMTJBQzc2RUQwM0QKUldROTBHN0hLdUdBVmJhUnducHhzMzd1NkZzeWRWbnhjSzRRdGlYcjlyQjFTbW1JNXlhNWFYS0gK",
-      "windows": { "installMode": "quiet" }
+      "windows": {
+        "installMode": "quiet"
+      }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "dmg", "app", "deb", "appimage"],
+    "targets": [
+      "nsis",
+      "dmg",
+      "app",
+      "deb",
+      "appimage"
+    ],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
@@ -42,16 +58,32 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": { "../../dist": "dist", "../../examples": "examples", "../../skills": "skills" },
+    "resources": {
+      "../../dist": "dist",
+      "../../examples": "examples",
+      "../../skills": "skills"
+    },
     "category": "DeveloperTool",
     "shortDescription": "View and edit Agent Skills",
     "longDescription": "Discover, view, and edit Agent Skills across Claude Code, Codex, Cursor, and OpenClaw.",
     "linux": {
-      "deb": { "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"] }
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1"
+        ]
+      }
     },
-    "macOS": { "minimumSystemVersion": "10.15", "signingIdentity": "-" },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": "-"
+    },
     "windows": {
-      "nsis": { "installMode": "currentUser", "installerIcon": "icons/icon.ico" }
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
     }
   }
 }

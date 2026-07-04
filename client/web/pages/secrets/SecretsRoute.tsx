@@ -12,7 +12,7 @@ import ProviderGallery from "./ProviderGallery";
  */
 export function Component() {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-dvh flex-col">
       <NavBar
         breadcrumb={
           <>

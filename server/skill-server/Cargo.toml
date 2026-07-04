@@ -20,6 +20,10 @@ path = "src/main.rs"
 # native deps (nix/libc/serial2) — are dropped entirely.
 default = ["local-backend"]
 local-backend = ["dep:skill-term"]
+# Compile the built SPA (repo-root ./dist) into the binary, so a bare
+# `skill-server` serves the UI with no dist on disk (the daemon / release
+# artifact case). Off by default: dev builds shouldn't require `npm run build`.
+embed-ui = ["dep:include_dir"]
 
 [dependencies]
 skill-core = { path = "../skill-core" }
@@ -43,3 +47,6 @@ sha2 = "0.10"
 # remote binary lean; `humantime` re-enables readable timestamps. All pure-Rust.
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+# Phone access: QR code for the served URL (pure Rust, renders SVG).
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+include_dir = { version = "0.7", optional = true }
