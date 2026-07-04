@@ -70,14 +70,18 @@ Until you publish, **nothing reaches users** — a draft is invisible to the upd
    re-create the tag at the new HEAD** and re-push (`gh release delete vX.Y.Z --yes
    --cleanup-tag` if a draft was made; then re-tag). Re-running a leg is fine for
    transient infra/notary failures.
-7. **Draft the release message.** Succinct, in the house style: a one-line **bold
-   headline**, then a few bullets each led by a **bold** phrase. Cover everything
-   since the last *published* release (not the last tag — skipped/overwritten drafts
-   mean users may be jumping several commits). `gh release list` shows which is
-   "Latest" vs "Draft".
+7. **Write the release message onto the draft.** Succinct, in the house style: a
+   one-line **bold headline**, then a few bullets each led by a **bold** phrase.
+   Cover everything since the last *published* release (not the last tag —
+   skipped/overwritten drafts mean users may be jumping several commits).
+   `gh release list` shows which is "Latest" vs "Draft". Put it on the draft
+   right away — drafts are invisible, and it's proofreadable in the UI:
+   ```bash
+   gh release edit vX.Y.Z --notes-file notes.md
+   ```
 8. **Publish** (after confirmation, per the pause note):
    ```bash
-   gh release edit vX.Y.Z --notes-file notes.md --draft=false --latest
+   gh release edit vX.Y.Z --draft=false --latest
    ```
 9. **Verify the published release.** Publishing fires `release-tidy`; give it ~30s,
    then confirm the final asset set:
