@@ -813,7 +813,7 @@ export interface ConnectionPending {
 export const connectionBegin = (url: string, origin: string, label?: string) =>
   http<ConnectionBegin>("POST", "connections/begin", { url, origin, label });
 export const connectionPending = (state: string) =>
-  http<ConnectionPending>("GET", `connection-pending?state=${encodeURIComponent(state)}`);
+  http<ConnectionPending>("GET", `connections/pending?state=${encodeURIComponent(state)}`);
 export const connectionsList = () => http<ConnectionInfo[]>("GET", "connections/list");
 /** Redo OAuth for an existing connection — keeps the same id/slug, so the
  *  gateway URL already in agent configs stays valid. Errors as in begin. */
