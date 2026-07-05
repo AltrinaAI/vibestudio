@@ -256,6 +256,8 @@ A **local proxy switchboard**; the webview never changes origin.
   Pinned local: `/api/update/*`, `/api/client-log`, and `/api/notify*` (a toast/dock badge
   belongs to the machine whose screen you're looking at — and only to its own webview: a
   tailscale-served phone request gets the 404 and uses the Web Notification API instead).
+  `/api/push/*` (Web Push: key, subscribe, attention) is deliberately NOT pinned — with a
+  hub connected it proxies, so subscriptions live next to the bell watcher that fires them.
   Non-`/api` GETs serve the local UI.
 - **Connect flow:** list targets (`~/.ssh/config` + WSL distros) → detect arch (`uname`) →
   ensure a version-pinned static-musl `skill-server` (checksum-verified) → launch loopback-bound

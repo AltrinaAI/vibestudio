@@ -5,6 +5,10 @@
 //! fans edge events out to every subscriber. Events are HINTS, not state: the
 //! client re-fetches `/api/terminal/list` on (re)connect and on every event, so
 //! there is no replay buffer and a missed frame costs nothing.
+//!
+//! The watcher also feeds `push::notify_bells` on every bell edge — Web Push
+//! must fire precisely when NO browser is connected, so it runs from server
+//! boot ([`start`]) and never pauses.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -23,14 +27,19 @@ fn subscribers() -> MutexGuard<'static, Vec<Sender<String>>> {
     SUBS.get_or_init(Mutex::default).lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Register a stream. Starts the watcher on first use (no subscriber has ever
-/// existed ⇒ no tmux polling), and pushes a comment frame through the registry
-/// so senders whose stream died between events get pruned even on a quiet server.
-pub(crate) fn subscribe() -> Receiver<String> {
+/// Start the watcher (idempotent). Called at server boot so bell edges reach
+/// Web Push subscribers with zero browsers connected.
+pub(crate) fn start() {
     static START: Once = Once::new();
     START.call_once(|| {
         std::thread::spawn(watcher_loop);
     });
+}
+
+/// Register a stream, and push a comment frame through the registry so senders
+/// whose stream died between events get pruned even on a quiet server.
+pub(crate) fn subscribe() -> Receiver<String> {
+    start();
     let (tx, rx) = mpsc::channel();
     subscribers().push(tx);
     emit(": sub\n\n".to_string());
@@ -56,17 +65,28 @@ fn bell_secs(s: &SessionInfo) -> u64 {
     s.bell_at.trim().parse().unwrap_or(0)
 }
 
-/// Frames for what changed between two snapshots. `bell` fires only for a
-/// session present in BOTH: one that arrives already-belled is just `opened` —
-/// its stale bell must not re-announce on a server restart.
+/// Sessions whose bell advanced between two snapshots — present in BOTH: one
+/// that arrives already-belled is just `opened`, and its stale bell must not
+/// re-announce (or re-push) on a server restart.
+pub(crate) fn bell_edges<'a>(
+    prev: &HashMap<String, SessionInfo>,
+    now: &'a [SessionInfo],
+) -> Vec<&'a SessionInfo> {
+    now.iter()
+        .filter(|s| prev.get(&s.id).is_some_and(|p| bell_secs(s) > bell_secs(p)))
+        .collect()
+}
+
+/// Frames for what changed between two snapshots.
 pub(crate) fn diff(prev: &HashMap<String, SessionInfo>, now: &[SessionInfo]) -> Vec<String> {
     let mut frames = Vec::new();
     for s in now {
-        match prev.get(&s.id) {
-            None => frames.push(frame("opened", &payload(s))),
-            Some(p) if bell_secs(s) > bell_secs(p) => frames.push(frame("bell", &payload(s))),
-            Some(_) => {}
+        if !prev.contains_key(&s.id) {
+            frames.push(frame("opened", &payload(s)));
         }
+    }
+    for s in bell_edges(prev, now) {
+        frames.push(frame("bell", &payload(s)));
     }
     for (id, p) in prev {
         if !now.iter().any(|s| &s.id == id) {
@@ -76,30 +96,29 @@ pub(crate) fn diff(prev: &HashMap<String, SessionInfo>, now: &[SessionInfo]) -> 
     frames
 }
 
-/// Seed silently, then emit edges each tick. While nobody is subscribed the
-/// snapshot is dropped and tmux isn't queried; the re-seed on the next
-/// subscriber means events from the unobserved gap never burst-replay.
+/// Seed silently, then emit edges each tick — continuously from boot: pausing
+/// while unsubscribed (as this once did) would blind Web Push exactly when it
+/// matters, and a paused-then-resumed snapshot would burst-replay stale edges.
 fn watcher_loop() {
     let mut prev: Option<HashMap<String, SessionInfo>> = None;
     let mut tick: u32 = 0;
     loop {
         // A dead stream's Sender lingers until a send fails, which a quiet server
-        // may never do — periodically push a comment frame purely to prune, so the
-        // last closed tab can't leave tmux polled at 1 Hz forever.
+        // may never do — periodically push a comment frame purely to prune.
         tick = tick.wrapping_add(1);
         if tick.is_multiple_of(30) {
             emit(": prune\n\n".to_string());
-        }
-        if subscribers().is_empty() {
-            prev = None;
-            std::thread::sleep(TICK);
-            continue;
         }
         let now = skill_term::list_sessions().unwrap_or_default();
         if let Some(p) = &prev {
             for f in diff(p, &now) {
                 emit(f);
             }
+            let bells = bell_edges(p, &now)
+                .into_iter()
+                .map(|s| crate::push::Bell { id: s.id.clone(), label: s.label.clone() })
+                .collect();
+            crate::push::notify_bells(bells);
         }
         prev = Some(now.into_iter().map(|s| (s.id.clone(), s)).collect());
         std::thread::sleep(TICK);

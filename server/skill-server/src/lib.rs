@@ -32,6 +32,8 @@ mod events;
 mod gateway;
 mod phone;
 mod proxy;
+#[cfg(feature = "local-backend")]
+mod push;
 mod remote_api;
 mod sshmgr;
 mod tailscale;
@@ -315,6 +317,16 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
     if let Some(control) = cfg.updater {
         // The workspace version is stamped to the release tag, same as the desktop.
         update::init(control, env!("CARGO_PKG_VERSION"));
+    }
+
+    // Bell watching starts with the server, not the first browser: Web Push must
+    // fire exactly when no client is connected. Gated to phone-serving servers
+    // (desktop, standalone, hub) so a test/ephemeral `spawn()` — which shares the
+    // real tmux and config-dir push.json — never delivers a real push. A browser
+    // that later opens `/api/events` still starts it on demand via subscribe().
+    #[cfg(feature = "local-backend")]
+    if cfg.phone.is_some() {
+        events::start();
     }
 
     let ctx = Arc::new(ServerCtx {
@@ -717,6 +729,7 @@ fn web_mime(path: &str) -> &'static str {
         "js" | "mjs" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "json" => "application/json",
+        "webmanifest" => "application/manifest+json",
         "svg" => "image/svg+xml",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -1320,6 +1333,29 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             Some(p) => json_reply(Ok(p.disable())),
             None => phone_unavailable(),
         },
+        // Web Push — deliberately NOT pinned local (unlike /api/notify*): when a
+        // remote hub is connected these proxy to it, so subscriptions live next
+        // to the watcher that fires them. The phone reaches these through the
+        // tailscale-served origin like any /api route.
+        #[cfg(feature = "local-backend")]
+        (Method::Get, "/api/push/key") => json_reply(push::public_key().map(|k| json!({ "key": k }))),
+        #[cfg(feature = "local-backend")]
+        (Method::Post, "/api/push/subscribe") => {
+            let key = |k: &str| {
+                v.get("keys").and_then(|x| x.get(k)).and_then(|x| x.as_str()).unwrap_or("").to_string()
+            };
+            let sub = push::Subscription { endpoint: s("endpoint"), p256dh: key("p256dh"), auth: key("auth") };
+            json_reply(push::add_subscription(sub).map(|n| json!({ "ok": true, "count": n })))
+        }
+        #[cfg(feature = "local-backend")]
+        (Method::Post, "/api/push/unsubscribe") => {
+            json_reply(push::remove_subscription(&s("endpoint")).map(|n| json!({ "ok": true, "count": n })))
+        }
+        #[cfg(feature = "local-backend")]
+        (Method::Post, "/api/push/attention") => {
+            push::set_attention(&s("client"), v.get("focused").and_then(|x| x.as_bool()).unwrap_or(false));
+            json_reply(Ok(json!({ "ok": true })))
+        }
         // Native notifications — pinned LOCAL by worker_loop (never proxied): the
         // toast/badge belongs to this machine's screen. No notifier (standalone
         // binary, browser mode) → 404, which the SPA reads as "fall back to the

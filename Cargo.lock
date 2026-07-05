@@ -791,12 +791,14 @@ dependencies = [
 name = "skill-server"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "dirs",
  "env_logger",
  "getrandom",
  "include_dir",
  "log",
  "qrcode",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

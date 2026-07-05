@@ -3,6 +3,7 @@ import { RouterProvider } from "react-router-dom";
 import { router } from "./app/router";
 import { ConfirmProvider } from "@/components/confirm";
 import { initLogging } from "@/lib/log";
+import { initPush } from "@/lib/push";
 import { initSoftKeyboard } from "@/lib/softKeyboard";
 // Self-hosted Inter (variable) — the Altrina UI font; bundled so it works offline
 // in the desktop build. Falls back to system fonts via --font-geist-sans.
@@ -13,6 +14,7 @@ import "./globals.css";
 // backend so they land in the on-disk server log (visible in a packaged app).
 initLogging();
 initSoftKeyboard();
+initPush();
 
 // No StrictMode: the terminal panes attach a pty + xterm in a mount effect and
 // detach/dispose on unmount, with no idempotency guard — StrictMode's double-invoke

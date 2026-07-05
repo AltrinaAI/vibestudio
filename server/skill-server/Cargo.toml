@@ -41,6 +41,10 @@ ureq = "2"
 dirs = "5"
 getrandom = "0.2"
 sha2 = "0.10"
+# Web Push sender (push.rs): VAPID ES256 + RFC 8291 aes128gcm on ring, key/sub
+# encoding on base64. Both were already in the lockfile (ring via rustls/ureq).
+ring = "0.17"
+base64 = "0.22"
 # Logging: the `log` facade plus the `env_logger` subscriber installed by
 # `init_logging()` (the desktop calls that too, so this is the ONLY crate carrying
 # a subscriber). default-features=false drops regex + color to keep the static-musl

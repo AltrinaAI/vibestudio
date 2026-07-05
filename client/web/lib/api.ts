@@ -1002,6 +1002,20 @@ export const notifyPrime = () => http<{ ok: boolean }>("POST", "notify/prime").t
 export const notifyBadge = (count: number) =>
   http<{ ok: boolean }>("POST", "notify/badge", { count }).then(() => {});
 
+// Web Push — notifications with the app closed. NOT pinned-local: with a remote
+// hub connected these proxy to it, so subscriptions live next to the bell
+// watcher that fires them (see lib/push.ts for the client flow).
+
+/** The server's VAPID public key (base64url) — `PushManager.subscribe` input. */
+export const pushKey = () => http<{ key: string }>("GET", "push/key");
+export const pushSubscribe = (endpoint: string, keys: { p256dh: string; auth: string }) =>
+  http<{ ok: boolean }>("POST", "push/subscribe", { endpoint, keys }).then(() => {});
+export const pushUnsubscribe = (endpoint: string) =>
+  http<{ ok: boolean }>("POST", "push/unsubscribe", { endpoint }).then(() => {});
+/** Focus beacon: a recently-focused client suppresses pushes server-side. */
+export const pushAttention = (client: string, focused: boolean) =>
+  http<{ ok: boolean }>("POST", "push/attention", { client, focused }).then(() => {});
+
 /** One terminal lifecycle event from `GET /api/events`. `at` is the session's
  *  `bellAt` (unix secs, string) at emit time. */
 export interface TermEvent {

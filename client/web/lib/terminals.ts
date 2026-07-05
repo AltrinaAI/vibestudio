@@ -17,6 +17,7 @@ import { useSyncExternalStore } from "react";
 import * as api from "@/lib/api";
 import type { TermEvent, TermSession } from "@/lib/api";
 import { log } from "@/lib/log";
+import { canPush, enablePushInGesture } from "@/lib/push";
 import { terminalsPath } from "@/lib/routes";
 
 /** Per-session "last viewed" marks (id → unix secs) for the unread dot. */
@@ -329,9 +330,23 @@ export function primeNotifications(): void {
   if (nativeNotify !== false) {
     api.notifyPrime().catch(() => {});
   }
-  if (nativeNotify === false && typeof Notification !== "undefined" && Notification.permission === "default") {
-    void Notification.requestPermission();
+  // Web Push / Web Notification only where there's NO native shell (phone,
+  // browser). A desktop shell — including Windows WebView2, which exposes
+  // serviceWorker/PushManager but has no working Push API — already has real OS
+  // toasts via notifyPrime above, so prompting for push there is a dead-end.
+  if (nativeNotify === false) {
+    if (canPush()) {
+      void enablePushInGesture();
+    } else if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
   }
+}
+
+/** The probed native-shell state (true = desktop OS toasts, false = none,
+ *  null = not yet probed) — lets the UI hide push affordances on the desktop. */
+export function nativeNotifyState(): boolean | null {
+  return nativeNotify;
 }
 
 // ─── the /api/events subscription ───

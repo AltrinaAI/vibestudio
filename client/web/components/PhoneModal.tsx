@@ -172,6 +172,10 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
             <p className="text-center text-sm text-muted">
               Scan with your phone's camera. Works from any device signed in to your Tailscale network.
             </p>
+            <p className="text-center text-xs text-faint">
+              On iPhone: open the link in Safari, then Share → <b>Add to Home Screen</b>. The installed app can
+              notify you when an agent finishes a turn.
+            </p>
             <div className="flex items-center gap-2">
               <span className={`${codeCls} min-w-0 flex-1 select-all truncate`}>{live.url}</span>
               <CopyButton text={live.url} />

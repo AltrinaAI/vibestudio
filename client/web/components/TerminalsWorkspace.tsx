@@ -8,6 +8,7 @@ import ResizeHandle from "@/components/ResizeHandle";
 import TerminalPane from "@/components/TerminalPane";
 import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
+import * as push from "@/lib/push";
 import * as terminals from "@/lib/terminals";
 
 const RAIL_KEY = "skillviewer-terminals-rail";
@@ -69,6 +70,9 @@ export default function TerminalsWorkspace({
   const { sessions, loading, seen } = terminals.useTerminals();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  // Web Push offer — shown until the user decides (mainly the installed phone
+  // app, where watching desktop-started agents is the whole point).
+  const [pushOffer, setPushOffer] = useState(() => push.canOfferPush());
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -262,6 +266,16 @@ export default function TerminalsWorkspace({
                 ))
               )}
             </select>
+            {pushOffer && terminals.nativeNotifyState() !== true && (
+              <button
+                type="button"
+                onClick={() => void push.enablePushInGesture().then(() => setPushOffer(push.canOfferPush()))}
+                title="Get notified when an agent finishes a turn"
+                className="shrink-0 rounded-md border border-border px-2 py-1 text-xs text-muted hover:bg-panel hover:text-fg"
+              >
+                Notify me
+              </button>
+            )}
             {active && (
               <button
                 type="button"
