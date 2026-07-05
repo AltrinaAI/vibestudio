@@ -37,7 +37,7 @@ function StudioIcon() {
   );
 }
 
-/** A persistent app-nav link (Terminals, Secrets) shown on every page; the entry
+/** A persistent app-nav link (Sessions, Credentials) shown on every page; the entry
  *  for the current page reads as active. `dot` is the same blue unread dot as the
  *  terminal rail's — "an agent finished a turn somewhere you aren't looking". */
 function NavLink({
@@ -84,7 +84,7 @@ function NavLink({
  *   2. Page chrome — the page's own `children` actions (e.g. Studio's Review/Manage/
  *      Export). Owned by the page; they sit in the bar only because there's room, and
  *      may move into the page body later.
- *   3. Destinations (pages) — Terminal, Secrets (Home = the brand). Always navigation;
+ *   3. Destinations (pages) — Sessions, Credentials (Home = the brand). Always navigation;
  *      the current page reads active.
  *   4. Status / controls — Remote (connection status) and the theme toggle. Global.
  *
@@ -170,18 +170,18 @@ export default function NavBar({
             the full page once it's open (see onTerminals). */}
         <NavLink
           icon={<StudioIcon />}
-          label="Studio"
+          label="Skills"
           active={pathname.startsWith("/studio")}
           onClick={() => navigate(studioTarget)}
         />
         <NavLink
           icon={<TerminalIcon />}
-          label="Terminals"
+          label="Sessions"
           active={onTerminals ? !!terminalsOpen : pathname === "/terminals"}
           onClick={onTerminalsClick}
           dot={termUnread}
         />
-        <NavLink icon={<KeyIcon />} label="Secrets" active={pathname === "/secrets"} onClick={() => navigate(secretsPath())} />
+        <NavLink icon={<KeyIcon />} label="Credentials" active={pathname === "/secrets"} onClick={() => navigate(secretsPath())} />
         <span className="mx-1 h-5 w-px bg-border" aria-hidden />
         {/* (4) status + controls — Remote (connection status) + theme toggle, the global utility corner */}
         <RemoteMenu />

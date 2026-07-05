@@ -69,7 +69,7 @@ export default function AgentPanel({ onClose }: { onClose: () => void }) {
       <ResizeHandle axis="col" onDragTo={dragTo} />
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
-          <span className="text-xs font-semibold text-fg">Terminals</span>
+          <span className="text-xs font-semibold text-fg">Sessions</span>
           <span className="truncate text-[0.7rem] text-faint">
             {miningRelated ? "the session that mined this" : data.dirName}
           </span>
@@ -77,7 +77,7 @@ export default function AgentPanel({ onClose }: { onClose: () => void }) {
             type="button"
             onClick={() => navigate(terminalsPath(activeId ?? undefined))}
             aria-label="Open in full page"
-            title="Open in the full Terminals page"
+            title="Open in the full Sessions page"
             className="ml-auto rounded p-1 text-faint hover:text-fg"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

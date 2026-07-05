@@ -363,7 +363,7 @@ function SecretsSection({ root, declared, onOpen }: { root: string; declared: st
       )}
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={onOpen} className={btnGhost}>
-          Open Secrets →
+          Open Credentials →
         </button>
         {exportable.length > 0 && (
           <button

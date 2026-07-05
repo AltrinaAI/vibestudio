@@ -216,7 +216,7 @@ export default function TerminalsWorkspace({
               <span className="text-faint" aria-hidden>
                 /
               </span>
-              <span className="font-medium text-fg">Terminals</span>
+              <span className="font-medium text-fg">Sessions</span>
             </>
           }
         >

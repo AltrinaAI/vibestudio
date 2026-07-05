@@ -20,13 +20,13 @@ export function Component() {
             <span className="text-faint" aria-hidden>
               /
             </span>
-            <span className="font-medium text-fg">Secrets</span>
+            <span className="font-medium text-fg">Credentials</span>
           </>
         }
       />
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 pb-24 pt-10">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Secrets</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-fg">Credentials</h1>
         <p className="mt-1.5 max-w-prose text-sm text-muted">
           Store API keys and tokens once, then let your agents load them at runtime — never pasted into prompts or agent
           configs. For now they live on this machine; signing in to sync them to the cloud and share with your team is
