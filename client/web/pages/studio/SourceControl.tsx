@@ -116,8 +116,8 @@ export default function SourceControl({
   // The version being previewed stays highlighted in the list. The open file
   // (file route, or the index = SKILL.md) drives the New Changes highlight.
   const selectedSha = preview?.sha ?? null;
-  const fileMatch = useMatch("/studio/:root/file/*");
-  const indexMatch = useMatch("/studio/:root");
+  const fileMatch = useMatch("/skills/:root/file/*");
+  const indexMatch = useMatch("/skills/:root");
   const selectedRel = fileMatch?.params["*"] ?? (indexMatch ? "SKILL.md" : null);
 
   const [info, setInfo] = useState<GitInfo | null>(null);

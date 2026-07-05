@@ -14,7 +14,7 @@ import { useDiscardBlocker } from "./routeGuard";
  * every navigation, including browser back/forward.
  */
 export default function AppShell() {
-  const onTerminals = useLocation().pathname === "/terminals";
+  const onTerminals = useLocation().pathname === "/sessions";
   useDiscardBlocker();
 
   // The tray's "Open on your phone…" item deep-links to `#/?phone=1`. Handled

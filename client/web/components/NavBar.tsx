@@ -120,15 +120,15 @@ export default function NavBar({
 
   // "Studio" is a persistent destination with no singleton route (one repo per skill):
   // in a skill → its index (SKILL.md); else resume the last-opened skill; else Home.
-  const studioSeg = pathname.startsWith("/studio/") ? pathname.split("/")[2] : null;
+  const studioSeg = pathname.startsWith("/skills/") ? pathname.split("/")[2] : null;
   const lastSkill = recents.find((r) => r.kind !== "markdown");
-  const studioTarget = studioSeg ? `/studio/${studioSeg}` : lastSkill ? studioPath(lastSkill.root) : "/";
+  const studioTarget = studioSeg ? `/skills/${studioSeg}` : lastSkill ? studioPath(lastSkill.root) : "/";
 
   // Terminal is a first-class destination; the Studio side panel is just its inline
   // projection. So in Studio the link opens that projection, and once it's open a
   // second click navigates to the full Terminal page (closing the panel is the
   // panel's own control). Everywhere else the link just navigates.
-  const onTerminalsClick = onTerminals && !terminalsOpen ? onTerminals : () => navigate("/terminals");
+  const onTerminalsClick = onTerminals && !terminalsOpen ? onTerminals : () => navigate("/sessions");
 
   const brand = (
     <span className="flex items-center gap-1.5 text-brand">
@@ -171,17 +171,17 @@ export default function NavBar({
         <NavLink
           icon={<StudioIcon />}
           label="Skills"
-          active={pathname.startsWith("/studio")}
+          active={pathname.startsWith("/skills")}
           onClick={() => navigate(studioTarget)}
         />
         <NavLink
           icon={<TerminalIcon />}
           label="Sessions"
-          active={onTerminals ? !!terminalsOpen : pathname === "/terminals"}
+          active={onTerminals ? !!terminalsOpen : pathname === "/sessions"}
           onClick={onTerminalsClick}
           dot={termUnread}
         />
-        <NavLink icon={<KeyIcon />} label="Credentials" active={pathname === "/secrets"} onClick={() => navigate(secretsPath())} />
+        <NavLink icon={<KeyIcon />} label="Credentials" active={pathname === "/credentials"} onClick={() => navigate(secretsPath())} />
         <span className="mx-1 h-5 w-px bg-border" aria-hidden />
         {/* (4) status + controls — Remote (connection status) + theme toggle, the global utility corner */}
         <RemoteMenu />

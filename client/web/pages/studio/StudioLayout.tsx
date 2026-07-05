@@ -49,8 +49,8 @@ export default function StudioLayout() {
   // useMatch resolves against the current location, so it works here above the
   // Outlet (the splat param isn't visible to this parent via useParams). On the
   // History route no file is open, so nothing in the sidebar is highlighted.
-  const onCommitRoute = useMatch("/studio/:root/commit/:sha") != null;
-  const fileRel = useMatch("/studio/:root/file/*")?.params["*"];
+  const onCommitRoute = useMatch("/skills/:root/commit/:sha") != null;
+  const fileRel = useMatch("/skills/:root/file/*")?.params["*"];
   const selected = onCommitRoute ? null : fileRel || "SKILL.md";
 
   // "Review change mode" toggle (in the nav bar): on for the open file when it
