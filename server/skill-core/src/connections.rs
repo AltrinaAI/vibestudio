@@ -4,7 +4,7 @@
 // /gw/<id>/mcp gateway, which injects Authorization upstream. The connection id
 // doubles as the gateway path slug (a capability), so it must be unguessable.
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::agents;
 use crate::commit_agent;
 use crate::process::hidden_command;
 use crate::secrets;
@@ -22,8 +23,8 @@ use crate::secrets;
 const FLOW_TTL: Duration = Duration::from_secs(600);
 /// Refresh the access token when within this many seconds of expiry.
 const EXPIRY_SLACK: u64 = 60;
-/// Cap on each `claude mcp …` shell-out (local config edit, no network).
-const CLAUDE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Cap on each `<agent> mcp …` shell-out (local config edit, no network).
+const AGENT_CLI_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// One stored connection. Persisted verbatim (camelCase JSON) in
 /// `~/.config/skill-studio/connections.json`; never returned over the API —
@@ -662,12 +663,13 @@ pub fn finish_callback(state: &str, code: &str, error: &str, gw_port: u16) -> Ca
         mark("expired", None);
         return CallbackOutcome::Failed { message: format!("Saving the connection failed: {e}") };
     }
-    // Best-effort: a missing/failing claude CLI leaves agentsConfigured empty —
-    // the connection itself is fine.
-    if configure_claude(&label, &id, &format!("http://127.0.0.1:{gw_port}/gw/{id}/mcp")) {
+    // Best-effort: agents that aren't installed are skipped, so agentsConfigured
+    // holds whatever we actually wired — the connection itself is fine regardless.
+    let wired = configure_agents(&server_name(&label, &id), &format!("http://127.0.0.1:{gw_port}/gw/{id}/mcp"));
+    if !wired.is_empty() {
         let _ = with_store(|list| {
             if let Some(c) = list.iter_mut().find(|c| c.id == id) {
-                c.agents_configured = vec!["claude".into()];
+                c.agents_configured = wired;
                 c.gateway_port = Some(gw_port);
             }
             Ok(())
@@ -779,7 +781,7 @@ pub fn ensure_fresh_token(id: &str, stale: Option<&str>) -> Result<FreshToken, T
 
 /// Best-effort RFC 7009 revoke (only if the AS advertises a
 /// revocation_endpoint — re-read from metadata; the record stores none),
-/// remove the claude config entry, then drop the record. Idempotent.
+/// remove the agent config entries, then drop the record. Idempotent.
 pub fn delete(id: &str) -> Result<(), String> {
     let Some(conn) = find(id)? else { return Ok(()) };
     if let Ok(meta) = as_metadata(&conn.issuer) {
@@ -797,14 +799,14 @@ pub fn delete(id: &str) -> Result<(), String> {
             }
         }
     }
-    remove_claude(&conn.label, &conn.id);
+    unconfigure_agents(&server_name(&conn.label, &conn.id));
     with_store(|list| {
         list.retain(|c| c.id != id);
         Ok(())
     })
 }
 
-// ───────────────────────────── claude config ─────────────────────────────
+// ─────────────────────────── agent MCP config ───────────────────────────
 
 /// The label slugged to kebab-case (e.g. "robinhood-trading").
 fn kebab_slug(label: &str) -> String {
@@ -820,53 +822,159 @@ fn kebab_slug(label: &str) -> String {
     if out.is_empty() { "mcp-connection".into() } else { out.to_string() }
 }
 
-/// The claude MCP server name for a connection: the label slug plus a short id
-/// suffix, so two connections that share (or slug to) the same label can't
-/// clobber each other's entry — and delete removes exactly its own.
+/// The MCP server name a connection registers under, in EVERY agent: the label
+/// slug plus a short id suffix, so two connections that share (or slug to) the
+/// same label can't clobber each other's entry — and delete removes exactly its
+/// own.
 fn server_name(label: &str, id: &str) -> String {
     format!("{}-{}", kebab_slug(label), &id[..id.len().min(8)])
 }
 
-/// `claude mcp add-json <name> '{"type":"http","url":…}' --scope user`. A prior
-/// entry under the same name is removed first so a reconnect can't fail on a
-/// duplicate. Returns whether claude now points at the gateway.
-fn configure_claude(label: &str, id: &str, gateway_url: &str) -> bool {
-    let Some(bin) = commit_agent::resolve(&["claude"]) else { return false };
-    let name = server_name(label, id);
-    let mut rm = hidden_command(&bin);
-    rm.args(["mcp", "remove", &name, "--scope", "user"]);
-    let _ = commit_agent::run_proc(rm, None, CLAUDE_TIMEOUT);
-    let cfg = json!({ "type": "http", "url": gateway_url }).to_string();
-    let mut add = hidden_command(&bin);
-    add.args(["mcp", "add-json", &name, &cfg, "--scope", "user"]);
-    matches!(commit_agent::run_proc(add, None, CLAUDE_TIMEOUT), Ok((true, _)))
+/// Point every cohort agent that declares MCP support (see [`agents::AGENTS`])
+/// at the gateway `url` under the shared server `name`. Best-effort per agent —
+/// a missing binary or config dir is skipped — returning the families actually
+/// wired (persisted as `agents_configured`). CLI agents re-add idempotently; the
+/// JSON-file agents merge without disturbing the user's other servers.
+fn configure_agents(name: &str, url: &str) -> Vec<String> {
+    let mut wired = Vec::new();
+    for a in agents::AGENTS {
+        if let Some(w) = a.mcp {
+            if wire_add(&w, name, url) {
+                wired.push(a.family.to_string());
+            }
+        }
+    }
+    wired
 }
 
-fn remove_claude(label: &str, id: &str) {
-    let Some(bin) = commit_agent::resolve(&["claude"]) else { return };
-    let mut rm = hidden_command(&bin);
-    rm.args(["mcp", "remove", &server_name(label, id), "--scope", "user"]);
-    let _ = commit_agent::run_proc(rm, None, CLAUDE_TIMEOUT);
+/// Remove the connection's server `name` from every cohort agent. Idempotent.
+fn unconfigure_agents(name: &str) {
+    for a in agents::AGENTS {
+        if let Some(w) = a.mcp {
+            wire_remove(&w, name);
+        }
+    }
+}
+
+fn wire_add(w: &agents::McpWiring, name: &str, url: &str) -> bool {
+    match *w {
+        agents::McpWiring::Cli { bin, add, remove } => {
+            let Some(path) = commit_agent::resolve(&[bin]) else { return false };
+            let _ = run_agent_cli(&path, &remove(name)); // idempotent pre-clean
+            run_agent_cli(&path, &add(name, url)).unwrap_or(false)
+        }
+        agents::McpWiring::JsonFile { present_dir, path, servers_key, entry } => {
+            json_file_set(present_dir, path, servers_key, name, Some(entry(url)))
+        }
+    }
+}
+
+fn wire_remove(w: &agents::McpWiring, name: &str) {
+    match *w {
+        agents::McpWiring::Cli { bin, remove, .. } => {
+            if let Some(path) = commit_agent::resolve(&[bin]) {
+                let _ = run_agent_cli(&path, &remove(name));
+            }
+        }
+        agents::McpWiring::JsonFile { present_dir, path, servers_key, .. } => {
+            let _ = json_file_set(present_dir, path, servers_key, name, None);
+        }
+    }
+}
+
+/// Run `<bin> <args…>` (an `mcp add|remove` subcommand). `Ok(true)` = the add
+/// reported success.
+fn run_agent_cli(bin: &Path, args: &[String]) -> Result<bool, String> {
+    let mut cmd = hidden_command(bin);
+    cmd.args(args);
+    commit_agent::run_proc(cmd, None, AGENT_CLI_TIMEOUT).map(|(ok, _)| ok)
+}
+
+/// Merge (or, with `entry = None`, remove) `servers_key.<name>` in the agent's
+/// home-relative JSON config, preserving every other key. Only acts when
+/// `present_dir` exists (the agent is installed), and never creates a file just
+/// to delete a key.
+fn json_file_set(
+    present_dir: &str,
+    path: &str,
+    servers_key: &str,
+    name: &str,
+    entry: Option<Value>,
+) -> bool {
+    // One writer at a time (two OAuth callbacks completing at once would
+    // otherwise read-modify-write the same shared file and lose an entry).
+    static WRITE: Mutex<()> = Mutex::new(());
+    let _g = WRITE.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(home) = dirs::home_dir() else { return false };
+    if !home.join(present_dir).is_dir() {
+        return false;
+    }
+    let file = home.join(path);
+    // Absent/empty ⇒ start fresh; present-but-unparseable ⇒ bail rather than
+    // clobber a config we can't safely round-trip (would drop the user's servers).
+    let existing: Option<Value> = match std::fs::read(&file) {
+        Ok(bytes) if bytes.iter().any(|b| !b.is_ascii_whitespace()) => {
+            match serde_json::from_slice(&bytes) {
+                Ok(v) => Some(v),
+                Err(_) => return false,
+            }
+        }
+        _ => None,
+    };
+    if entry.is_none() && existing.is_none() {
+        return true; // nothing to remove
+    }
+    let mut root = existing.unwrap_or_else(|| json!({}));
+    let Some(obj) = root.as_object_mut() else { return false };
+    let servers = obj.entry(servers_key.to_string()).or_insert_with(|| json!({}));
+    let Some(map) = servers.as_object_mut() else { return false };
+    match entry {
+        Some(v) => {
+            map.insert(name.to_string(), v);
+        }
+        None => {
+            if map.remove(name).is_none() {
+                return true; // wasn't wired here
+            }
+        }
+    }
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(mut bytes) = serde_json::to_vec_pretty(&root) else { return false };
+    bytes.push(b'\n');
+    // Atomic tmp+rename (the store's own convention) so a crash mid-write can't
+    // truncate the user's config.
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, &file).is_ok()
 }
 
 /// Rewrite agent MCP configs to this boot's gateway `port`. The desktop may bind
 /// an ephemeral port when its preferred one is taken, which would leave a prior
-/// boot's `/gw` URL dead; only connections whose recorded port differs are
-/// touched, so a normal boot does no work. Best-effort.
+/// boot's `/gw` URL dead; only connections whose recorded port differs (and that
+/// wired at least one agent) are touched, so a normal boot does no work.
+/// Best-effort; re-wires whatever cohort is installed now.
 pub fn resync_agent_configs(port: u16) {
     let Ok(conns) = load_all() else { return };
     for c in conns {
-        if c.gateway_port == Some(port) || !c.agents_configured.iter().any(|a| a == "claude") {
+        if c.gateway_port == Some(port) || c.agents_configured.is_empty() {
             continue;
         }
-        if configure_claude(&c.label, &c.id, &format!("http://127.0.0.1:{port}/gw/{}/mcp", c.id)) {
-            let _ = with_store(|list| {
-                if let Some(x) = list.iter_mut().find(|x| x.id == c.id) {
-                    x.gateway_port = Some(port);
-                }
-                Ok(())
-            });
+        let wired =
+            configure_agents(&server_name(&c.label, &c.id), &format!("http://127.0.0.1:{port}/gw/{}/mcp", c.id));
+        // Commit only a real re-wire; an empty result is a transient failure (CLI
+        // timeout / momentarily unresolvable binary), so leave the stale port —
+        // marking it done would strand the dead URL and never retry.
+        if wired.is_empty() {
+            continue;
         }
+        let _ = with_store(|list| {
+            if let Some(x) = list.iter_mut().find(|x| x.id == c.id) {
+                x.agents_configured = wired;
+                x.gateway_port = Some(port);
+            }
+            Ok(())
+        });
     }
 }
 
@@ -883,12 +991,21 @@ mod tests {
 
     #[test]
     fn server_names_disambiguate_shared_labels() {
-        // Same label, different connection ids ⇒ distinct claude entries, so one
-        // connection's config can't overwrite or delete another's.
+        // Same label, different connection ids ⇒ distinct per-agent entries, so
+        // one connection's config can't overwrite or delete another's.
         let a = server_name("Robinhood Trading", "0011223344aabbcc");
         let b = server_name("Robinhood Trading", "ffeeddcc99887766");
         assert_ne!(a, b);
         assert!(a.starts_with("robinhood-trading-"));
+    }
+
+    #[test]
+    fn json_file_set_skips_absent_agent() {
+        // An agent whose home dir doesn't exist is a no-op — we never create a
+        // config file for an agent that isn't installed (add or remove).
+        let missing = ".skill-studio-nonexistent-agent-xyz";
+        assert!(!json_file_set(missing, &format!("{missing}/x.json"), "mcpServers", "n", Some(json!({ "url": "u" }))));
+        assert!(!json_file_set(missing, &format!("{missing}/x.json"), "mcpServers", "n", None));
     }
 
     #[test]

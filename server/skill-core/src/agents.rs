@@ -19,6 +19,8 @@
 //! A `None` capability means the agent can't do that yet and the UI degrades
 //! accordingly (e.g. it isn't offered for mining runs).
 
+use serde_json::{json, Value};
+
 use crate::secrets::sh_quote as q;
 
 /// Home-relative dirs of the shared Agent Skills standard, read by every
@@ -54,6 +56,38 @@ pub struct AgentDef {
     pub reads_shared: bool,
     pub launch: Option<fn(&LaunchCtx) -> String>,
     pub resume: Option<fn(&ResumeCtx) -> String>,
+    /// How to point the agent at a remote MCP server through Skill Studio's
+    /// loopback gateway (None = the agent can't consume a remote HTTP MCP). See
+    /// [`McpWiring`]. The agent is handed only the gateway URL — Skill Studio
+    /// holds the OAuth token — so no header/secret ever appears in agent config.
+    pub mcp: Option<McpWiring>,
+}
+
+/// The two shapes of "add/remove a remote streamable-HTTP MCP server named
+/// `<name>` at `<url>`" across the cohort: a first-class `<bin> mcp …` CLI, or a
+/// JSON config file we merge into. All URLs point at `/gw/<id>/mcp` on loopback;
+/// no token or headers are ever written (the gateway injects auth upstream).
+#[derive(Clone, Copy)]
+pub enum McpWiring {
+    /// A `<bin> mcp add|remove` CLI. The fns build the argv AFTER the resolved
+    /// binary; the caller resolves the binary and runs it (add re-adds
+    /// idempotently, so a pre-remove makes reconnects safe).
+    Cli {
+        /// Binary name to resolve (PATH + the usual agent bin dirs).
+        bin: &'static str,
+        add: fn(name: &str, url: &str) -> Vec<String>,
+        remove: fn(name: &str) -> Vec<String>,
+    },
+    /// A JSON config file (home-relative `path`) with a servers map at
+    /// `servers_key`, keyed by server name. The caller MERGES `entry(url)` in,
+    /// preserving every other key, and only acts when `present_dir` exists (our
+    /// "the agent is installed" signal, mirroring the load-secrets cohort).
+    JsonFile {
+        present_dir: &'static str,
+        path: &'static str,
+        servers_key: &'static str,
+        entry: fn(url: &str) -> Value,
+    },
 }
 
 pub const AGENTS: &[AgentDef] = &[
@@ -64,6 +98,7 @@ pub const AGENTS: &[AgentDef] = &[
         reads_shared: false,
         launch: Some(claude_launch),
         resume: Some(claude_resume),
+        mcp: Some(McpWiring::Cli { bin: "claude", add: claude_mcp_add, remove: claude_mcp_remove }),
     },
     AgentDef {
         family: "codex",
@@ -72,6 +107,7 @@ pub const AGENTS: &[AgentDef] = &[
         reads_shared: true,
         launch: Some(codex_launch),
         resume: Some(codex_resume),
+        mcp: Some(McpWiring::Cli { bin: "codex", add: codex_mcp_add, remove: codex_mcp_remove }),
     },
     AgentDef {
         family: "cursor",
@@ -82,6 +118,13 @@ pub const AGENTS: &[AgentDef] = &[
         // `cursor-agent resume` targets the GLOBAL latest session, not the
         // cwd's — wiring it could reopen an unrelated conversation.
         resume: None,
+        // No `mcp add` CLI; both the IDE and cursor-agent read ~/.cursor/mcp.json.
+        mcp: Some(McpWiring::JsonFile {
+            present_dir: ".cursor",
+            path: ".cursor/mcp.json",
+            servers_key: "mcpServers",
+            entry: cursor_mcp_entry,
+        }),
     },
     AgentDef {
         family: "gemini",
@@ -90,6 +133,7 @@ pub const AGENTS: &[AgentDef] = &[
         reads_shared: true,
         launch: Some(gemini_launch),
         resume: Some(gemini_resume),
+        mcp: Some(McpWiring::Cli { bin: "gemini", add: gemini_mcp_add, remove: gemini_mcp_remove }),
     },
     AgentDef {
         family: "openclaw",
@@ -98,6 +142,7 @@ pub const AGENTS: &[AgentDef] = &[
         reads_shared: false,
         launch: None,
         resume: None,
+        mcp: None,
     },
     AgentDef {
         // opencode keeps its own global skills under ~/.config/opencode/skills and
@@ -109,6 +154,14 @@ pub const AGENTS: &[AgentDef] = &[
         reads_shared: true,
         launch: Some(opencode_launch),
         resume: Some(opencode_resume),
+        // Own a dedicated opencode.json (opencode merges it with the user's
+        // opencode.jsonc), so we never parse/rewrite their JSONC file.
+        mcp: Some(McpWiring::JsonFile {
+            present_dir: ".config/opencode",
+            path: ".config/opencode/opencode.json",
+            servers_key: "mcp",
+            entry: opencode_mcp_entry,
+        }),
     },
 ];
 
@@ -278,6 +331,50 @@ fn opencode_resume(c: &ResumeCtx) -> String {
     cmd
 }
 
+// ─────────────────────────────── MCP wiring recipes ───────────────────────────────
+// Each recipe was verified against the shipped CLI/schema (2026-07). Remote HTTP
+// transport only; url-only, no headers/token — Skill Studio is the OAuth client.
+
+/// `claude mcp add-json <name> '{"type":"http","url":…}' --scope user`.
+fn claude_mcp_add(name: &str, url: &str) -> Vec<String> {
+    let cfg = json!({ "type": "http", "url": url }).to_string();
+    vec!["mcp".into(), "add-json".into(), name.into(), cfg, "--scope".into(), "user".into()]
+}
+fn claude_mcp_remove(name: &str) -> Vec<String> {
+    vec!["mcp".into(), "remove".into(), name.into(), "--scope".into(), "user".into()]
+}
+
+/// `codex mcp add <name> --url <url>` — `--url` selects streamable HTTP (native
+/// since codex 0.14x; user-global config.toml, no scope flag).
+fn codex_mcp_add(name: &str, url: &str) -> Vec<String> {
+    vec!["mcp".into(), "add".into(), name.into(), "--url".into(), url.into()]
+}
+fn codex_mcp_remove(name: &str) -> Vec<String> {
+    vec!["mcp".into(), "remove".into(), name.into()]
+}
+
+/// `gemini mcp add <name> <url> --transport http --scope user` — `--transport
+/// http` selects streamable HTTP (bare URL would default to stdio); `--scope
+/// user` writes ~/.gemini/settings.json so every cwd sees it.
+fn gemini_mcp_add(name: &str, url: &str) -> Vec<String> {
+    vec![
+        "mcp".into(), "add".into(), name.into(), url.into(),
+        "--transport".into(), "http".into(), "--scope".into(), "user".into(),
+    ]
+}
+fn gemini_mcp_remove(name: &str) -> Vec<String> {
+    vec!["mcp".into(), "remove".into(), name.into(), "--scope".into(), "user".into()]
+}
+
+/// Cursor infers remote transport from the presence of `url`; no `type` field.
+fn cursor_mcp_entry(url: &str) -> Value {
+    json!({ "url": url })
+}
+/// opencode's remote server shape — `type` MUST be the literal "remote".
+fn opencode_mcp_entry(url: &str) -> Value {
+    json!({ "type": "remote", "url": url })
+}
+
 // ─────────────────────────────────── tests ───────────────────────────────────
 
 #[cfg(test)]
@@ -320,6 +417,39 @@ mod tests {
 
         let ctx = ResumeCtx { bin: "/bin/opencode", model: None, effort: None };
         assert_eq!(opencode_resume(&ctx), "'/bin/opencode' --continue");
+    }
+
+    #[test]
+    fn every_launchable_agent_has_mcp_wiring() {
+        // "Wire up all agents" — every agent we can actually run in a terminal
+        // must know how to reach the gateway; only openclaw (no launch) opts out.
+        for a in AGENTS {
+            assert_eq!(
+                a.launch.is_some(),
+                a.mcp.is_some(),
+                "{} launch/mcp capability mismatch",
+                a.family
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_cli_recipes_match_shipped_flags() {
+        assert_eq!(
+            claude_mcp_add("robinhood-abcd1234", "http://127.0.0.1:8765/gw/ID/mcp"),
+            ["mcp", "add-json", "robinhood-abcd1234", r#"{"type":"http","url":"http://127.0.0.1:8765/gw/ID/mcp"}"#, "--scope", "user"]
+        );
+        assert_eq!(codex_mcp_add("n", "http://u/mcp"), ["mcp", "add", "n", "--url", "http://u/mcp"]);
+        assert_eq!(gemini_mcp_add("n", "http://u/mcp"), ["mcp", "add", "n", "http://u/mcp", "--transport", "http", "--scope", "user"]);
+        assert_eq!(gemini_mcp_remove("n"), ["mcp", "remove", "n", "--scope", "user"]);
+        assert_eq!(codex_mcp_remove("n"), ["mcp", "remove", "n"]);
+    }
+
+    #[test]
+    fn mcp_file_entries_use_each_schema() {
+        // cursor infers transport from `url`; opencode needs type:"remote".
+        assert_eq!(cursor_mcp_entry("http://u/mcp"), json!({ "url": "http://u/mcp" }));
+        assert_eq!(opencode_mcp_entry("http://u/mcp"), json!({ "type": "remote", "url": "http://u/mcp" }));
     }
 
     #[test]
