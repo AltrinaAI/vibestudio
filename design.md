@@ -33,8 +33,8 @@ transports silently diverge — a feature wired only through `invoke` broke brow
 - **Streaming** = SSE (`request.into_writer()` + chunked `data:`, see `stream_terminal`),
   consumed via `EventSource`. Rides a plain socket and an SSH tunnel alike — no duplex channel.
 - **No native-only capabilities.** A native OS dialog only sees the *client* machine, breaking
-  the remote model. Browse the (possibly remote) fs via `/api/list-dir` + the in-app
-  `FolderPicker`; import via `/api/import-zip`; export via `/api/download`.
+  the remote model. Browse the (possibly remote) fs via `/api/fs/list-dir` + the in-app
+  `FolderPicker`; import via `/api/import/zip`; export via `/api/download/skill`.
 
 *Skill packaging (`.skill`):* export emits a **`.skill`** — a deflate zip with one top-level
 `name/` folder, the shareable install unit (import accepts `.skill` and `.zip` alike; a `.skill`
@@ -51,8 +51,8 @@ bytes as a blob precisely so a rejection isn't saved as the "file").
 *Reference (keyless commit messages):* `commitmsg.rs` (diff prep, cache) → `commit_agent.rs`
 shells out to a logged-in coding-agent CLI (Claude Code → Codex → Gemini, keyless via
 subscription OAuth; opencode last, BYO-key); `engine.rs` (llama.cpp) is opt-in offline
-(`SKILL_STUDIO_COMMIT_AGENT=llama`). Routes `POST /api/generate-commit-message`,
-`GET /api/commit-model-status` → `api.generateCommitMessage()` / `api.commitModelStatus()`.
+(`SKILL_STUDIO_COMMIT_AGENT=llama`). Routes `POST /api/commit-message/generate`,
+`GET /api/commit-message/model-status` → `api.generateCommitMessage()` / `api.commitModelStatus()`.
 
 ## UI layout (frontend IA)
 
@@ -83,7 +83,7 @@ Hash router (`createHashRouter`, Tauri webview) with one persistent shell + lazy
 ## Skill versioning: tracked by default
 
 Each personal skill is its **own git repo** (versioned/diffed/rolled-back/synced
-independently). **Auto-tracked:** `GET /api/discover` → `discover_and_autotrack` →
+independently). **Auto-tracked:** `GET /api/skills/discover` → `discover_and_autotrack` →
 `gitops::auto_track_personal`, which off-thread `git init`s + lands a baseline **"Initial
 version"** commit (an unborn HEAD reads all-dirty and can't sync; with no git identity we stop
 at the empty repo and prompt on first manual save).
@@ -114,7 +114,7 @@ conflicts stay rare.
   **compare-and-swap**: if disk no longer matches the tag it returns `WriteOutcome::Stale`
   (carrying the current disk bytes) **instead of overwriting**. A `None` tag = legacy
   unconditional overwrite (callers not yet tracking a baseline, e.g. `saveSkillMd`).
-- **Clean buffer → silent reload.** A `useExternalFileSync` poll (`/api/stat-file` — mtime+size
+- **Clean buffer → silent reload.** A `useExternalFileSync` poll (`/api/fs/stat` — mtime+size
   only, gated full re-read on change) plus a window-focus re-read detect external writes while
   the file is open; with a clean buffer the latest is swapped in (the text editors in place via
   `useAutosave().markClean` so the cursor survives and it isn't written back; the SKILL.md form
@@ -253,7 +253,7 @@ A **local proxy switchboard**; the webview never changes origin.
   remote (`proxy.rs`) with the recorded token injected upstream (current servers launch
   tokenless — see the phone section — but the header keeps reattach compatible with older,
   token-enforcing servers).
-  Pinned local: `/api/update/*`, `/api/client-log`, and `/api/notify*` (a toast/dock badge
+  Pinned local: `/api/update/*`, `/api/logs/client`, and `/api/notify*` (a toast/dock badge
   belongs to the machine whose screen you're looking at — and only to its own webview: a
   tailscale-served phone request gets the 404 and uses the Web Notification API instead).
   `/api/push/*` (Web Push: key, subscribe, attention) is deliberately NOT pinned — with a
@@ -266,7 +266,7 @@ A **local proxy switchboard**; the webview never changes origin.
   "connected" the SPA reloads; tmux terminals survive reconnects.
 - **Resume/recents:** the last host is remembered on the connecting machine (`/api/remote/last`,
   `sshmgr/lastconn.rs`) and auto-reconnected; `disconnect(forget=true)` clears it. Recents
-  (`/api/recents`) are a *normal proxied* route, so they follow the active server.
+  (`/api/recents/list`) are a *normal proxied* route, so they follow the active server.
 - **Same code everywhere;** two gates keep it from brokering where it shouldn't: a provisioned
   remote (`--lifeline-stdin`) and a non-loopback bind both leave `ServerConfig::remote = None`.
   Provisioning pulls `skill-server-<target>` from the GitHub release matching the app version

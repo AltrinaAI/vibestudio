@@ -44,15 +44,15 @@ fn proxies_api_with_injected_token() {
     let lport = local.addr.port();
 
     // A GET is proxied to the remote with the bearer injected → 200.
-    let get = ureq::get(&format!("http://127.0.0.1:{lport}/api/secrets-status")).call().expect("proxied GET");
-    assert_eq!(get.status(), 200, "GET /api/secrets-status should proxy to the remote");
+    let get = ureq::get(&format!("http://127.0.0.1:{lport}/api/secrets/status")).call().expect("proxied GET");
+    assert_eq!(get.status(), 200, "GET /api/secrets/status should proxy to the remote");
 
     // A POST (with a JSON body) is proxied too → 200.
-    let post = ureq::post(&format!("http://127.0.0.1:{lport}/api/git-dirty-many"))
+    let post = ureq::post(&format!("http://127.0.0.1:{lport}/api/git/dirty-many"))
         .set("Content-Type", "application/json")
         .send_string("{\"roots\":[]}")
         .expect("proxied POST");
-    assert_eq!(post.status(), 200, "POST /api/git-dirty-many should proxy to the remote");
+    assert_eq!(post.status(), 200, "POST /api/git/dirty-many should proxy to the remote");
 
     // The connection manager itself is handled LOCALLY (never proxied) → 200.
     let status = ureq::get(&format!("http://127.0.0.1:{lport}/api/remote/status")).call().expect("local remote/status");
@@ -60,7 +60,7 @@ fn proxies_api_with_injected_token() {
 
     // Hitting the remote directly WITHOUT the token → 401, proving the proxy is what
     // injects it on the path above.
-    let direct = ureq::get(&format!("http://127.0.0.1:{rport}/api/secrets-status")).call();
+    let direct = ureq::get(&format!("http://127.0.0.1:{rport}/api/secrets/status")).call();
     assert!(matches!(direct, Err(ureq::Error::Status(401, _))), "remote must reject an un-tokened request");
 
     drop((remote, local));

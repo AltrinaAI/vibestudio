@@ -49,7 +49,7 @@ function fmt(args: unknown[]): string {
 function send(entries: Entry[]) {
   // RAW fetch (not the api `http()` wrapper) so a failed log POST can never re-enter
   // the logger and loop. Failures are dropped on purpose.
-  fetch(`${API_BASE}/api/client-log`, {
+  fetch(`${API_BASE}/api/logs/client`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ entries }),
@@ -112,7 +112,7 @@ export function initLogging() {
     queue = [];
     try {
       const blob = new Blob([JSON.stringify({ entries })], { type: "application/json" });
-      navigator.sendBeacon(`${API_BASE}/api/client-log`, blob);
+      navigator.sendBeacon(`${API_BASE}/api/logs/client`, blob);
     } catch {
       /* ignore */
     }

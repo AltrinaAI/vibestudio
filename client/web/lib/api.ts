@@ -66,16 +66,16 @@ interface RawSkill {
 }
 
 // --- HTTP endpoints (skill-server /api/*) ---
-const readSkillRaw = (path: string) => http<RawSkill>("POST", "read-skill", { path });
+const readSkillRaw = (path: string) => http<RawSkill>("POST", "skills/read", { path });
 
-export const readFile = (root: string, rel: string) => http<FileData>("POST", "read-file", { root, rel });
+export const readFile = (root: string, rel: string) => http<FileData>("POST", "fs/read", { root, rel });
 
 /** Cheap metadata stat (mtime + size) for the show-latest poll — no read/hash. */
 export interface FileStat {
   mtimeMs: number;
   size: number;
 }
-export const statFile = (root: string, rel: string) => http<FileStat>("POST", "stat-file", { root, rel });
+export const statFile = (root: string, rel: string) => http<FileStat>("POST", "fs/stat", { root, rel });
 
 /** Outcome of a write. `written` carries the new baseline tag; `stale` means disk
  *  advanced past `expectedEtag` (an external process wrote the file) — the write was
@@ -88,15 +88,15 @@ export type WriteOutcome =
  *  compare-and-swap that never clobbers a newer disk version; omit it for an
  *  unconditional overwrite. */
 export const writeFile = (root: string, rel: string, content: string, expectedEtag?: string) =>
-  http<WriteOutcome>("POST", "write-file", { root, rel, content, expectedEtag });
+  http<WriteOutcome>("POST", "fs/write", { root, rel, content, expectedEtag });
 
 /** Delete a file or folder inside the skill (folders recurse). SKILL.md and the
  *  skill root are protected server-side. Destructive — confirm before calling. */
 export const deleteFile = (root: string, rel: string) =>
-  http<{ ok: boolean }>("POST", "delete-file", { root, rel }).then(() => {});
+  http<{ ok: boolean }>("POST", "fs/delete", { root, rel }).then(() => {});
 
 const readImage = (root: string, rel: string) =>
-  http<{ mime: string; base64: string }>("POST", "read-image", { root, rel });
+  http<{ mime: string; base64: string }>("POST", "fs/read-image", { root, rel });
 
 /** Write a pasted/dropped media file into the skill folder. The bytes ride as
  *  base64 over JSON (decoded server-side, the machine the skill lives on — local
@@ -104,10 +104,10 @@ const readImage = (root: string, rel: string) =>
  *  derived from `name` and returns the path it wrote, relative to `root` — ready
  *  to drop into a `![](…)` link. */
 export const writeSkillAsset = (root: string, dir: string, name: string, bytes: Uint8Array) =>
-  http<{ rel: string }>("POST", "write-asset", { root, dir, name, data: bytesToB64(bytes) });
+  http<{ rel: string }>("POST", "fs/write-asset", { root, dir, name, data: bytesToB64(bytes) });
 
 export async function discoverSkills(): Promise<AgentSkills[]> {
-  const groups = await http<AgentSkills[]>("GET", "discover");
+  const groups = await http<AgentSkills[]>("GET", "skills/discover");
   // The bundled built-in skills (load-secrets, skill-miner) ship with the app
   // and install into personal dirs, so discovery tags them "personal". Re-tag
   // them "studio" so they keep their folder names but tuck into the bundled
@@ -191,10 +191,10 @@ export interface Recent {
   /** "skill" (default when absent) routes via studioPath; "markdown" via markdownPath. */
   kind?: "skill" | "markdown";
 }
-export const recentsList = () => http<Recent[]>("GET", "recents");
+export const recentsList = () => http<Recent[]>("GET", "recents/list");
 export const recentsAdd = (r: Recent) =>
-  http<Recent[]>("POST", "recents-add", { root: r.root, name: r.name, kind: r.kind });
-export const recentsRemove = (root: string) => http<Recent[]>("POST", "recents-remove", { root });
+  http<Recent[]>("POST", "recents/add", { root: r.root, name: r.name, kind: r.kind });
+export const recentsRemove = (root: string) => http<Recent[]>("POST", "recents/remove", { root });
 
 // --- app auto-update (the server checks GitHub releases; the desktop shell installs) ---
 export interface UpdateAvailable {
@@ -274,7 +274,7 @@ export async function imageDataUrl(root: string, rel: string): Promise<string> {
 export async function exportSkill(root: string, vars: string[] = []): Promise<void> {
   const q = new URLSearchParams({ root });
   if (vars.length) q.set("vars", vars.join(","));
-  const res = await fetch(`${API_BASE}/api/download?${q.toString()}`);
+  const res = await fetch(`${API_BASE}/api/download/skill?${q.toString()}`);
   if (!res.ok) {
     let msg = `Couldn't package the skill (HTTP ${res.status}).`;
     try {
@@ -299,7 +299,7 @@ export async function exportSkill(root: string, vars: string[] = []): Promise<vo
 }
 
 /** Scan the skill's files for which managed secrets it references (auto-detect). */
-export const detectRequiredEnv = (root: string) => http<string[]>("POST", "detect-required-env", { root });
+export const detectRequiredEnv = (root: string) => http<string[]>("POST", "skills/detect-env", { root });
 
 /**
  * Download the skill's secrets as a plain-text `.env` file (browser download).
@@ -310,7 +310,7 @@ export const detectRequiredEnv = (root: string) => http<string[]>("POST", "detec
 export function downloadEnv(root: string, vars: string[]): void {
   const q = new URLSearchParams({ root, vars: vars.join(",") });
   const a = document.createElement("a");
-  a.href = `${API_BASE}/api/download-env?${q.toString()}`;
+  a.href = `${API_BASE}/api/download/env?${q.toString()}`;
   a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
@@ -335,7 +335,7 @@ export interface DirListing {
  *  skill-folder picker); pass `includeFiles` to also list regular files (the
  *  loose-markdown picker), each flagged `isMarkdown`. */
 export const listDir = (path: string, includeFiles = false) =>
-  http<DirListing>("POST", "list-dir", { path, includeFiles });
+  http<DirListing>("POST", "fs/list-dir", { path, includeFiles });
 
 export interface DiscoveredSkill {
   name?: string;
@@ -377,9 +377,9 @@ export interface SyncResult {
   dest: string;
   linked: boolean;
 }
-export const syncTargets = (root: string) => http<SyncTarget[]>("POST", "sync-targets", { root });
+export const syncTargets = (root: string) => http<SyncTarget[]>("POST", "sync/targets", { root });
 export const syncSkill = (root: string, target: string, overwrite: boolean, link: boolean) =>
-  http<SyncResult>("POST", "sync-skill", { root, target, overwrite, link });
+  http<SyncResult>("POST", "sync/skill", { root, target, overwrite, link });
 
 // --- create a brand-new skill ---
 export interface SkillHome {
@@ -391,7 +391,7 @@ export interface SkillHome {
   /** Agent display names this location serves. */
   reaches: string[];
 }
-export const skillHomes = () => http<SkillHome[]>("GET", "skill-homes");
+export const skillHomes = () => http<SkillHome[]>("GET", "skills/homes");
 
 /** A starter SKILL.md body: heading + the canonical Overview/When-to-use/Instructions skeleton. */
 function starterBody(name: string): string {
@@ -422,7 +422,7 @@ function starterBody(name: string): string {
  */
 export async function createSkill(target: string, name: string, description: string): Promise<string> {
   const content = serializeSkillMd({ name, description }, starterBody(name));
-  return http<string>("POST", "create-skill", { target, name, content });
+  return http<string>("POST", "skills/create", { target, name, content });
 }
 
 // --- import an existing skill (folder or .zip) into a chosen skill home ---
@@ -448,23 +448,23 @@ export interface ImportResult {
 
 /** Copy an existing skill folder (by absolute path) into the chosen home. */
 export const importSkillFolder = (source: string, target: string, overwrite: boolean) =>
-  http<ImportResult>("POST", "import-folder", { source, target, overwrite });
+  http<ImportResult>("POST", "import/folder", { source, target, overwrite });
 
 /** Import from an uploaded `.zip` (base64 bytes, decoded server-side). */
 export const importSkillZipUpload = (data: string, target: string, overwrite: boolean) =>
-  http<ImportResult>("POST", "import-zip", { data, target, overwrite });
+  http<ImportResult>("POST", "import/zip", { data, target, overwrite });
 
 /** Import by cloning a skill repository (GitHub/GitLab/any git clone URL). The
  *  clone keeps its origin, so the skill arrives already connected for sync. */
 export const importSkillFromRemote = (url: string, target: string, overwrite: boolean) =>
-  http<ImportResult>("POST", "import-remote", { url, target, overwrite });
+  http<ImportResult>("POST", "import/remote", { url, target, overwrite });
 
 // --- delete a skill (guarded; unlinks a synced copy, else removes the folder) ---
 export interface DeleteResult {
   removed: string;
   wasLink: boolean;
 }
-export const deleteSkill = (root: string) => http<DeleteResult>("POST", "delete-skill", { root });
+export const deleteSkill = (root: string) => http<DeleteResult>("POST", "skills/delete", { root });
 
 // --- accept a proposed (generated-skills) skill: promote it into the real home ---
 export interface PromoteResult {
@@ -473,7 +473,7 @@ export interface PromoteResult {
 }
 /** Accept a proposed skill — move it out of its `generated-skills/` staging folder
  *  up into the real skills home, turning it into an ordinary skill. */
-export const promoteSkill = (root: string) => http<PromoteResult>("POST", "promote-skill", { root });
+export const promoteSkill = (root: string) => http<PromoteResult>("POST", "skills/promote", { root });
 
 // --- per-skill git version control ---
 export interface GitInfo {
@@ -534,7 +534,7 @@ export interface GitCommitDetail {
   /** 1-based version number (this commit's position in linear history). */
   number: number;
 }
-export const gitInfo = (root: string) => http<GitInfo>("POST", "git-info", { root });
+export const gitInfo = (root: string) => http<GitInfo>("POST", "git/info", { root });
 /** One skill root's uncommitted-changes flag (from the batch [`gitDirtyMany`]). */
 export interface DirtyState {
   root: string;
@@ -542,18 +542,18 @@ export interface DirtyState {
 }
 /** Batch "has uncommitted changes?" for the home page — one cheap status check per
  *  skill root, scoped to its own folder. Roots not under git report `dirty: false`. */
-export const gitDirtyMany = (roots: string[]) => http<DirtyState[]>("POST", "git-dirty-many", { roots });
+export const gitDirtyMany = (roots: string[]) => http<DirtyState[]>("POST", "git/dirty-many", { roots });
 /** Begin (or resume) tracking a skill: init its repo with a baseline commit,
  *  clearing any prior opt-out. Personal skills are auto-tracked on discovery, so
  *  this is mainly the re-track path for a skill that was opted out. */
-export const gitTrack = (root: string) => http<GitInfo>("POST", "git-track", { root });
+export const gitTrack = (root: string) => http<GitInfo>("POST", "git/track", { root });
 /** Opt a skill out of version tracking: delete its local .git and remember the
  *  choice so discovery won't re-create it. Destructive — confirm before calling. */
 export const gitUntrack = (root: string) =>
-  http<{ ok: boolean }>("POST", "git-untrack", { root }).then(() => {});
+  http<{ ok: boolean }>("POST", "git/untrack", { root }).then(() => {});
 export const gitCommit = (root: string, message: string) =>
-  http<{ sha: string; summary: string }>("POST", "git-commit", { root, message });
-export const gitLog = (root: string, limit = 20) => http<GitCommit[]>("POST", "git-log", { root, limit });
+  http<{ sha: string; summary: string }>("POST", "git/commit", { root, message });
+export const gitLog = (root: string, limit = 20) => http<GitCommit[]>("POST", "git/log", { root, limit });
 
 // --- commit-message generation (a logged-in coding-agent CLI by default;
 //     the on-device llama.cpp engine when opted in) ---
@@ -585,33 +585,33 @@ export const isLocalCommitBackend = (s: CommitModelStatus | null) => s?.backend 
 /** Draft a one-line message from the skill's uncommitted diff. The default
  *  backend shells out to a coding-agent CLI you're already logged into (keyless);
  *  the on-device model is used only when opted in. */
-export const generateCommitMessage = (root: string) => http<string>("POST", "generate-commit-message", { root });
+export const generateCommitMessage = (root: string) => http<string>("POST", "commit-message/generate", { root });
 /** Force a fresh draft (the manual ✨ Generate button): ignores the cache and
  *  varies the seed, so each click offers a different phrasing. */
-export const regenerateCommitMessage = (root: string) => http<string>("POST", "regenerate-commit-message", { root });
-export const commitModelStatus = () => http<CommitModelStatus>("GET", "commit-model-status");
+export const regenerateCommitMessage = (root: string) => http<string>("POST", "commit-message/regenerate", { root });
+export const commitModelStatus = () => http<CommitModelStatus>("GET", "commit-message/model-status");
 /** A draft already prepared in the background for `root`'s current diff, or null
  *  when none is ready. Instant — never runs the model. Used to pre-fill the Save
  *  dialog from the eagerly-generated message. */
-export const peekCommitMessage = (root: string) => http<string | null>("POST", "peek-commit-message", { root });
-export const gitStatus = (root: string) => http<GitFileChange[]>("POST", "git-status", { root });
-export const gitWorktreeDiff = (root: string) => http<GitWorktreeDiff>("POST", "git-worktree-diff", { root });
+export const peekCommitMessage = (root: string) => http<string | null>("POST", "commit-message/peek", { root });
+export const gitStatus = (root: string) => http<GitFileChange[]>("POST", "git/status", { root });
+export const gitWorktreeDiff = (root: string) => http<GitWorktreeDiff>("POST", "git/worktree-diff", { root });
 export const gitCommitDiff = (root: string, sha: string) =>
-  http<GitCommitDetail>("POST", "git-commit-diff", { root, sha });
+  http<GitCommitDetail>("POST", "git/commit-diff", { root, sha });
 /** The file's content at a revision ("HEAD" or a SHA) — the "original" the
  *  in-editor diff overlay compares against. Empty string when absent at that rev. */
 export const gitFileAt = (root: string, rev: string, path: string) =>
-  http<string>("POST", "git-file-at", { root, rev, path });
+  http<string>("POST", "git/file-at", { root, rev, path });
 /** The tracked file paths at a revision (a SHA or "HEAD") — for browsing a past
  *  version's files. */
-export const gitFilesAt = (root: string, rev: string) => http<string[]>("POST", "git-files-at", { root, rev });
+export const gitFilesAt = (root: string, rev: string) => http<string[]>("POST", "git/files-at", { root, rev });
 /** Discard one path's working-tree changes back to HEAD (tracked → restore,
  *  untracked → delete). Destructive — confirm before calling. */
 export const gitDiscard = (root: string, path: string) =>
-  http<{ ok: boolean }>("POST", "git-discard", { root, path }).then(() => {});
+  http<{ ok: boolean }>("POST", "git/discard", { root, path }).then(() => {});
 /** Discard ALL uncommitted changes back to HEAD. Destructive — confirm first. */
 export const gitDiscardAll = (root: string) =>
-  http<{ ok: boolean }>("POST", "git-discard-all", { root }).then(() => {});
+  http<{ ok: boolean }>("POST", "git/discard-all", { root }).then(() => {});
 
 // --- version preview (view/edit a past version through the full editor) ---
 /** Returned when entering version preview. */
@@ -626,14 +626,14 @@ export interface PreviewState {
  *  Editing then autosaves onto it; saving makes a new linear version. Own-repo
  *  personal skills only. */
 export const gitEnterVersion = (root: string, sha: string) =>
-  http<PreviewState>("POST", "git-enter-version", { root, sha });
+  http<PreviewState>("POST", "git/enter-version", { root, sha });
 /** Leave version preview: reattach to the branch and restore the set-aside work
  *  (discarding any unsaved preview edits). Returns fresh GitInfo. */
-export const gitExitVersion = (root: string) => http<GitInfo>("POST", "git-exit-version", { root });
+export const gitExitVersion = (root: string) => http<GitInfo>("POST", "git/exit-version", { root });
 /** Save the previewed/edited version as a NEW version on the branch tip (linear
  *  history); the set-aside work is discarded. */
 export const gitKeepVersion = (root: string, message: string) =>
-  http<{ sha: string; summary: string }>("POST", "git-keep-version", { root, message });
+  http<{ sha: string; summary: string }>("POST", "git/keep-version", { root, message });
 
 // --- publish a skill to GitHub (its own repo; the remote is the source of truth) ---
 /** The GitHub sign-in the server found on its machine (where skill-server runs). */
@@ -770,15 +770,15 @@ export interface SetupResult {
   installedAgents: string[];
   skillInstalled: boolean;
 }
-export const secretsStatus = () => http<SecretsStatus>("GET", "secrets-status");
-export const secretsList = () => http<SecretEntry[]>("GET", "secrets-list");
+export const secretsStatus = () => http<SecretsStatus>("GET", "secrets/status");
+export const secretsList = () => http<SecretEntry[]>("GET", "secrets/list");
 /** Parse a pasted/uploaded `.env` body into store-ready entries (with
  *  already-exists flags); apply the chosen ones with [`secretSet`]. */
 export const secretsPreviewEnv = (data: string) =>
-  http<ImportedSecret[]>("POST", "secrets-preview-env", { data });
-export const secretSet = (key: string, value: string) => http<void>("POST", "secret-set", { key, value });
-export const secretDelete = (key: string) => http<void>("POST", "secret-delete", { key });
-export const secretsSetup = () => http<SetupResult>("POST", "secrets-setup");
+  http<ImportedSecret[]>("POST", "secrets/preview-env", { data });
+export const secretSet = (key: string, value: string) => http<void>("POST", "secrets/set", { key, value });
+export const secretDelete = (key: string) => http<void>("POST", "secrets/delete", { key });
+export const secretsSetup = () => http<SetupResult>("POST", "secrets/setup");
 
 // --- MCP connections (Studio-held OAuth for remote MCP servers) ---
 // Studio is the OAuth client: tokens live server-side only, and agents reach a
@@ -811,16 +811,16 @@ export interface ConnectionPending {
  *  (no_pkce | discovery_failed | registration_failed) + a human `message`
  *  (surfaced via the thrown error's `detail`). */
 export const connectionBegin = (url: string, origin: string, label?: string) =>
-  http<ConnectionBegin>("POST", "connection-begin", { url, origin, label });
+  http<ConnectionBegin>("POST", "connections/begin", { url, origin, label });
 export const connectionPending = (state: string) =>
   http<ConnectionPending>("GET", `connection-pending?state=${encodeURIComponent(state)}`);
-export const connectionsList = () => http<ConnectionInfo[]>("GET", "connections-list");
+export const connectionsList = () => http<ConnectionInfo[]>("GET", "connections/list");
 /** Redo OAuth for an existing connection — keeps the same id/slug, so the
  *  gateway URL already in agent configs stays valid. Errors as in begin. */
 export const connectionReconnect = (id: string, origin: string) =>
-  http<ConnectionBegin>("POST", "connection-reconnect", { id, origin });
+  http<ConnectionBegin>("POST", "connections/reconnect", { id, origin });
 export const connectionDelete = (id: string) =>
-  http<{ ok: boolean }>("POST", "connection-delete", { id }).then(() => {});
+  http<{ ok: boolean }>("POST", "connections/delete", { id }).then(() => {});
 
 // --- app-managed agent terminals (tmux-backed; survive UI disconnect) ---
 

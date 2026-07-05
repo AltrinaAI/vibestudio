@@ -169,7 +169,7 @@ pub fn run() {
             // file (durable for the packaged app, where stderr goes nowhere) + stderr
             // (so `npm run dev` still shows logs). The in-process server shares this
             // process, so its `log::*` records land here too. RUST_LOG-gated; quiet by
-            // default. Frontend warns/errors arrive via POST /api/client-log.
+            // default. Frontend warns/errors arrive via POST /api/logs/client.
             let log_path = app.path().app_log_dir().ok().map(|d| d.join("skill-studio.log"));
             match &log_path {
                 Some(p) => init_logging_to_file(p),

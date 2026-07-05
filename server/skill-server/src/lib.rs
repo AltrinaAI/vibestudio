@@ -424,7 +424,7 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
         // UI's own warns/errors land in THIS machine's log file, which is where
         // you'd look to debug the desktop app. The client batches these, so it
         // only fires when the UI actually logs a warning/error.
-        if path == "/api/client-log" {
+        if path == "/api/logs/client" {
             let mut body = String::new();
             if method == Method::Post {
                 let _ = request.as_reader().read_to_string(&mut body);
@@ -917,24 +917,24 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             content_type: "text/plain".into(),
             extra: vec![],
         },
-        (Method::Get, "/api/discover") => json_reply(discover::discover_and_autotrack()),
-        (Method::Post, "/api/read-skill") => {
+        (Method::Get, "/api/skills/discover") => json_reply(discover::discover_and_autotrack()),
+        (Method::Post, "/api/skills/read") => {
             let root = skill::resolve_skill_input(&s("path"), ctx.examples_base.as_deref());
             json_reply(skill::build_raw_skill(&root))
         }
-        (Method::Post, "/api/read-file") => json_reply(skill::read_file_impl(&s("root"), &s("rel"))),
-        (Method::Post, "/api/stat-file") => json_reply(skill::stat_file_impl(&s("root"), &s("rel"))),
-        (Method::Post, "/api/write-file") => {
+        (Method::Post, "/api/fs/read") => json_reply(skill::read_file_impl(&s("root"), &s("rel"))),
+        (Method::Post, "/api/fs/stat") => json_reply(skill::stat_file_impl(&s("root"), &s("rel"))),
+        (Method::Post, "/api/fs/write") => {
             // `expectedEtag` (the tag the editor loaded) turns this into a
             // compare-and-swap; absent → legacy unconditional overwrite.
             let expected = v.get("expectedEtag").and_then(|x| x.as_str()).filter(|s| !s.is_empty());
             json_reply(skill::write_file_impl(&s("root"), &s("rel"), &s("content"), expected))
         }
-        (Method::Post, "/api/delete-file") => {
+        (Method::Post, "/api/fs/delete") => {
             json_reply(skill::delete_path_impl(&s("root"), &s("rel")).map(|_| json!({ "ok": true })))
         }
-        (Method::Post, "/api/read-image") => json_reply(skill::read_image_impl(&s("root"), &s("rel"))),
-        (Method::Post, "/api/write-asset") => {
+        (Method::Post, "/api/fs/read-image") => json_reply(skill::read_image_impl(&s("root"), &s("rel"))),
+        (Method::Post, "/api/fs/write-asset") => {
             // `data` is the media file base64-encoded (the JSON body must stay
             // UTF-8 text — same convention as /api/import-zip). The server picks a
             // non-clobbering name under `dir` and returns the path it wrote,
@@ -944,32 +944,32 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                     .map(|rel| json!({ "rel": rel })),
             )
         }
-        (Method::Post, "/api/list-dir") => json_reply(skill::list_dir_impl(
+        (Method::Post, "/api/fs/list-dir") => json_reply(skill::list_dir_impl(
             &s("path"),
             v.get("includeFiles").and_then(|x| x.as_bool()).unwrap_or(false),
         )),
-        (Method::Post, "/api/sync-targets") => json_reply(sync::sync_targets(&s("root"))),
-        (Method::Post, "/api/sync-skill") => {
+        (Method::Post, "/api/sync/targets") => json_reply(sync::sync_targets(&s("root"))),
+        (Method::Post, "/api/sync/skill") => {
             let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
             let link = v.get("link").and_then(|x| x.as_bool()).unwrap_or(false);
             json_reply(sync::sync_skill(&s("root"), &s("target"), overwrite, link))
         }
-        (Method::Post, "/api/delete-skill") => json_reply(sync::delete_skill(&s("root"))),
-        (Method::Post, "/api/promote-skill") => json_reply(sync::promote_skill(&s("root"))),
-        (Method::Get, "/api/skill-homes") => json_reply(sync::skill_homes()),
-        (Method::Post, "/api/create-skill") => {
+        (Method::Post, "/api/skills/delete") => json_reply(sync::delete_skill(&s("root"))),
+        (Method::Post, "/api/skills/promote") => json_reply(sync::promote_skill(&s("root"))),
+        (Method::Get, "/api/skills/homes") => json_reply(sync::skill_homes()),
+        (Method::Post, "/api/skills/create") => {
             json_reply(sync::create_skill(&s("target"), &s("name"), &s("content")))
         }
-        (Method::Post, "/api/import-folder") => {
+        (Method::Post, "/api/import/folder") => {
             let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
             json_reply(sync::import_skill_folder(&s("source"), &s("target"), overwrite))
         }
-        (Method::Post, "/api/import-zip") => {
+        (Method::Post, "/api/import/zip") => {
             // `data` is the .zip base64-encoded (the JSON body must stay UTF-8 text).
             let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
             json_reply(sync::import_skill_zip_base64(&s("data"), &s("target"), overwrite))
         }
-        (Method::Post, "/api/import-remote") => {
+        (Method::Post, "/api/import/remote") => {
             // Clone a skill repository (GitHub/GitLab/any git URL) into a home;
             // the clone keeps its origin, so the skill arrives sync-connected.
             let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
@@ -1149,16 +1149,16 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         (Method::Post, "/api/mine/stop") => {
             json_reply(mining::stop(skill_term::kill_session).map(|_| json!({ "ok": true })))
         }
-        (Method::Post, "/api/detect-required-env") => {
+        (Method::Post, "/api/skills/detect-env") => {
             let root = s("root");
             json_reply(secrets::secret_keys().map(|keys| skill::scan_for_env_vars(Path::new(&root), &keys)))
         }
-        (Method::Post, "/api/git-info") => json_reply(gitops::git_info(&s("root"))),
-        (Method::Post, "/api/git-track") => json_reply(gitops::git_track(&s("root"))),
-        (Method::Post, "/api/git-untrack") => {
+        (Method::Post, "/api/git/info") => json_reply(gitops::git_info(&s("root"))),
+        (Method::Post, "/api/git/track") => json_reply(gitops::git_track(&s("root"))),
+        (Method::Post, "/api/git/untrack") => {
             json_reply(gitops::git_untrack(&s("root")).map(|_| json!({ "ok": true })))
         }
-        (Method::Post, "/api/git-dirty-many") => {
+        (Method::Post, "/api/git/dirty-many") => {
             let roots: Vec<String> = v
                 .get("roots")
                 .and_then(|x| x.as_array())
@@ -1166,29 +1166,29 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 .unwrap_or_default();
             json_reply(Ok(gitops::git_dirty_many(&roots)))
         }
-        (Method::Post, "/api/git-commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
-        (Method::Post, "/api/generate-commit-message") => json_reply(commitmsg::generate(&s("root"))),
-        (Method::Post, "/api/regenerate-commit-message") => json_reply(commitmsg::regenerate(&s("root"))),
-        (Method::Post, "/api/peek-commit-message") => json_reply(commitmsg::peek(&s("root"))),
-        (Method::Get, "/api/commit-model-status") => json_reply(Ok(commit_agent::status())),
-        (Method::Post, "/api/git-log") => {
+        (Method::Post, "/api/git/commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
+        (Method::Post, "/api/commit-message/generate") => json_reply(commitmsg::generate(&s("root"))),
+        (Method::Post, "/api/commit-message/regenerate") => json_reply(commitmsg::regenerate(&s("root"))),
+        (Method::Post, "/api/commit-message/peek") => json_reply(commitmsg::peek(&s("root"))),
+        (Method::Get, "/api/commit-message/model-status") => json_reply(Ok(commit_agent::status())),
+        (Method::Post, "/api/git/log") => {
             let limit = v.get("limit").and_then(|x| x.as_u64()).unwrap_or(20) as usize;
             json_reply(gitops::git_log(&s("root"), limit))
         }
-        (Method::Post, "/api/git-status") => json_reply(gitops::git_status(&s("root"))),
-        (Method::Post, "/api/git-worktree-diff") => json_reply(gitops::git_worktree_diff(&s("root"))),
-        (Method::Post, "/api/git-commit-diff") => json_reply(gitops::git_commit_diff(&s("root"), &s("sha"))),
-        (Method::Post, "/api/git-file-at") => json_reply(gitops::git_file_at(&s("root"), &s("rev"), &s("path"))),
-        (Method::Post, "/api/git-files-at") => json_reply(gitops::git_files_at(&s("root"), &s("rev"))),
-        (Method::Post, "/api/git-discard") => {
+        (Method::Post, "/api/git/status") => json_reply(gitops::git_status(&s("root"))),
+        (Method::Post, "/api/git/worktree-diff") => json_reply(gitops::git_worktree_diff(&s("root"))),
+        (Method::Post, "/api/git/commit-diff") => json_reply(gitops::git_commit_diff(&s("root"), &s("sha"))),
+        (Method::Post, "/api/git/file-at") => json_reply(gitops::git_file_at(&s("root"), &s("rev"), &s("path"))),
+        (Method::Post, "/api/git/files-at") => json_reply(gitops::git_files_at(&s("root"), &s("rev"))),
+        (Method::Post, "/api/git/discard") => {
             json_reply(gitops::git_discard(&s("root"), &s("path")).map(|_| json!({ "ok": true })))
         }
-        (Method::Post, "/api/git-discard-all") => {
+        (Method::Post, "/api/git/discard-all") => {
             json_reply(gitops::git_discard_all(&s("root")).map(|_| json!({ "ok": true })))
         }
-        (Method::Post, "/api/git-enter-version") => json_reply(gitops::git_enter_version(&s("root"), &s("sha"))),
-        (Method::Post, "/api/git-exit-version") => json_reply(gitops::git_exit_version(&s("root"))),
-        (Method::Post, "/api/git-keep-version") => json_reply(gitops::git_keep_version(&s("root"), &s("message"))),
+        (Method::Post, "/api/git/enter-version") => json_reply(gitops::git_enter_version(&s("root"), &s("sha"))),
+        (Method::Post, "/api/git/exit-version") => json_reply(gitops::git_exit_version(&s("root"))),
+        (Method::Post, "/api/git/keep-version") => json_reply(gitops::git_keep_version(&s("root"), &s("message"))),
         // --- publish a skill to GitHub (its own repo; remote = source of truth) ---
         (Method::Post, "/api/github/status") => {
             let check_remote = v.get("checkRemote").and_then(|x| x.as_bool()).unwrap_or(false);
@@ -1224,22 +1224,22 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         // like /api/remote/*): while connected it proxies to the remote, so recents
         // belong to whichever machine you're working on — same list whether you reach
         // it locally or over SSH.
-        (Method::Get, "/api/recents") => json_reply(Ok(recents::list())),
-        (Method::Post, "/api/recents-add") => {
+        (Method::Get, "/api/recents/list") => json_reply(Ok(recents::list())),
+        (Method::Post, "/api/recents/add") => {
             json_reply(recents::add(&s("root"), &s("name"), v.get("kind").and_then(|x| x.as_str())))
         }
-        (Method::Post, "/api/recents-remove") => json_reply(recents::remove(&s("root"))),
-        (Method::Get, "/api/secrets-status") => json_reply(secrets::secrets_status()),
-        (Method::Get, "/api/secrets-list") => json_reply(secrets::secrets_list()),
-        (Method::Post, "/api/secret-set") => {
+        (Method::Post, "/api/recents/remove") => json_reply(recents::remove(&s("root"))),
+        (Method::Get, "/api/secrets/status") => json_reply(secrets::secrets_status()),
+        (Method::Get, "/api/secrets/list") => json_reply(secrets::secrets_list()),
+        (Method::Post, "/api/secrets/set") => {
             json_reply(secrets::secret_set(&s("key"), &s("value")).map(|_| json!({ "ok": true })))
         }
-        (Method::Post, "/api/secret-delete") => {
+        (Method::Post, "/api/secrets/delete") => {
             json_reply(secrets::secret_delete(&s("key")).map(|_| json!({ "ok": true })))
         }
         // --- MCP connections: Studio holds the OAuth tokens; agents reach the
         // MCP through the loopback /gw/<id>/mcp gateway (see gateway.rs) ---
-        (Method::Post, "/api/connection-begin") => {
+        (Method::Post, "/api/connections/begin") => {
             let label = v.get("label").and_then(|x| x.as_str());
             begin_reply(connections::begin(&s("url"), &s("origin"), label))
         }
@@ -1249,25 +1249,25 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let q = |k: &str| query_param(url, k).unwrap_or_default();
             callback_page(connections::finish_callback(&q("state"), &q("code"), &q("error"), ctx.port))
         }
-        (Method::Get, "/api/connection-pending") => {
+        (Method::Get, "/api/connections/pending") => {
             json_reply(Ok(connections::pending_status(&query_param(url, "state").unwrap_or_default())))
         }
-        (Method::Get, "/api/connections-list") => json_reply(connections::list()),
-        (Method::Post, "/api/connection-reconnect") => {
+        (Method::Get, "/api/connections/list") => json_reply(connections::list()),
+        (Method::Post, "/api/connections/reconnect") => {
             begin_reply(connections::reconnect(&s("id"), &s("origin")))
         }
-        (Method::Post, "/api/connection-delete") => {
+        (Method::Post, "/api/connections/delete") => {
             json_reply(connections::delete(&s("id")).map(|_| json!({ "ok": true })))
         }
-        (Method::Post, "/api/secrets-preview-env") => json_reply(Ok(secrets::preview_dotenv(&s("data")))),
-        (Method::Post, "/api/secrets-setup") => {
+        (Method::Post, "/api/secrets/preview-env") => json_reply(Ok(secrets::preview_dotenv(&s("data")))),
+        (Method::Post, "/api/secrets/setup") => {
             let bootstrap = bundled_skill(ctx, "load-secrets");
             json_reply(secrets::secrets_setup(bootstrap.as_deref()))
         }
         // The skill's secrets as a plain-text .env download — for handing a
         // collaborator the values over a channel of the user's choosing (the
         // values deliberately never travel in the repo; see remotesync).
-        (Method::Get, "/api/download-env") => {
+        (Method::Get, "/api/download/env") => {
             let root = query_param(url, "root").unwrap_or_default();
             let vars: Vec<String> = query_param(url, "vars")
                 .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
@@ -1292,7 +1292,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 Err(e) => json_reply::<()>(Err(e)),
             }
         }
-        (Method::Get, "/api/download") => {
+        (Method::Get, "/api/download/skill") => {
             let root = query_param(url, "root").unwrap_or_default();
             // Optional `vars=A,B` → bundle those managed secrets' values as a .env.
             let env_vars: Vec<String> = query_param(url, "vars")
