@@ -19,3 +19,7 @@ base64 = "0.22"
 # child + download the GGUF model) and integrity-checking the download.
 ureq = "2"
 sha2 = "0.10"
+# MCP connections (connections.rs): flow-state/PKCE randomness + authorize-URL
+# query encoding. Both already in the lockfile via skill-server.
+getrandom = "0.2"
+urlencoding = "2"

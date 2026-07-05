@@ -2,6 +2,7 @@
 
 import NavBar from "@/components/NavBar";
 import LocalStoreCard from "./LocalStoreCard";
+import ConnectionsCard from "./ConnectionsCard";
 import ProviderGallery from "./ProviderGallery";
 
 /**
@@ -34,6 +35,10 @@ export function Component() {
 
         <div className="mt-8">
           <LocalStoreCard />
+        </div>
+
+        <div className="mt-6">
+          <ConnectionsCard />
         </div>
 
         <ProviderGallery />

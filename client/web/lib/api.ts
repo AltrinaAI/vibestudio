@@ -41,8 +41,14 @@ async function http<T>(method: "GET" | "POST", path: string, args?: Record<strin
     // absent) from a transport failure (the rethrow above has no `status`). Used by
     // the remote store to distinguish "no remoting on this server" from "the local
     // server is unreachable".
-    const err = new Error((json && json.error) || `Request failed (${res.status})`) as Error & { status?: number };
+    const err = new Error((json && json.error) || `Request failed (${res.status})`) as Error & {
+      status?: number;
+      detail?: string;
+    };
     err.status = res.status;
+    // Some routes pair the machine `error` code with a human `message` (e.g.
+    // connection-begin 400s); carry it so callers can surface the readable one.
+    if (json && typeof json.message === "string") err.detail = json.message;
     throw err;
   }
   return json as T;
@@ -773,6 +779,48 @@ export const secretsPreviewEnv = (data: string) =>
 export const secretSet = (key: string, value: string) => http<void>("POST", "secret-set", { key, value });
 export const secretDelete = (key: string) => http<void>("POST", "secret-delete", { key });
 export const secretsSetup = () => http<SetupResult>("POST", "secrets-setup");
+
+// --- MCP connections (Studio-held OAuth for remote MCP servers) ---
+// Studio is the OAuth client: tokens live server-side only, and agents reach a
+// connected MCP through the loopback gateway `/gw/:id/mcp` (NOT under /api),
+// which injects Authorization upstream. No token material ever crosses here.
+
+export interface ConnectionInfo {
+  id: string;
+  label: string;
+  host: string;
+  scopes: string[];
+  status: "connected" | "needs_reauth" | "error";
+  createdAt: number;
+  lastError?: string;
+  /** Agents whose MCP config already points at this connection's gateway URL. */
+  agentsConfigured: string[];
+}
+/** A begun OAuth attempt: open `authorizeUrl` in the browser, then poll
+ *  [`connectionPending`] with `state` until it resolves. */
+export interface ConnectionBegin {
+  state: string;
+  authorizeUrl: string;
+}
+export interface ConnectionPending {
+  status: "waiting" | "done" | "denied" | "expired";
+  /** The connection's id, present once `status` is "done". */
+  id?: string;
+}
+/** Start OAuth for an MCP server URL. 400s carry a machine `error` code
+ *  (no_pkce | discovery_failed | registration_failed) + a human `message`
+ *  (surfaced via the thrown error's `detail`). */
+export const connectionBegin = (url: string, origin: string, label?: string) =>
+  http<ConnectionBegin>("POST", "connection-begin", { url, origin, label });
+export const connectionPending = (state: string) =>
+  http<ConnectionPending>("GET", `connection-pending?state=${encodeURIComponent(state)}`);
+export const connectionsList = () => http<ConnectionInfo[]>("GET", "connections-list");
+/** Redo OAuth for an existing connection — keeps the same id/slug, so the
+ *  gateway URL already in agent configs stays valid. Errors as in begin. */
+export const connectionReconnect = (id: string, origin: string) =>
+  http<ConnectionBegin>("POST", "connection-reconnect", { id, origin });
+export const connectionDelete = (id: string) =>
+  http<{ ok: boolean }>("POST", "connection-delete", { id }).then(() => {});
 
 // --- app-managed agent terminals (tmux-backed; survive UI disconnect) ---
 

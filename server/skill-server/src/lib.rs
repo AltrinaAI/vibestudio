@@ -22,13 +22,14 @@ use std::thread;
 
 use serde_json::{json, Value};
 use skill_core::{
-    commit_agent, commitmsg, discover, engine, github, gitops, mining, recents, secrets, skill,
-    sync, update,
+    commit_agent, commitmsg, connections, discover, engine, github, gitops, mining, recents,
+    secrets, skill, sync, update,
 };
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 #[cfg(feature = "local-backend")]
 mod events;
+mod gateway;
 mod phone;
 mod proxy;
 mod remote_api;
@@ -303,6 +304,12 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
         skill_term::sweep_stale();
         engine::reap_orphans();
         engine::prefetch_model();
+        // Repoint agent MCP configs at this boot's gateway port (the desktop may
+        // bind an ephemeral port when its preferred one is taken, stranding a
+        // prior boot's /gw URL). Off-thread so the claude shell-outs don't delay
+        // serving; no-op when nothing changed.
+        let gw_port = addr.port();
+        thread::spawn(move || connections::resync_agent_configs(gw_port));
     }
 
     if let Some(control) = cfg.updater {
@@ -318,6 +325,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
         remote: cfg.remote,
         phone: cfg.phone,
         notifier: cfg.notifier,
+        port: addr.port(),
     });
 
     let mut workers = Vec::with_capacity(cfg.workers);
@@ -338,6 +346,9 @@ struct ServerCtx {
     remote: Option<Arc<dyn RemoteControl>>,
     phone: Option<Arc<PhoneControl>>,
     notifier: Option<Arc<dyn NotifyControl>>,
+    /// The ACTUAL bound port — the MCP-connection flow bakes it into the
+    /// `/gw/<id>/mcp` gateway URL written into agent configs.
+    port: u16,
 }
 
 /// Bearer-token guard. `None` token ⇒ always authorized (loopback default).
@@ -364,6 +375,16 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
         let method = request.method().clone();
         let url = request.url().to_string();
         let path = url.split('?').next().unwrap_or(url.as_str()).to_string();
+        // ── MCP gateway (/gw/<id>/mcp) — deliberately BEFORE the bearer guard
+        // and the remote proxy (it isn't /api, so the switchboard never forwards
+        // it): the local agent CLIs calling it can't send our bearer, and the
+        // route self-authenticates (loopback Host + unguessable connection id).
+        // Responses can be lifetime-long SSE streams → each on its own thread.
+        if path.starts_with("/gw/") {
+            let (m, u) = (method.clone(), url.clone());
+            thread::spawn(move || gateway::handle(request, &m, &u));
+            continue;
+        }
         // Auth at the single choke point (no-op when token is None). OPTIONS
         // preflight carries no Authorization, so it stays unauthenticated.
         if method != Method::Options && !authorized(&ctx.token, &request) {
@@ -525,7 +546,7 @@ fn is_loopback_origin(origin: &str) -> bool {
 /// from THIS machine's webview or browser. A `tailscale serve`-fronted request
 /// arrives with forwarding headers and/or a ts.net `Host`, and must not count:
 /// tailscaled proxies from 127.0.0.1, so the peer address can't tell them apart.
-fn from_this_machine(request: &Request) -> bool {
+pub(crate) fn from_this_machine(request: &Request) -> bool {
     header_value(request, "X-Forwarded-Host").is_none()
         && header_value(request, "X-Forwarded-For").is_none()
         && header_value(request, "Host").as_deref().map(is_loopback_origin).unwrap_or(false)
@@ -606,6 +627,58 @@ fn json_reply<T: serde::Serialize>(result: Result<T, String>) -> Reply {
             content_type: "application/json".into(),
             extra: vec![],
         },
+    }
+}
+
+/// connection-begin/-reconnect wire shapes: 200 serializes `BeginOk`; 400 is
+/// the typed `{"error": <code>, "message": …}` contract (not the uniform
+/// `json_reply` error, whose `error` field is the human message).
+fn begin_reply(result: Result<connections::BeginOk, connections::BeginError>) -> Reply {
+    match result {
+        Ok(ok) => json_reply(Ok(ok)),
+        Err(e) => Reply {
+            status: 400,
+            body: serde_json::to_vec(&json!({ "error": e.code, "message": e.message }))
+                .unwrap_or_default(),
+            content_type: "application/json".into(),
+            extra: vec![],
+        },
+    }
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// The OAuth callback lands a real browser tab here — a tiny self-contained
+/// page (inline CSS, no assets), one variant per outcome.
+fn callback_page(outcome: connections::CallbackOutcome) -> Reply {
+    use connections::CallbackOutcome as O;
+    let (title, detail) = match &outcome {
+        O::Success { label } => (
+            "You’re connected".to_string(),
+            format!("{} is now connected — return to Skill Studio.", html_escape(label)),
+        ),
+        O::Denied => {
+            ("Authorization declined".into(), "No changes made — you can close this tab.".into())
+        }
+        O::Failed { message } => ("Connection failed".into(), html_escape(message)),
+    };
+    let body = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <title>Skill Studio</title>\
+         <style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;\
+         font-family:system-ui,-apple-system,sans-serif;background:#f5f6f8;color:#1d2733}}\
+         main{{max-width:26rem;padding:2.5rem;text-align:center}}\
+         h1{{font-size:1.25rem;margin:0 0 .5rem}}p{{margin:0;color:#51606f;line-height:1.5}}</style>\
+         </head><body><main><h1>{title}</h1><p>{detail}</p></main></body></html>"
+    );
+    Reply {
+        status: 200,
+        body: body.into_bytes(),
+        content_type: "text/html; charset=utf-8".into(),
+        extra: vec![],
     }
 }
 
@@ -1150,6 +1223,28 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         }
         (Method::Post, "/api/secret-delete") => {
             json_reply(secrets::secret_delete(&s("key")).map(|_| json!({ "ok": true })))
+        }
+        // --- MCP connections: Studio holds the OAuth tokens; agents reach the
+        // MCP through the loopback /gw/<id>/mcp gateway (see gateway.rs) ---
+        (Method::Post, "/api/connection-begin") => {
+            let label = v.get("label").and_then(|x| x.as_str());
+            begin_reply(connections::begin(&s("url"), &s("origin"), label))
+        }
+        // The AS redirects a real browser tab here (also reachable through the
+        // switchboard proxy, which injects the upstream bearer) — text/html out.
+        (Method::Get, "/api/connections/callback") => {
+            let q = |k: &str| query_param(url, k).unwrap_or_default();
+            callback_page(connections::finish_callback(&q("state"), &q("code"), &q("error"), ctx.port))
+        }
+        (Method::Get, "/api/connection-pending") => {
+            json_reply(Ok(connections::pending_status(&query_param(url, "state").unwrap_or_default())))
+        }
+        (Method::Get, "/api/connections-list") => json_reply(connections::list()),
+        (Method::Post, "/api/connection-reconnect") => {
+            begin_reply(connections::reconnect(&s("id"), &s("origin")))
+        }
+        (Method::Post, "/api/connection-delete") => {
+            json_reply(connections::delete(&s("id")).map(|_| json!({ "ok": true })))
         }
         (Method::Post, "/api/secrets-preview-env") => json_reply(Ok(secrets::preview_dotenv(&s("data")))),
         (Method::Post, "/api/secrets-setup") => {

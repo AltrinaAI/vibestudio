@@ -301,8 +301,9 @@ fn require_bin(backend: Backend, names: &[&str]) -> Result<PathBuf, String> {
 /// because a macOS `.app` launched from Finder (and the Tauri-spawned server)
 /// inherit a stripped PATH that hides `~/.local/bin`, Homebrew, and npm/bun
 /// global bins — the same lesson as `gpu.rs` discovering CUDA dirs. Cached: a
-/// binary's location doesn't move within a session.
-fn resolve(names: &[&str]) -> Option<PathBuf> {
+/// binary's location doesn't move within a session. (`connections` reuses this
+/// to find `claude` for MCP config writes.)
+pub(crate) fn resolve(names: &[&str]) -> Option<PathBuf> {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
     let cell = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let key = names.first().copied().unwrap_or_default().to_string();
@@ -593,7 +594,7 @@ fn unique_suffix() -> String {
 /// `timeout` (kill the child if it overruns). Returns `(exit_success, stdout)`.
 /// stdin is written on its own thread so a child that fills its stdout pipe
 /// before draining stdin can't deadlock us.
-fn run_proc(mut cmd: Command, stdin_data: Option<&str>, timeout: Duration) -> Result<(bool, String), String> {
+pub(crate) fn run_proc(mut cmd: Command, stdin_data: Option<&str>, timeout: Duration) -> Result<(bool, String), String> {
     cmd.stdin(if stdin_data.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
