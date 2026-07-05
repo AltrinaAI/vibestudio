@@ -7,10 +7,48 @@ import { useConfirm } from "@/components/useConfirm";
 import * as api from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/api";
 
-/** Known MCP servers the Add dialog offers as one-click chips. Rows key into
- *  this by host for the capability line + access pill; any other host gets a
- *  generic line and no pill. */
+/** A few well-known OAuth-protected MCP servers offered as quick-add chips — a
+ *  sample, NOT the supported set: any server that speaks the MCP OAuth flow
+ *  works via the URL field. Rows also key into this by host for the capability
+ *  line + access pill; any other host gets a generic line and no pill. All
+ *  URLs were live-verified against Skill Studio's anonymous-DCR + PKCE flow. */
 const CATALOG = [
+  {
+    label: "Linear",
+    url: "https://mcp.linear.app/mcp",
+    capability: "Can create and update issues, projects, and comments in your Linear workspace.",
+    pill: "Write access",
+  },
+  {
+    label: "Notion",
+    url: "https://mcp.notion.com/mcp",
+    capability: "Can search, read, and edit pages and databases in your Notion workspace.",
+    pill: "Write access",
+  },
+  {
+    label: "Sentry",
+    url: "https://mcp.sentry.dev/mcp",
+    capability: "Can query, triage, and resolve errors and releases in your Sentry account.",
+    pill: "Write access",
+  },
+  {
+    label: "Cloudflare",
+    url: "https://observability.mcp.cloudflare.com/mcp",
+    capability: "Can read your Cloudflare Workers logs, analytics, and observability data.",
+    pill: "",
+  },
+  {
+    label: "Stripe",
+    url: "https://mcp.stripe.com/",
+    capability: "Can create customers, payment links, invoices, and refunds in your Stripe account.",
+    pill: "Payment access",
+  },
+  {
+    label: "Canva",
+    url: "https://mcp.canva.com/mcp",
+    capability: "Can read and edit designs, folders, and brand assets in your Canva account.",
+    pill: "Write access",
+  },
   {
     label: "Robinhood Trading",
     url: "https://agent.robinhood.com/mcp/trading",
@@ -172,38 +210,50 @@ function ConnectDialog({
             if (!url.trim() || busy) return;
             void start(api.connectionBegin(url.trim(), window.location.origin, label));
           }}
-          className="space-y-3 px-5 py-4"
+          className="space-y-4 px-5 py-4"
         >
-          <div className="flex flex-wrap gap-1.5">
-            {CATALOG.map((c) => (
-              <button
-                key={c.url}
-                type="button"
-                onClick={() => {
-                  setUrl(c.url);
-                  setLabel(c.label);
-                  setErr(null);
-                }}
-                className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                  url === c.url ? "border-accent text-accent" : "border-border text-muted hover:text-fg"
-                }`}
-              >
-                {c.label}
-              </button>
-            ))}
+          <div className="space-y-1.5">
+            <label htmlFor="mcp-url" className="text-xs font-medium uppercase tracking-wide text-faint">
+              MCP server URL
+            </label>
+            <input
+              id="mcp-url"
+              value={url}
+              onChange={(e) => {
+                // A hand-edited URL is no longer the chip's service — drop its label.
+                setUrl(e.target.value);
+                setLabel(undefined);
+              }}
+              placeholder="https://mcp.example.com/mcp"
+              spellCheck={false}
+              autoFocus
+              className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-sm text-fg outline-none placeholder:font-sans focus:border-accent"
+            />
+            <p className="text-xs text-faint">
+              Any OAuth-protected MCP server works — you’ll sign in through your browser.
+            </p>
           </div>
-          <input
-            value={url}
-            onChange={(e) => {
-              // A hand-edited URL is no longer the chip's service — drop its label.
-              setUrl(e.target.value);
-              setLabel(undefined);
-            }}
-            placeholder="Paste an MCP server URL"
-            spellCheck={false}
-            autoFocus
-            className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-sm text-fg outline-none placeholder:font-sans focus:border-accent"
-          />
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium uppercase tracking-wide text-faint">Popular servers</p>
+            <div className="flex flex-wrap gap-1.5">
+              {CATALOG.map((c) => (
+                <button
+                  key={c.url}
+                  type="button"
+                  onClick={() => {
+                    setUrl(c.url);
+                    setLabel(c.label);
+                    setErr(null);
+                  }}
+                  className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                    url === c.url ? "border-accent text-accent" : "border-border text-muted hover:text-fg"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
           {err && <p className="text-xs text-danger">{err}</p>}
           <div className="flex justify-end gap-2 pt-1">
             <button type="button" onClick={onClose} className={btnGhost}>
@@ -263,7 +313,7 @@ function ConnectionRow({
         <p className="text-xs text-muted">
           {cat ? cat.capability : `Can act on your ${c.host} account when your agents call it.`}
         </p>
-        {cat && (
+        {cat?.pill && (
           <Badge tone="warn" className="shrink-0">
             {cat.pill}
           </Badge>
