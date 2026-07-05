@@ -12,13 +12,11 @@ Built with [Tauri](https://tauri.app/), Skill Studio runs on macOS, Linux, and W
 
 ## Features
 
-- **Discover** and manage every skill on your machine, across Claude Code, Codex, opencode,
-  Cursor, Gemini CLI, OpenClaw, the shared `~/.agents/skills` standard, and project repos.
-- **Skill Mining** — use your local agent to analyze past agent conversations to create / update skills.
-- **Edit rendered markdown directly** — view and edit `SKILL.md` and other Markdown files directly on the rendered document. Double click to edit the raw markdown syntax. 
-- **Automatic versioning** — automatically track changes across all your skills and sync to any remote you specify
-- **Secrets manager** — machine-local store. Automatically detect secrets used and notice on export for "batteries included" sharing of the skills. 
-- **Terminals & remote hosts** — managed agent sessions that survive UI disconnect, so you can close your laptop and pick the run back up later. Point Studio at any SSH host and run agents there. Supports Claude Code, Codex, opencode, or a shell. 
+- **Skill Management** — locate and manage every skill on your machine (across Claude Code, Codex, opencode, Cursor, Gemini CLI, OpenClaw) with automatic versioning and git-remote sync as the source of truth.
+- **Skill Mining** — turn past agent conversations into skills or update your existing skills with recent conversations. 
+- **Best Markdown editor** — preview and edit `SKILL.md` and other Markdow at the same time; double-click any block to drop into the raw syntax.
+- **Credential Management** — a local store for the API keys and MCP tokens your agents need. Oauth your MCPs once and every agent reaches it through a local gateway. No token ever lands in an agent's config, environment, or transcript. 
+- **Agent Session Management** — managed agent terminals that survive UI disconnect and notifies when a run finishes or needs you. Run locally or on any SSH host VS Code-remote style. 
 
 ## Install
 
@@ -39,35 +37,9 @@ Windows builds aren't code-signed yet, so each shows a one-time prompt:
 
 ## Use from a browser (phone included)
 
-The backend serves the full app over plain HTTP — a browser pointed at a running
-`skill-server` **is** Skill Studio, terminals included.
+The backend serves the full app over plain HTTP, meaning all you need is a browser pointed at the skill-server to run the entire app. 
 
-**In the app:** click the **Local** pill → **Open on your phone…** → scan the QR.
-The app fronts its own server with [Tailscale](https://tailscale.com) (free) and
-walks you through the two one-time Tailscale permissions if needed. Any device
-signed in to your Tailscale network can open the URL. Closing the window keeps
-Skill Studio (and phone access) running in your tray; right-click the tray icon
-to quit entirely.
-
-**By hand** (headless machines, or no desktop app):
-
-```bash
-npm run build                 # SPA → ./dist
-cargo run -p skill-server     # serves UI + API on 127.0.0.1:8765
-tailscale serve --bg 8765     # https://<machine>.<tailnet>.ts.net → any device
-```
-
-Notes:
-
-- Run `skill-server` from the repo/app directory (bundled skills and example
-  paths resolve relative to the working dir).
-- The server must sit at the **root** of the origin (plain `tailscale serve`
-  does this); sub-path mounts aren't supported.
-- Leave `--token` off for browser use — reachability is the auth boundary
-  (loopback bind + your tailnet). Anyone who can open the URL has full control
-  of skills, terminals, and onward SSH remotes, so treat the tailnet as trusted.
-- The installed desktop app can be fronted the same way: launch it with
-  `SKILL_STUDIO_PORT=8765` to pin its (otherwise ephemeral) local server port.
+**In the app:** click the **Local** pill → **Open on your phone…** → scan the QR. The app fronts its own server with [Tailscale](https://tailscale.com) (free) and walks you through the two one-time Tailscale permissions if needed. Any device signed in to your Tailscale network can open the URL. Closing the window keeps Skill Studio (and phone access) running in your tray; right-click the tray icon to quit entirely.
 
 ## Build from source
 
@@ -96,8 +68,7 @@ npm run dev          # native desktop
 
 ## Roadmap
 
-The thesis: the future is one where humans **collaborate** with AI agents, not one where they are replaced by them. Skills are the medium for human expert knowledge, so they need a
-first-class human UX. Next:
+The thesis: the future is one where humans **collaborate** with AI agents, not one where they are replaced by them. Skills are the medium for human expert knowledge, so they need a first-class human UX. Next:
 
-1. **Team collaboration & secret management** — share skills and the secrets they need across a team, account-backed. 
+1. **Team collaboration & secret management** — share skills and the secrets and connections they need across a team, account-backed. 
 2. **Multi-modal skills / SOP documents** in a format readable by both humans and agents, for computer use agents. 
