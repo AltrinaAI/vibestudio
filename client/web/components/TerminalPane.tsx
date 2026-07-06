@@ -28,6 +28,12 @@ const TOUCH_AXIS_LOCK_PX = 6;
  *  xterm's own drag-scroll so the selection can reach into off-screen scrollback —
  *  a finger is already selecting, so there's no second gesture free to scroll. */
 const SELECT_EDGE_SCROLL_PX = 40;
+/** Flick-to-coast (iOS-style momentum): after the finger lifts, keep scrolling at
+ *  the release velocity and decay it each frame. All three are feel knobs — tune
+ *  on-device. Velocities are px/ms (signed like the pan delta). */
+const TOUCH_FLING_MIN_VELOCITY = 0.2; // below this at release, don't coast at all
+const TOUCH_FLING_FRICTION = 0.95; // fraction of velocity kept per 16ms frame
+const TOUCH_FLING_STOP_VELOCITY = 0.02; // coast ends once velocity decays past this
 
 /** No real pane is ever this small — below it is a transient layout artifact.
  *  skill-term enforces the same floor as a backstop. */
@@ -405,7 +411,9 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
         clientX: p.clientX,
         clientY: p.clientY,
       });
-    let pan: { x: number; y: number; acc: number; axis: "v" | "h" | null } | null = null;
+    // v/t are the smoothed release velocity (px/ms) and its timestamp, read at
+    // touchend to decide whether the flick coasts.
+    let pan: { x: number; y: number; acc: number; axis: "v" | "h" | null; v: number; t: number } | null = null;
     let selecting = false;
     // A synthetic mousedown makes xterm attach its own mousemove/mouseup listeners
     // on document — we MUST emit a matching mouseup or they leak and the next real
@@ -415,7 +423,53 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       selecting = false;
       document.dispatchEvent(asMouse("mouseup", p, 0));
     };
+    // Drain travel into wheel ticks (one per TOUCH_SCROLL_PX) forwarded to xterm →
+    // tmux copy-mode — tmux owns the scrollback, so term.scrollLines() is wrong
+    // here. Returns the leftover sub-tick travel so nothing is dropped between calls.
+    const emitScrollTicks = (acc: number, clientX: number, clientY: number): number => {
+      const screen = host.querySelector(".xterm-screen");
+      if (!screen) return 0;
+      while (Math.abs(acc) >= TOUCH_SCROLL_PX) {
+        const back = acc > 0;
+        acc -= back ? TOUCH_SCROLL_PX : -TOUCH_SCROLL_PX;
+        screen.dispatchEvent(
+          new WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            clientX,
+            clientY,
+            deltaY: back ? -1 : 1,
+            deltaMode: WheelEvent.DOM_DELTA_LINE,
+          }),
+        );
+      }
+      return acc;
+    };
+    // Momentum after release: keep feeding ticks at the release velocity, decaying
+    // it per frame (normalized to 16ms so it's frame-rate independent) until it
+    // drops below the stop threshold. A new touch cancels it (stopFling below).
+    let flingRaf = 0;
+    let fling: { v: number; acc: number; x: number; y: number; t: number } | null = null;
+    const stopFling = () => {
+      if (flingRaf) cancelAnimationFrame(flingRaf);
+      flingRaf = 0;
+      fling = null;
+    };
+    const startFling = (v: number, clientX: number, clientY: number) => {
+      fling = { v, acc: 0, x: clientX, y: clientY, t: performance.now() };
+      const tick = (now: number) => {
+        if (!fling) return;
+        const dt = Math.min(now - fling.t, 32); // clamp a big gap (backgrounded tab)
+        fling.t = now;
+        fling.acc = emitScrollTicks(fling.acc + fling.v * dt, fling.x, fling.y);
+        fling.v *= Math.pow(TOUCH_FLING_FRICTION, dt / 16);
+        if (Math.abs(fling.v) < TOUCH_FLING_STOP_VELOCITY) return stopFling();
+        flingRaf = requestAnimationFrame(tick);
+      };
+      flingRaf = requestAnimationFrame(tick);
+    };
     const onTouchStart = (e: TouchEvent) => {
+      stopFling(); // any new touch halts a coast already in flight
       // A second finger ends any in-progress selection and is never a scroll.
       if (e.touches.length !== 1) {
         endSelect(e.touches[0] ?? { clientX: 0, clientY: 0 });
@@ -429,7 +483,7 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
         host.querySelector(".xterm-screen")?.dispatchEvent(asMouse("mousedown", t, 1));
         return;
       }
-      pan = { x: t.clientX, y: t.clientY, acc: 0, axis: null };
+      pan = { x: t.clientX, y: t.clientY, acc: 0, axis: null, v: 0, t: performance.now() };
     };
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
@@ -461,28 +515,24 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       }
       if (pan.axis === "h") return; // horizontal pans are not ours
       e.preventDefault(); // ours: keep the page from scrolling / pull-to-refresh
-      pan.acc += dy;
+      // Smooth the release velocity from each move so a flick can coast; a pause
+      // before lift pulls it toward zero (endPan then declines to coast).
+      const now = performance.now();
+      const dt = now - pan.t;
+      if (dt > 0) pan.v = (dy / dt) * 0.6 + pan.v * 0.4;
+      pan.t = now;
+      pan.acc = emitScrollTicks(pan.acc + dy, t.clientX, t.clientY);
       pan.x = t.clientX;
       pan.y = t.clientY;
-      const screen = host.querySelector(".xterm-screen");
-      if (!screen) return;
-      while (Math.abs(pan.acc) >= TOUCH_SCROLL_PX) {
-        const back = pan.acc > 0;
-        pan.acc -= back ? TOUCH_SCROLL_PX : -TOUCH_SCROLL_PX;
-        screen.dispatchEvent(
-          new WheelEvent("wheel", {
-            bubbles: true,
-            cancelable: true,
-            clientX: t.clientX,
-            clientY: t.clientY,
-            deltaY: back ? -1 : 1,
-            deltaMode: WheelEvent.DOM_DELTA_LINE,
-          }),
-        );
-      }
     };
     const endPan = (e: TouchEvent) => {
       endSelect(e.changedTouches[0] ?? { clientX: 0, clientY: 0 });
+      // A vertical flick coasts; a slow drag or a hold-then-lift (stale velocity,
+      // >60ms since the last move) just stops with the finger.
+      if (pan && pan.axis === "v" && performance.now() - pan.t < 60 && Math.abs(pan.v) >= TOUCH_FLING_MIN_VELOCITY) {
+        const lift = e.changedTouches[0];
+        startFling(pan.v, lift?.clientX ?? pan.x, lift?.clientY ?? pan.y);
+      }
       pan = null;
     };
     host.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -520,6 +570,7 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
       clearTimeout(staleTimer);
       selSub.dispose();
       cancelAnimationFrame(raf);
+      stopFling();
       themeObs.disconnect();
       ro.disconnect();
       dataSub?.dispose();
