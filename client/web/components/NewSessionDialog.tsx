@@ -7,7 +7,7 @@ import FolderPicker from "@/components/FolderPicker";
 import * as api from "@/lib/api";
 import type { AgentOption } from "@/lib/api";
 import { loadTerminalPrefs, saveTerminalPrefs } from "@/lib/terminalPrefs";
-import { primeNotifications } from "@/lib/terminals";
+import { primeNotifications } from "@/lib/sessions";
 
 function optionLabel(a: AgentOption): string {
   if (a.agent === "shell") return "Shell (bash)";
@@ -48,11 +48,11 @@ function tokenizeArgs(input: string): string[] {
 }
 
 /**
- * Start a new managed terminal: pick an agent (each detected flavor — PATH CLI
+ * Start a new managed session: pick an agent (each detected flavor — PATH CLI
  * and editor-extension build — is its own option), a working directory, and
  * optional flags, then create a detached tmux-backed session.
  */
-export default function NewTerminalDialog({
+export default function NewSessionDialog({
   onClose,
   onCreated,
   defaultCwd,
@@ -124,13 +124,13 @@ export default function NewTerminalDialog({
       onCreated(s);
     } catch (e) {
       setBusy(false);
-      setError(e instanceof Error ? e.message : "Couldn't start the terminal.");
+      setError(e instanceof Error ? e.message : "Couldn't start the session.");
     }
   };
 
   return (
     <>
-      <Modal title="New terminal" onClose={onClose}>
+      <Modal title="New session" onClose={onClose}>
         <div className="space-y-4 px-5 py-4">
           {/* Agent */}
           <div>
@@ -239,7 +239,7 @@ export default function NewTerminalDialog({
               Cancel
             </button>
             <button type="button" onClick={() => void create()} disabled={busy || !selected} className={btnPrimary}>
-              {busy ? "Starting…" : "Start terminal"}
+              {busy ? "Starting…" : "Start session"}
             </button>
           </div>
         </div>

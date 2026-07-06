@@ -7,7 +7,7 @@ import { agentColor, isEditableBundledSkill, KIND_TAG, type SkillKind } from "@/
 import { useConfirm } from "@/components/useConfirm";
 import * as api from "@/lib/api";
 import type { GitInfo, SyncTarget } from "@/lib/api";
-import { secretsPath } from "@/lib/routes";
+import { credentialsPath } from "@/lib/routes";
 import { useStudio } from "./StudioContext";
 
 const btnGhost =
@@ -379,7 +379,7 @@ function SecretsSection({ root, declared, onOpen }: { root: string; declared: st
       {exportable.length > 0 && (
         <p className="text-[0.7rem] text-faint">
           The .env is plain text — share it over a channel you trust, and never commit it. A teammate imports
-          it on the Secrets page.
+          it on the Credentials page.
         </p>
       )}
     </div>
@@ -432,7 +432,7 @@ export default function ManagePanel({
               declared={declared}
               onOpen={() => {
                 onClose();
-                navigate(secretsPath());
+                navigate(credentialsPath());
               }}
             />
           </Section>

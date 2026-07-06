@@ -7,16 +7,16 @@ import NavBar from "@/components/NavBar";
 import { Spinner } from "@/components/ui";
 import PhoneModal from "@/components/PhoneModal";
 import { RemoteDialog } from "@/components/RemoteMenu";
-import NewTerminalDialog from "@/components/NewTerminalDialog";
+import NewSessionDialog from "@/components/NewSessionDialog";
 import SkillGallery from "@/pages/home/SkillGallery";
 import * as api from "@/lib/api";
 import type { ConnectionInfo, TermSession } from "@/lib/api";
-import { useTerminals, isUnread, refresh as refreshTerminals, noteCreated, nativeNotifyState } from "@/lib/terminals";
+import { useSessions, isUnread, refresh as refreshSessions, noteCreated, nativeNotifyState } from "@/lib/sessions";
 import { useMining, refreshMining } from "@/lib/mining";
 import MineDialog from "@/components/MineDialog";
 import * as push from "@/lib/push";
 import { useRemote } from "@/lib/remote";
-import { terminalsPath, secretsPath, miningPath } from "@/lib/routes";
+import { sessionsPath, credentialsPath, miningPath } from "@/lib/routes";
 
 // A live session carries only the bare agent family ("claude" | "codex" | …); the
 // rail keys colors off human labels, so map family → label + brand color here.
@@ -252,7 +252,7 @@ function PushNudge() {
 
 export function Component() {
   const navigate = useNavigate();
-  const terminals = useTerminals();
+  const sessionStore = useSessions();
   const remote = useRemote();
   const mining = useMining();
   const [remoteOpen, setRemoteOpen] = useState(false);
@@ -268,9 +268,9 @@ export function Component() {
   // (the 5s poll backstop lives in the Sessions workspace, which isn't mounted here;
   // the module's SSE subscription still delivers bells, this just refills timestamps).
   useEffect(() => {
-    void refreshTerminals();
+    void refreshSessions();
     const t = setInterval(() => {
-      if (!document.hidden) void refreshTerminals();
+      if (!document.hidden) void refreshSessions();
     }, 5000);
     return () => clearInterval(t);
   }, []);
@@ -302,8 +302,8 @@ export function Component() {
     };
   }, []);
 
-  const sessions = terminals.sessions;
-  const waiting = sessions.filter((s) => isUnread(s, terminals.seen, null));
+  const sessions = sessionStore.sessions;
+  const waiting = sessions.filter((s) => isUnread(s, sessionStore.seen, null));
   const waitingIds = new Set(waiting.map((s) => s.id));
   const running = sessions.filter((s) => !waitingIds.has(s.id));
 
@@ -312,7 +312,7 @@ export function Component() {
   const remoteConnected = remote.status.state === "connected";
   const secretCount = secretNames ? secretNames.length : null;
 
-  const openSession = (id: string) => navigate(terminalsPath(id));
+  const openSession = (id: string) => navigate(sessionsPath(id));
   const openNewSession = () => setNewSessionOpen(true);
   const mineDays =
     mining?.startedUnix != null ? Math.floor((Date.now() / 1000 - mining.startedUnix) / 86400) : null;
@@ -338,7 +338,7 @@ export function Component() {
               <PickaxeIcon />
               Mine
             </button>
-            <button type="button" onClick={() => navigate(secretsPath())} className={`${actionBase} border border-border text-fg hover:bg-panel`}>
+            <button type="button" onClick={() => navigate(credentialsPath())} className={`${actionBase} border border-border text-fg hover:bg-panel`}>
               <LinkIcon />
               Connect
             </button>
@@ -423,7 +423,7 @@ export function Component() {
               </>
             }
             action={
-              <button type="button" onClick={() => navigate(terminalsPath())} className="text-xs font-medium text-accent hover:opacity-80">
+              <button type="button" onClick={() => navigate(sessionsPath())} className="text-xs font-medium text-accent hover:opacity-80">
                 Open Sessions →
               </button>
             }
@@ -467,7 +467,7 @@ export function Component() {
               </>
             }
             action={
-              <button type="button" onClick={() => navigate(secretsPath())} className="text-xs font-medium text-accent hover:opacity-80">
+              <button type="button" onClick={() => navigate(credentialsPath())} className="text-xs font-medium text-accent hover:opacity-80">
                 Manage →
               </button>
             }
@@ -476,11 +476,11 @@ export function Component() {
           </Heading>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {(connections ?? []).map((c) => (
-              <ConnectionCard key={c.id} c={c} onClick={() => navigate(secretsPath())} />
+              <ConnectionCard key={c.id} c={c} onClick={() => navigate(credentialsPath())} />
             ))}
             <button
               type="button"
-              onClick={() => navigate(secretsPath())}
+              onClick={() => navigate(credentialsPath())}
               className="flex items-center gap-2 rounded-xl border border-dashed border-border p-4 text-left text-muted transition-colors hover:border-accent hover:text-accent"
             >
               <LinkIcon />
@@ -495,7 +495,7 @@ export function Component() {
                   <button
                     key={k}
                     type="button"
-                    onClick={() => navigate(secretsPath())}
+                    onClick={() => navigate(credentialsPath())}
                     title="Manage in Credentials"
                     className="rounded-md border border-border bg-surface px-2.5 py-1 font-mono text-xs text-fg transition-colors hover:bg-panel"
                   >
@@ -504,7 +504,7 @@ export function Component() {
                 ))}
                 <button
                   type="button"
-                  onClick={() => navigate(secretsPath())}
+                  onClick={() => navigate(credentialsPath())}
                   className="rounded-md border border-dashed border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-accent hover:text-accent"
                 >
                   + Add key
@@ -529,12 +529,12 @@ export function Component() {
       )}
       {phoneOpen && <PhoneModal onClose={() => setPhoneOpen(false)} />}
       {newSessionOpen && (
-        <NewTerminalDialog
+        <NewSessionDialog
           onClose={() => setNewSessionOpen(false)}
           onCreated={(s) => {
             setNewSessionOpen(false);
             noteCreated(s); // optimistic insert so the rail/list shows it immediately
-            navigate(terminalsPath(s.id)); // land in the new session
+            navigate(sessionsPath(s.id)); // land in the new session
           }}
         />
       )}
@@ -544,7 +544,7 @@ export function Component() {
           onStarted={(terminalId) => {
             setMineOpen(false);
             void refreshMining();
-            navigate(terminalsPath(terminalId)); // land in the run's conversation
+            navigate(sessionsPath(terminalId)); // land in the run's conversation
           }}
         />
       )}

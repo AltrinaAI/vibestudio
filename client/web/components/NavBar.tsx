@@ -5,9 +5,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { AltrinaMark } from "./FileIcon";
 import { ThemeToggle } from "./ui";
 import RemoteMenu from "./RemoteMenu";
-import { secretsPath, studioPath } from "@/lib/routes";
+import { credentialsPath, studioPath } from "@/lib/routes";
 import { useRecents } from "@/lib/recents";
-import { useTerminals } from "@/lib/terminals";
+import { useSessions } from "@/lib/sessions";
 import { useUpdate } from "@/lib/updates";
 import { toggleTheme } from "@/lib/theme";
 
@@ -39,7 +39,7 @@ function StudioIcon() {
 
 /** A persistent app-nav link (Sessions, Credentials) shown on every page; the entry
  *  for the current page reads as active. `dot` is the same blue unread dot as the
- *  terminal rail's — "an agent finished a turn somewhere you aren't looking". */
+ *  session rail's — "an agent finished a turn somewhere you aren't looking". */
 function NavLink({
   icon,
   label,
@@ -88,31 +88,31 @@ function NavLink({
  *      the current page reads active.
  *   4. Status / controls — Remote (connection status) and the theme toggle. Global.
  *
- * Known overlap kept for now: in Studio the Terminal link toggles the in-page
- * *projection* of the Terminal destination (the side panel) instead of navigating (see
- * `onTerminals`). The clean future split = that toggle becomes Studio page chrome and
+ * Known overlap kept for now: in Studio the Sessions link toggles the in-page
+ * *projection* of the Sessions destination (the side panel) instead of navigating (see
+ * `onSessions`). The clean future split = that toggle becomes Studio page chrome and
  * the link navigates everywhere.
  */
 export default function NavBar({
   breadcrumb,
   children,
-  onTerminals,
-  terminalsOpen,
+  onSessions,
+  sessionsOpen,
 }: {
   breadcrumb?: ReactNode;
   children?: ReactNode;
-  /** Categories 2↔3 overlap (see header): a page that projects the Terminal
+  /** Categories 2↔3 overlap (see header): a page that projects the Sessions
    *  destination inline (Studio's side panel) overrides the link to OPEN that
    *  projection; once it's open the link falls through to navigating to the full
-   *  Terminal page. Future-clean: move the projection toggle to page chrome. */
-  onTerminals?: () => void;
-  terminalsOpen?: boolean;
+   *  Sessions page. Future-clean: move the projection toggle to page chrome. */
+  onSessions?: () => void;
+  sessionsOpen?: boolean;
 }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const atHome = pathname === "/";
   const recents = useRecents();
-  const termUnread = useTerminals().unreadCount > 0;
+  const sessionsUnread = useSessions().unreadCount > 0;
   // This desktop's own version (the update ledger's `current` — always local, never the
   // connected remote's), so the running build is visible at a glance. "0.0.0" = an
   // unstamped dev build; release tags stamp the real version.
@@ -131,11 +131,11 @@ export default function NavBar({
     else navigate("/");
   };
 
-  // Terminal is a first-class destination; the Studio side panel is just its inline
+  // Sessions is a first-class destination; the Studio side panel is just its inline
   // projection. So in Studio the link opens that projection, and once it's open a
-  // second click navigates to the full Terminal page (closing the panel is the
+  // second click navigates to the full Sessions page (closing the panel is the
   // panel's own control). Everywhere else the link just navigates.
-  const onTerminalsClick = onTerminals && !terminalsOpen ? onTerminals : () => navigate("/sessions");
+  const onSessionsClick = onSessions && !sessionsOpen ? onSessions : () => navigate("/sessions");
 
   const brand = (
     <span className="flex items-center gap-1.5 text-brand">
@@ -173,8 +173,8 @@ export default function NavBar({
         {children && <span className="mx-1 h-5 w-px bg-border" aria-hidden />}
         {/* (3) destinations — the persistent "pages" cluster, identical on every page.
             Studio has no singleton route (per-skill), so it points at the current/last skill
-            (else Home); in Studio the Terminal link opens its projection, then navigates to
-            the full page once it's open (see onTerminals). */}
+            (else Home); in Studio the Sessions link opens its projection, then navigates to
+            the full page once it's open (see onSessions). */}
         <NavLink
           icon={<StudioIcon />}
           label="Skills"
@@ -184,11 +184,11 @@ export default function NavBar({
         <NavLink
           icon={<TerminalIcon />}
           label="Sessions"
-          active={onTerminals ? !!terminalsOpen : pathname === "/sessions"}
-          onClick={onTerminalsClick}
-          dot={termUnread}
+          active={onSessions ? !!sessionsOpen : pathname === "/sessions"}
+          onClick={onSessionsClick}
+          dot={sessionsUnread}
         />
-        <NavLink icon={<KeyIcon />} label="Credentials" active={pathname === "/credentials"} onClick={() => navigate(secretsPath())} />
+        <NavLink icon={<KeyIcon />} label="Credentials" active={pathname === "/credentials"} onClick={() => navigate(credentialsPath())} />
         <span className="mx-1 h-5 w-px bg-border" aria-hidden />
         {/* (4) status + controls — Remote (connection status) + theme toggle, the global utility corner */}
         <RemoteMenu />

@@ -6,7 +6,7 @@ import ConnectionsCard from "./ConnectionsCard";
 import ProviderGallery from "./ProviderGallery";
 
 /**
- * The dedicated Secrets page (route: /secrets). A provider dashboard: the active
+ * The dedicated Credentials page (route: /credentials). A provider dashboard: the active
  * machine-local store up top, with future managed providers (1Password, Doppler,
  * a team cloud) queued in a quiet gallery below. Reachable from the Home nav bar
  * and the studio Manage drawer.

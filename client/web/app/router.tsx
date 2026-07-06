@@ -22,7 +22,7 @@ export const router = createHashRouter([
       // The skill gallery is embedded on the home dashboard now; /skills redirects
       // there (the per-skill editor still lives at /skills/:root below).
       { path: "skills", element: <Navigate to="/" replace /> },
-      { path: "credentials", lazy: () => import("@/pages/secrets/SecretsRoute") },
+      { path: "credentials", lazy: () => import("@/pages/credentials/CredentialsRoute") },
       { path: "mining", lazy: () => import("@/pages/mining/MiningRoute") },
       // The Sessions UI is the always-mounted host in AppShell; this route only
       // owns the URL/visibility, so its own element renders nothing.

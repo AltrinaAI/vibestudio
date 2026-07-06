@@ -28,11 +28,11 @@ export default function TopBar({
   reviewMode,
   showReview,
   previewing,
-  terminalsOpen,
+  sessionsOpen,
   narrow,
   sidebarOpen,
   onToggleReview,
-  onTerminals,
+  onSessions,
   onToggleSidebar,
   onManage,
   onExport,
@@ -45,23 +45,23 @@ export default function TopBar({
   showReview: boolean;
   /** Viewing a past version: review shows what THAT version changed, not working-tree edits. */
   previewing: boolean;
-  /** The embedded terminals side panel (Studio's projection of the Terminal
-   *  destination) is open — the nav's Terminal link toggles it here instead of
+  /** The embedded sessions side panel (Studio's projection of the Sessions
+   *  destination) is open — the nav's Sessions link toggles it here instead of
    *  leaving the skill; the full page is reachable from the panel's expand button. */
-  terminalsOpen: boolean;
+  sessionsOpen: boolean;
   /** Container is phone-narrow: the sidebar column is an overlay drawer, toggled here. */
   narrow: boolean;
   sidebarOpen: boolean;
   onToggleReview: () => void;
-  onTerminals: () => void;
+  onSessions: () => void;
   onToggleSidebar: () => void;
   onManage: () => void;
   onExport: () => void;
 }) {
   return (
     <NavBar
-      onTerminals={onTerminals}
-      terminalsOpen={terminalsOpen}
+      onSessions={onSessions}
+      sessionsOpen={sessionsOpen}
       breadcrumb={
         <>
           <span className="text-faint" aria-hidden>

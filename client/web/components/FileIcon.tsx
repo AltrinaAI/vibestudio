@@ -54,7 +54,3 @@ export function AltrinaMark({ className }: { className?: string }) {
     </svg>
   );
 }
-
-/** Back-compat aliases; prefer {@link AltrinaMark}. */
-export const TerminalMark = AltrinaMark;
-export const BrandIcon = AltrinaMark;

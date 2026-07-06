@@ -10,7 +10,7 @@ import * as api from "@/lib/api";
 import type { AgentOption, MineFile, MineFiles, MineHistoryEntry } from "@/lib/api";
 import type { FileData } from "@/lib/types";
 import { refreshMining, useMining } from "@/lib/mining";
-import { terminalsPath } from "@/lib/routes";
+import { sessionsPath } from "@/lib/routes";
 
 function PickaxeIcon() {
   return (
@@ -142,9 +142,9 @@ export function Component() {
     try {
       const { terminalId } = await api.mineContinue();
       void refreshMining();
-      navigate(terminalsPath(terminalId));
+      navigate(sessionsPath(terminalId));
     } catch {
-      navigate(terminalsPath(mining?.terminalId));
+      navigate(sessionsPath(mining?.terminalId));
     } finally {
       setContinuing(false);
     }
@@ -215,7 +215,7 @@ export function Component() {
                   <>
                     <button
                       type="button"
-                      onClick={() => navigate(terminalsPath(mining.terminalId))}
+                      onClick={() => navigate(sessionsPath(mining.terminalId))}
                       className="text-xs font-medium text-accent hover:opacity-80"
                     >
                       Watch
@@ -364,7 +364,7 @@ export function Component() {
           onStarted={(terminalId) => {
             setMineOpen(false);
             void refreshMining();
-            navigate(terminalsPath(terminalId));
+            navigate(sessionsPath(terminalId));
           }}
         />
       )}

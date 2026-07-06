@@ -3,23 +3,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ResizeHandle from "@/components/ResizeHandle";
-import TerminalsWorkspace from "@/components/TerminalsWorkspace";
+import SessionsWorkspace from "@/components/SessionsWorkspace";
 import * as api from "@/lib/api";
 import { refreshMining, useMining } from "@/lib/mining";
-import { terminalsPath } from "@/lib/routes";
+import { sessionsPath } from "@/lib/routes";
 import { loadStudioLayout, saveStudioLayout } from "@/lib/studioLayout";
 import { useStudio } from "./StudioContext";
 
 /**
- * Studio's **projection of the Terminal destination** — Studio page chrome, not a
- * separate place: the Terminals workspace embedded chrome-less (one implementation,
- * two hosts), seeded to this skill's folder. The nav's Terminals link
+ * Studio's **projection of the Sessions destination** — Studio page chrome, not a
+ * separate place: the Sessions workspace embedded chrome-less (one implementation,
+ * two hosts), seeded to this skill's folder. The nav's Sessions link
  * toggles this panel instead of leaving the skill; the header's expand button
- * goes to the full /terminals page, carrying the selected session. When the
+ * goes to the full /sessions page, carrying the selected session. When the
  * skill came out of the last mining run (a staged proposal, or an existing
  * skill the run edited), the panel opens on the very conversation that
  * proposed it, revived through the terminal API's resume path if its pane was
- * closed. Otherwise the New-terminal flow starts agents in the skill's
+ * closed. Otherwise the New-session flow starts agents in the skill's
  * folder. Closing the panel detaches; sessions live on (tmux-backed).
  */
 export default function AgentPanel({ onClose }: { onClose: () => void }) {
@@ -57,7 +57,7 @@ export default function AgentPanel({ onClose }: { onClose: () => void }) {
         void refreshMining(); // the record may now point at a new terminal
       })
       .catch(() => {
-        /* the panel still works as a plain terminals view */
+        /* the panel still works as a plain sessions view */
       });
     return () => {
       stale = true;
@@ -75,7 +75,7 @@ export default function AgentPanel({ onClose }: { onClose: () => void }) {
           </span>
           <button
             type="button"
-            onClick={() => navigate(terminalsPath(activeId ?? undefined))}
+            onClick={() => navigate(sessionsPath(activeId ?? undefined))}
             aria-label="Open in full page"
             title="Open in the full Sessions page"
             className="ml-auto rounded p-1 text-faint hover:text-fg"
@@ -90,14 +90,14 @@ export default function AgentPanel({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close terminals panel"
+            aria-label="Close sessions panel"
             className="rounded p-1 text-faint hover:text-fg"
           >
             ✕
           </button>
         </div>
         <div className="min-h-0 flex-1">
-          <TerminalsWorkspace
+          <SessionsWorkspace
             visible
             embedded
             focusId={focusId}

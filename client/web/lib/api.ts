@@ -824,7 +824,7 @@ export const connectionDelete = (id: string) =>
 
 // --- app-managed agent terminals (tmux-backed; survive UI disconnect) ---
 
-/** A launchable agent in the "New terminal" picker. The same agent can appear as
+/** A launchable agent in the "New session" picker. The same agent can appear as
  *  its PATH CLI *and* the build bundled inside a VS Code / Cursor extension. */
 export interface AgentOption {
   /** Stable id passed back to terminalCreate (e.g. "claude:cli", "codex:ext:vs-code", "shell"). */
@@ -989,7 +989,7 @@ export const terminalKill = (id: string) =>
   http<{ ok: boolean }>("POST", "terminal/kill", { id }).then(() => {});
 
 // --- agent turn-finish notifications ---
-// The SPA decides WHEN a bell deserves a notification (lib/terminals.ts); these
+// The SPA decides WHEN a bell deserves a notification (lib/sessions.ts); these
 // routes are pinned LOCAL (never proxied) because a toast/badge belongs to the
 // machine whose screen you're looking at. A server with no native surface
 // (standalone binary, browser mode) 404s them — the notifier falls back to the

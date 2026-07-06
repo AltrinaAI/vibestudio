@@ -1,8 +1,8 @@
 // URL <-> skill identity helpers for the hash router.
 //
-// The route URLs use the nav vocabulary — /skills, /sessions, /credentials — while
-// these helper NAMES keep the older internal vocabulary (studio/terminals/secrets);
-// renaming the functions is deferred to the wider code-vocabulary alignment.
+// The route URLs use the nav vocabulary — /skills, /sessions, /credentials — and so
+// do these helpers (sessionsPath, credentialsPath). The skill editor's helpers are
+// still named studio* though its route is /skills/:root — that rename is deferred.
 //
 // A skill root is an absolute filesystem path (with slashes), so it rides as a
 // single `:root` segment via encodeURIComponent; React Router decodes params on
@@ -12,15 +12,15 @@
 // decodes the splat on read.
 
 /** The dedicated Credentials page (machine-local secrets store + OAuth connections). */
-export const secretsPath = () => "/credentials";
+export const credentialsPath = () => "/credentials";
 
 /** The mining page: the latest run's record and the files in its run dir. */
 export const miningPath = () => "/mining";
 
 /** The Sessions workspace (always-mounted host; the URL just reveals it).
- *  Pass a session id to land with that terminal selected (e.g. jumping into
+ *  Pass a session id to land with that session selected (e.g. jumping into
  *  the mining run's conversation); the workspace consumes the param. */
-export const terminalsPath = (id?: string) =>
+export const sessionsPath = (id?: string) =>
   id ? `/sessions?id=${encodeURIComponent(id)}` : "/sessions";
 
 export const studioPath = (root: string) => `/skills/${encodeURIComponent(root)}`;

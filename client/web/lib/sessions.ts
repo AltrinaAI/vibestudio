@@ -1,10 +1,10 @@
-// Shared terminal-session store + the agent turn-finish notifier. A module-level
+// Shared session store + the agent turn-finish notifier. A module-level
 // store (same external-store idiom as lib/remote.ts / lib/updates.ts) because
-// notifications must outlive any mounted workspace: TerminalsHost only mounts on
-// the first Terminals visit, but an agent finishing while the window sits in the
+// notifications must outlive any mounted workspace: SessionsHost only mounts on
+// the first Sessions visit, but an agent finishing while the window sits in the
 // tray — or before any visit — must still toast. This module owns:
 //   * the session list, and the per-session "last viewed" marks (localStorage)
-//     the unread dot compares `bellAt` against — moved out of TerminalsWorkspace
+//     the unread dot compares `bellAt` against — moved out of SessionsWorkspace
 //     so the NavBar dot and the notifier share them;
 //   * the `/api/events` subscription (instant bell/opened/closed refresh; the
 //     workspace's 5s poll stays as the backstop for servers without it);
@@ -18,9 +18,10 @@ import * as api from "@/lib/api";
 import type { TermEvent, TermSession } from "@/lib/api";
 import { log } from "@/lib/log";
 import { canPush, enablePushInGesture } from "@/lib/push";
-import { terminalsPath } from "@/lib/routes";
+import { sessionsPath } from "@/lib/routes";
 
-/** Per-session "last viewed" marks (id → unix secs) for the unread dot. */
+/** Per-session "last viewed" marks (id → unix secs) for the unread dot.
+ *  Legacy key string — keep the old "terminals" word so existing marks survive the rename. */
 const SEEN_KEY = "skillviewer-terminals-seen";
 
 /** Wall-clock seconds, to compare against tmux bell timestamps. */
@@ -51,7 +52,7 @@ function persistSeen() {
  * tmux lists sessions alphabetically by name, and our names lead with the
  * creating backend's pid — so a backend restart (app relaunch, version upgrade,
  * remote reconnect) would otherwise reorder the whole list under you. Sorting by
- * creation time keeps every existing row put and appends new terminals at the
+ * creation time keeps every existing row put and appends new sessions at the
  * end; the id is a deterministic tiebreak when two share a second.
  */
 function sortSessions(list: TermSession[]): TermSession[] {
@@ -66,7 +67,7 @@ function sortSessions(list: TermSession[]): TermSession[] {
  *  Keyed off the turn-completion BELL, NOT raw output — an idle agent TUI keeps
  *  repainting its pane, so `activity` would leave a phantom dot with nothing new
  *  to see. Sessions never listed before start "seen" at their own bell time, so
- *  a reconnect doesn't light up every terminal that belled while you were away. */
+ *  a reconnect doesn't light up every session that belled while you were away. */
 export function isUnread(
   s: TermSession,
   seenMap: Record<string, number>,
@@ -85,7 +86,7 @@ let seen: Record<string, number> = readSeen();
 let watchedId: string | null = null;
 const listeners = new Set<() => void>();
 
-export interface TerminalsSnap {
+export interface SessionsSnap {
   sessions: TermSession[];
   loading: boolean;
   seen: Record<string, number>;
@@ -94,7 +95,7 @@ export interface TerminalsSnap {
   unreadCount: number;
 }
 
-let snap: TerminalsSnap = { sessions, loading, seen, unreadCount: 0 };
+let snap: SessionsSnap = { sessions, loading, seen, unreadCount: 0 };
 
 function rebuild() {
   const unreadCount = sessions.filter((s) => isUnread(s, seen, watchedId)).length;
@@ -103,7 +104,7 @@ function rebuild() {
   for (const l of listeners) l();
 }
 
-export function useTerminals(): TerminalsSnap {
+export function useSessions(): SessionsSnap {
   return useSyncExternalStore(
     (cb) => {
       listeners.add(cb);
@@ -218,7 +219,7 @@ function setSessions(list: TermSession[]) {
     }
   }
 
-  // Watching a focused, visible terminal keeps it read: a turn you watched land
+  // Watching a focused, visible session keeps it read: a turn you watched land
   // must not dot the rail or count in the badge after you switch away.
   if (watchedId && !document.hidden && document.hasFocus()) {
     const w = list.find((s) => s.id === watchedId);
@@ -291,7 +292,7 @@ function webNotify(title: string, body: string, tag: string): void {
     const n = new Notification(title, { body, tag });
     n.onclick = () => {
       window.focus();
-      window.location.hash = `#${terminalsPath(tag)}`;
+      window.location.hash = `#${sessionsPath(tag)}`;
       n.close();
     };
   } catch {
@@ -323,7 +324,7 @@ async function probeNative(): Promise<void> {
 }
 
 /** Ask for notification permission at a user-legible moment — call this from
- *  the gesture that creates a terminal, so the OS prompt has an obvious "why".
+ *  the gesture that creates a session, so the OS prompt has an obvious "why".
  *  Browser mode needs the actual user gesture, so call it synchronously from
  *  the click handler, not after an await. */
 export function primeNotifications(): void {
@@ -380,7 +381,7 @@ function connectEvents(): void {
 void probeNative();
 connectEvents();
 // A baseline fetch so the NavBar dot and the notifier's seen marks exist even
-// before any Terminals surface mounts; waits out app startup.
+// before any Sessions surface mounts; waits out app startup.
 setTimeout(() => void refresh(), 1500);
 // Attention edges. Losing it stamps the watched session — everything up to this
 // instant was on screen, so a bell that raced the blur (turn finished while the

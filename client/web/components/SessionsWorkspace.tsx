@@ -3,14 +3,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import NavBar from "@/components/NavBar";
-import NewTerminalDialog from "@/components/NewTerminalDialog";
+import NewSessionDialog from "@/components/NewSessionDialog";
 import ResizeHandle from "@/components/ResizeHandle";
 import TerminalPane from "@/components/TerminalPane";
 import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
 import * as push from "@/lib/push";
-import * as terminals from "@/lib/terminals";
+import * as store from "@/lib/sessions";
 
+// Legacy key string — keep the old "terminals" word so existing users' saved rail width survives the rename.
 const RAIL_KEY = "skillviewer-terminals-rail";
 
 function readRailW(): number {
@@ -31,20 +32,20 @@ function PlusIcon() {
 }
 
 /**
- * The Terminals workspace: a rail of live tmux-backed sessions plus the
+ * The Sessions workspace: a rail of live tmux-backed sessions plus the
  * active terminal. Sessions persist across UI disconnects and are reaped when
  * the backend process exits (see skill-term). The list lives in the shared
- * store (lib/terminals.ts), pushed fresh by its /api/events stream; this
+ * store (lib/sessions.ts), pushed fresh by its /api/events stream; this
  * component adds a 5s poll as the backstop, so externally exited /
  * watchdog-reaped sessions drop out even without the stream.
  *
- * Two render modes, one implementation: the full /terminals page (NavBar,
+ * Two render modes, one implementation: the full /sessions page (NavBar,
  * `?id=` deep link), and `embedded` — chrome-less, fills its parent — for
  * hosts like the studio's Agent side panel. In tight horizontal layouts
  * (a phone, the panel at its default width) the sessions rail collapses
  * into a dropdown row above the terminal, measured on the workspace itself.
  */
-export default function TerminalsWorkspace({
+export default function SessionsWorkspace({
   visible,
   embedded = false,
   focusId,
@@ -57,17 +58,17 @@ export default function TerminalsWorkspace({
   embedded?: boolean;
   /** Select this session whenever it's set (e.g. the mining conversation). */
   focusId?: string | null;
-  /** Initial working directory for the New-terminal dialog. */
+  /** Initial working directory for the New-session dialog. */
   defaultCwd?: string;
   /** Reports the selected session — e.g. so an embedding host's "open full
    *  page" affordance can carry the selection along. */
   onActiveChange?: (id: string | null) => void;
 }) {
   // Sessions, the seen marks, and the unread math live in the shared store
-  // (lib/terminals.ts) so the NavBar dot and the turn-finish notifier keep
+  // (lib/sessions.ts) so the NavBar dot and the turn-finish notifier keep
   // working when no workspace is mounted; this component renders that store and
   // owns only its own selection + layout state.
-  const { sessions, loading, seen } = terminals.useTerminals();
+  const { sessions, loading, seen } = store.useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   // Web Push offer — shown until the user decides (mainly the installed phone
@@ -80,18 +81,18 @@ export default function TerminalsWorkspace({
   // Unread dot — the predicate (and its bell-not-activity rationale) lives with
   // the store; this just binds it to this workspace's own selection.
   const unread = useCallback(
-    (s: TermSession) => terminals.isUnread(s, seen, activeId),
+    (s: TermSession) => store.isUnread(s, seen, activeId),
     [activeId, seen],
   );
 
-  // Freeze the terminal you're leaving at "now" — synchronously, before paint, so
+  // Freeze the session you're leaving at "now" — synchronously, before paint, so
   // switching away never flashes a dot on the pane you were just watching (its
   // attach repaint bumped `activity` above the last poll's snapshot). A plain
   // effect would let one painted frame through with the stale mark.
   const prevActiveRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const prev = prevActiveRef.current;
-    if (prev && prev !== activeId) terminals.markSeen(prev);
+    if (prev && prev !== activeId) store.markSeen(prev);
     prevActiveRef.current = activeId;
   }, [activeId]);
 
@@ -100,11 +101,11 @@ export default function TerminalsWorkspace({
   // clobbering a watch another visible workspace holds.
   useEffect(() => {
     if (!visible) return;
-    terminals.setWatched(activeId);
-    return () => terminals.releaseWatched(activeId);
+    store.setWatched(activeId);
+    return () => store.releaseWatched(activeId);
   }, [visible, activeId]);
 
-  const refresh = useCallback(() => terminals.refresh(), []);
+  const refresh = useCallback(() => store.refresh(), []);
 
   // Keep the selection valid as the store's list changes (killed/reaped sessions
   // drop out; the first session is selected once the initial fetch lands).
@@ -123,7 +124,7 @@ export default function TerminalsWorkspace({
     return () => clearInterval(t);
   }, [refresh]);
 
-  // Deep link: /terminals?id=<session> selects that terminal (e.g. "Continue
+  // Deep link: /sessions?id=<session> selects that session (e.g. "Continue
   // the conversation" from the mining card — possibly created a moment ago,
   // hence the refresh). Consumed once — the param is dropped so later visits
   // don't keep forcing the selection.
@@ -133,7 +134,7 @@ export default function TerminalsWorkspace({
     if (want) {
       setActiveId(want);
       void refresh();
-      navigate("/terminals", { replace: true });
+      navigate("/sessions", { replace: true });
     }
   }, [visible, embedded, location.search, navigate, refresh]);
 
@@ -199,13 +200,13 @@ export default function TerminalsWorkspace({
   ) : (
     <div className="flex h-full items-center justify-center px-6 text-center">
       <div>
-        <p className="text-sm text-muted">No terminal selected.</p>
+        <p className="text-sm text-muted">No session selected.</p>
         <button
           type="button"
           onClick={() => setNewOpen(true)}
           className="mt-3 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:opacity-90"
         >
-          ＋ New terminal
+          ＋ New session
         </button>
       </div>
     </div>
@@ -227,11 +228,11 @@ export default function TerminalsWorkspace({
           <button
             type="button"
             onClick={() => setNewOpen(true)}
-            title="New terminal"
+            title="New session"
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
           >
             <PlusIcon />
-            <span className="hidden text-xs sm:inline">New terminal</span>
+            <span className="hidden text-xs sm:inline">New session</span>
           </button>
         </NavBar>
       )}
@@ -243,8 +244,8 @@ export default function TerminalsWorkspace({
             {anyUnread && (
               <span
                 className="h-1.5 w-1.5 shrink-0 rounded-full bg-info"
-                title="New output in a background terminal"
-                aria-label="New output in a background terminal"
+                title="New output in a background session"
+                aria-label="New output in a background session"
               />
             )}
             <select
@@ -256,7 +257,7 @@ export default function TerminalsWorkspace({
               className="h-7 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-xs text-fg outline-none focus:border-accent disabled:opacity-50"
             >
               {sessions.length === 0 ? (
-                <option value="">{loading ? "Loading…" : "No terminals yet"}</option>
+                <option value="">{loading ? "Loading…" : "No sessions yet"}</option>
               ) : (
                 sessions.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -266,7 +267,7 @@ export default function TerminalsWorkspace({
                 ))
               )}
             </select>
-            {pushOffer && terminals.nativeNotifyState() !== true && (
+            {pushOffer && store.nativeNotifyState() !== true && (
               <button
                 type="button"
                 onClick={() => void push.enablePushInGesture().then(() => setPushOffer(push.canOfferPush()))}
@@ -290,7 +291,7 @@ export default function TerminalsWorkspace({
             <button
               type="button"
               onClick={() => setNewOpen(true)}
-              title="New terminal"
+              title="New session"
               className="shrink-0 rounded p-1 text-muted hover:bg-panel hover:text-fg"
             >
               <PlusIcon />
@@ -311,7 +312,7 @@ export default function TerminalsWorkspace({
                 <button
                   type="button"
                   onClick={() => setNewOpen(true)}
-                  title="New terminal"
+                  title="New session"
                   className="rounded p-1 text-muted hover:bg-panel hover:text-fg"
                 >
                   <PlusIcon />
@@ -323,7 +324,7 @@ export default function TerminalsWorkspace({
                 <p className="px-2 py-3 text-sm text-muted">Loading…</p>
               ) : sessions.length === 0 ? (
                 <p className="px-2 py-3 text-xs leading-relaxed text-muted">
-                  No terminals yet. Start one to run Claude Code, Codex, opencode, or a shell on this machine.
+                  No sessions yet. Start one to run Claude Code, Codex, opencode, or a shell on this machine.
                 </p>
               ) : (
                 <ul className="space-y-1">
@@ -372,12 +373,12 @@ export default function TerminalsWorkspace({
       )}
 
       {newOpen && (
-        <NewTerminalDialog
+        <NewSessionDialog
           defaultCwd={defaultCwd}
           onClose={() => setNewOpen(false)}
           onCreated={(s) => {
             setNewOpen(false);
-            terminals.noteCreated(s);
+            store.noteCreated(s);
             setActiveId(s.id);
           }}
         />

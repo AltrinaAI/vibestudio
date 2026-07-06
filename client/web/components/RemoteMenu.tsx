@@ -29,7 +29,7 @@ export default function RemoteMenu() {
   const { status, available } = useRemote();
   const [open, setOpen] = useState(false);
   // The tray's `#/?phone=1` deep link is handled in AppShell, NOT here: a second
-  // RemoteMenu lives inside the hidden always-mounted Terminals subtree, and its
+  // RemoteMenu lives inside the hidden always-mounted Sessions subtree, and its
   // copy of the listener would consume the one-shot param into an invisible modal.
   const [phoneOpen, setPhoneOpen] = useState(false);
 

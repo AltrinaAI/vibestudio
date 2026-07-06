@@ -82,7 +82,7 @@ export default function StudioLayout() {
 
   // Phone-narrow layouts trade the fixed sidebar column for an overlay drawer,
   // toggled from the top bar. Measured on the layout root, not the viewport
-  // (same pattern as TerminalsWorkspace), so any embedding adapts as it resizes.
+  // (same pattern as SessionsWorkspace), so any embedding adapts as it resizes.
   const rootRef = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -201,11 +201,11 @@ export default function StudioLayout() {
         reviewMode={reviewMode}
         showReview={showReview}
         previewing={preview != null}
-        terminalsOpen={agentOpen}
+        sessionsOpen={agentOpen}
         narrow={narrow}
         sidebarOpen={sidebarOpen}
         onToggleReview={toggleReview}
-        onTerminals={() => setAgentOpen((o) => !o)}
+        onSessions={() => setAgentOpen((o) => !o)}
         onToggleSidebar={() => setSidebarOpen((o) => !o)}
         onManage={() => setManageOpen(true)}
         onExport={onExport}

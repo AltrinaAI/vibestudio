@@ -17,7 +17,7 @@ import * as api from "@/lib/api";
 import type { AgentSkills, DiscoveredSkill, MineState } from "@/lib/api";
 import { useMining, refreshMining } from "@/lib/mining";
 import { useNavigate } from "react-router-dom";
-import { studioPath, markdownPath, miningPath, terminalsPath } from "@/lib/routes";
+import { studioPath, markdownPath, miningPath, sessionsPath } from "@/lib/routes";
 
 const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 
@@ -763,9 +763,9 @@ export default function SkillGallery({ embedded = false }: { embedded?: boolean 
     try {
       const { terminalId } = await api.mineContinue();
       void refreshMining(); // the record may now point at a new terminal
-      navigate(terminalsPath(terminalId));
+      navigate(sessionsPath(terminalId));
     } catch {
-      navigate(terminalsPath(mining?.terminalId));
+      navigate(sessionsPath(mining?.terminalId));
     }
   }, [navigate, mining?.terminalId]);
 
@@ -968,7 +968,7 @@ export default function SkillGallery({ embedded = false }: { embedded?: boolean 
           onClose={() => setMineOpen(false)}
           onStarted={(terminalId) => {
             setMineOpen(false);
-            navigate(terminalsPath(terminalId));
+            navigate(sessionsPath(terminalId));
           }}
         />
       )}
