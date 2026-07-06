@@ -39,9 +39,9 @@ jobs:
           gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets[] | "\(.id)\t\(.name)"' > assets.tsv
           while IFS=$'\t' read -r id name; do
             case "$name" in
-              *.dmg)              new=Skill-Studio-macOS.dmg ;;
-              *_x64-setup.exe)    new=Skill-Studio-Windows-x64-setup.exe ;;
-              *_amd64.deb)        new=Skill-Studio-Linux-x86_64.deb ;;
+              *.dmg)              new=VibeStudio-macOS.dmg ;;
+              *_x64-setup.exe)    new=VibeStudio-Windows-x64-setup.exe ;;
+              *_amd64.deb)        new=VibeStudio-Linux-x86_64.deb ;;
               *)                  continue ;;
             esac
             gh api -X PATCH "repos/$GH_REPO/releases/assets/$id" -f name="$new" >/dev/null && echo "renamed $name -> $new"
@@ -56,8 +56,8 @@ jobs:
           fi
           jq '.platforms |= (to_entries
             | map(
-                if (.key | test("windows")) then .value.url |= sub("/[^/]+$"; "/Skill-Studio-Windows-x64-setup.exe")
-                elif (.key | test("linux")) then .value.url |= sub("/[^/]+$"; "/Skill-Studio-Linux-x86_64.deb")
+                if (.key | test("windows")) then .value.url |= sub("/[^/]+$"; "/VibeStudio-Windows-x64-setup.exe")
+                elif (.key | test("linux")) then .value.url |= sub("/[^/]+$"; "/VibeStudio-Linux-x86_64.deb")
                 else . end)
             | from_entries)' latest.json > latest.tidied.json
           mv latest.tidied.json latest.json

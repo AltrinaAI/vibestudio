@@ -127,7 +127,7 @@ jobs:
         with:
           projectPath: client/desktop
           tagName: ${{ github.ref_name }}
-          releaseName: "Skill Studio ${{ github.ref_name }}"
+          releaseName: "VibeStudio ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
           # latest.json's platforms map is merged across the 4 parallel matrix legs
@@ -276,7 +276,7 @@ jobs:
         run: |
           gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
             gh release create "${{ github.ref_name }}" --draft \
-              --title "Skill Studio ${{ github.ref_name }}" \
+              --title "VibeStudio ${{ github.ref_name }}" \
               --notes "Desktop bundles and standalone skill-server binaries." || true
 
       - name: Upload to the release

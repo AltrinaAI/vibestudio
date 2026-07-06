@@ -1,4 +1,4 @@
-/* Skill Studio service worker.
+/* VibeStudio service worker.
  *
  * Two jobs, both in service of the home-screen app:
  * 1. Offline app shell — tapping a notification with the tailnet VPN down must
@@ -76,7 +76,7 @@ self.addEventListener("push", (e) => {
   }
   const n = data.notification || {};
   e.waitUntil(
-    self.registration.showNotification(n.title || "Skill Studio", {
+    self.registration.showNotification(n.title || "VibeStudio", {
       body: n.body || "An agent finished a turn.",
       // Same tag as the page's web banner for this session — replace, not stack.
       tag: n.tag || undefined,

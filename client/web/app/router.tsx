@@ -18,7 +18,10 @@ export const router = createHashRouter([
     element: <AppShell />,
     HydrateFallback: RootFallback,
     children: [
-      { index: true, lazy: () => import("@/pages/home/HomeRoute") },
+      { index: true, lazy: () => import("@/pages/home/DashboardRoute") },
+      // The skill gallery is embedded on the home dashboard now; /skills redirects
+      // there (the per-skill editor still lives at /skills/:root below).
+      { path: "skills", element: <Navigate to="/" replace /> },
       { path: "credentials", lazy: () => import("@/pages/secrets/SecretsRoute") },
       { path: "mining", lazy: () => import("@/pages/mining/MiningRoute") },
       // The Sessions UI is the always-mounted host in AppShell; this route only

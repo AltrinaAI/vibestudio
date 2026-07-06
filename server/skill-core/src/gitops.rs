@@ -131,7 +131,7 @@ pub fn git_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Patterns Skill Studio keeps out of every skill repo's version history: build
+/// Patterns VibeStudio keeps out of every skill repo's version history: build
 /// artifacts and machine-local secrets. `git add -A` (run on every "Save
 /// version") would otherwise capture them — and a published repo's history is
 /// shared. Written to the repo's LOCAL `.git/info/exclude`, NOT a committed
@@ -161,7 +161,7 @@ fn ensure_exclude(root: &Path) {
     }
     let mut body = existing;
     if body.is_empty() {
-        body.push_str("# Skill Studio — local-only ignores (build junk + secrets); not committed.\n");
+        body.push_str("# VibeStudio — local-only ignores (build junk + secrets); not committed.\n");
     } else if !body.ends_with('\n') {
         body.push('\n');
     }

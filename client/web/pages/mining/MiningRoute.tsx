@@ -5,11 +5,23 @@ import { useNavigate } from "react-router-dom";
 import NavBar from "@/components/NavBar";
 import { Modal } from "@/components/Modal";
 import { btnGhost, Spinner } from "@/components/ui";
+import MineDialog from "@/components/MineDialog";
 import * as api from "@/lib/api";
 import type { AgentOption, MineFile, MineFiles, MineHistoryEntry } from "@/lib/api";
 import type { FileData } from "@/lib/types";
 import { refreshMining, useMining } from "@/lib/mining";
 import { terminalsPath } from "@/lib/routes";
+
+function PickaxeIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M14.5 12.5 6.6 20.4a1 1 0 1 1-3-3l7.9-7.9" />
+      <path d="M15.7 4.3A12.5 12.5 0 0 0 5.5 3a1 1 0 0 0 .1 1.8 22 22 0 0 1 6.3 3.4" />
+      <path d="M17.7 3.7a1 1 0 0 0-1.4 0l-4.6 4.6a1 1 0 0 0 0 1.4l2.6 2.6a1 1 0 0 0 1.4 0l4.6-4.6a1 1 0 0 0 0-1.4z" />
+      <path d="M19.7 8.3a12.5 12.5 0 0 1 1.3 10.2 1 1 0 0 1-1.7-.1 22 22 0 0 0-3.4-6.3" />
+    </svg>
+  );
+}
 
 function timeAgo(unix: number): string {
   const s = Math.max(0, Math.floor(Date.now() / 1000 - unix));
@@ -74,6 +86,7 @@ export function Component() {
   const [viewing, setViewing] = useState<FileData | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
+  const [mineOpen, setMineOpen] = useState(false);
 
   const refreshFiles = useCallback(() => {
     api
@@ -159,18 +172,31 @@ export function Component() {
       />
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 pb-24 pt-10">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Mining</h1>
-        <p className="mt-1.5 max-w-prose text-sm text-muted">
-          The most recent mining run and its working files. Starting a new mine archives the previous run below
-          and begins a fresh one.
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-fg">Mining</h1>
+            <p className="mt-1.5 max-w-prose text-sm text-muted">
+              The most recent mining run and its working files. Starting a new mine archives the previous run below
+              and begins a fresh one.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMineOpen(true)}
+            title="Mine your past agent sessions to create or update skills"
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-accent-fg transition-colors hover:bg-accent-strong"
+          >
+            <PickaxeIcon />
+            Mine your sessions
+          </button>
+        </div>
 
         {mining === null ? (
           <p className="mt-8 flex items-center gap-2 text-sm text-muted">
             <Spinner className="h-3.5 w-3.5" /> Loading…
           </p>
         ) : !hasRun ? (
-          <p className="mt-8 text-sm text-muted">No mining run on record yet. Start one from the Home page.</p>
+          <p className="mt-8 text-sm text-muted">No mining run on record yet — hit “Mine your sessions” to start one.</p>
         ) : (
           <section className="mt-8 rounded-xl border border-border bg-surface p-4">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -330,6 +356,17 @@ export function Component() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {mineOpen && (
+        <MineDialog
+          onClose={() => setMineOpen(false)}
+          onStarted={(terminalId) => {
+            setMineOpen(false);
+            void refreshMining();
+            navigate(terminalsPath(terminalId));
+          }}
+        />
       )}
     </div>
   );

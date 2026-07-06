@@ -9,7 +9,7 @@ import { FileIcon, FolderIcon } from "@/components/FileIcon";
 import FolderPicker from "@/components/FolderPicker";
 import NewSkillDialog from "./NewSkillDialog";
 import ImportSkillDialog from "./ImportSkillDialog";
-import MineDialog from "./MineDialog";
+import MineDialog from "@/components/MineDialog";
 import { useConfirm } from "@/components/useConfirm";
 import { useRecents, removeRecent, type Recent } from "@/lib/recents";
 import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO, type AgentGroupInfo } from "@/lib/agents";
@@ -18,13 +18,6 @@ import type { AgentSkills, DiscoveredSkill, MineState } from "@/lib/api";
 import { useMining, refreshMining } from "@/lib/mining";
 import { useNavigate } from "react-router-dom";
 import { studioPath, markdownPath, miningPath, terminalsPath } from "@/lib/routes";
-
-const EXAMPLES = [
-  { name: "docx", path: "examples/docx", blurb: "Create & edit Word documents" },
-  { name: "pdf", path: "examples/pdf", blurb: "Extract, fill & process PDFs" },
-  { name: "pptx", path: "examples/pptx", blurb: "Build PowerPoint decks" },
-  { name: "xlsx", path: "examples/xlsx", blurb: "Read & write spreadsheets" },
-];
 
 const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 
@@ -270,7 +263,7 @@ function AgentSection({
   // untouched ones stay collapsed, and the toggle tally counts just those.
   const changedBundled = allBundled.filter((s) => dirtyRoots.has(s.root));
   const bundled = allBundled.filter((s) => !dirtyRoots.has(s.root));
-  // The Skill Studio activation skill counts as official here; its distinct
+  // The VibeStudio activation skill counts as official here; its distinct
   // badge sets it apart in the list, so it needs no separate tally.
   const officialCount = bundled.filter((s) => {
     const k = kindMeta(s.kind).kind;
@@ -304,8 +297,8 @@ function AgentSection({
           in a hover popover on the ⓘ so the row stays compact — a real DOM
           popover, since native `title` tooltips render nothing in the webview. */}
       <div className="mb-3 flex items-center gap-2">
-        <span className="h-2.5 w-2.5 rounded-full" style={{ background: agentColor(group.agent) }} aria-hidden />
-        <h3 className="text-sm font-semibold text-fg">{agentLabel(group.agent)}</h3>
+        <span className="h-2 w-2 rounded-full" style={{ background: agentColor(group.agent) }} aria-hidden />
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">{agentLabel(group.agent)}</h3>
         <span className="text-xs text-faint">{group.skills.length}</span>
         {info && <SharedStandardInfo info={info} />}
         {/* No cards to anchor the section: the bundled toggle joins the header
@@ -574,13 +567,12 @@ function OpenIcon() {
   );
 }
 
-/** The page's primary section title — the big, bold tier reserved for the main
- *  section ("Your skills"). Recent, mining and Examples wear the quiet small-caps
- *  AsideLabel so they read as secondary utilities, not peers. */
+/** A top-level section header — same tier as the dashboard's Sessions / At a
+ *  glance headings so every section on the home page reads at one weight. */
 function SectionTitle({ children, trailing }: { children: ReactNode; trailing?: ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2.5">
-      <h2 className="text-lg font-semibold tracking-tight text-fg">{children}</h2>
+      <h2 className="text-sm font-semibold tracking-wide text-fg">{children}</h2>
       {trailing}
     </div>
   );
@@ -685,7 +677,10 @@ function StartPanel({
   );
 }
 
-export function Component() {
+/** The skill gallery. `embedded` renders just the gallery (skills + examples +
+ *  dialogs) for the home dashboard to drop below its cockpit; standalone renders
+ *  the full page (nav + Recent/Mining strip). */
+export default function SkillGallery({ embedded = false }: { embedded?: boolean }) {
   const recents = useRecents();
   const navigate = useNavigate();
   const onOpen = (p: string) => navigate(studioPath(p));
@@ -845,66 +840,183 @@ export function Component() {
   const groups = discovered;
   const totalFound = groups.reduce((n, g) => n + g.skills.length, 0);
 
+  // New / Open / Import — page chrome for the standalone nav; on the embedded
+  // home dashboard they move into the "Your skills" header (no nav slot there).
+  const actions = (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpenOpen(true)}
+        title="Open a skill by path"
+        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+        </svg>
+        <span className="hidden text-xs sm:inline">Open</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => setNewOpen(true)}
+        title="New skill"
+        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
+      >
+        <PlusIcon />
+        <span className="hidden text-xs sm:inline">New</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => setImportOpen(true)}
+        title="Import a skill from a folder, .skill or .zip"
+        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
+      >
+        <ImportIcon />
+        <span className="hidden text-xs sm:inline">Import</span>
+      </button>
+    </>
+  );
+
+  const skillsSection = (
+    <section id="skills" className="mt-12">
+      <SectionTitle
+        trailing={
+          <>
+            {discovering ? <Spinner className="h-3 w-3" /> : <span className="text-xs text-faint">{totalFound}</span>}
+            <div className="ml-auto flex items-center gap-1">
+              {embedded && actions}
+              <button
+                type="button"
+                onClick={() => void runDiscovery()}
+                disabled={discovering}
+                title="Rescan your machine for installed skills"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <RefreshIcon className={discovering ? "animate-spin" : ""} />
+                Discover
+              </button>
+            </div>
+          </>
+        }
+      >
+        Agent skills
+      </SectionTitle>
+      {actionError && <p className="mb-3 text-sm text-danger">{actionError}</p>}
+      {!discovering && totalFound === 0 ? (
+        <p className="max-w-2xl text-sm text-muted">
+          No installed skills found. Skills live under <code className="font-mono text-[0.8em]">~/.agents/skills</code>,{" "}
+          <code className="font-mono text-[0.8em]">~/.claude/skills</code>,{" "}
+          <code className="font-mono text-[0.8em]">~/.codex/skills</code>,{" "}
+          <code className="font-mono text-[0.8em]">~/.cursor/skills-cursor</code>,{" "}
+          <code className="font-mono text-[0.8em]">~/.config/opencode/skills</code>, and{" "}
+          <code className="font-mono text-[0.8em]">~/.openclaw/skills</code>.
+        </p>
+      ) : (
+        <div className="space-y-8">
+          {groups.map((g) => (
+            <AgentSection
+              key={g.agent}
+              group={g}
+              dirtyRoots={dirtyRoots}
+              deletingRoot={busyRoot}
+              busyRoot={busyRoot}
+              onOpen={onOpen}
+              onDelete={doDelete}
+              onAccept={acceptProposed}
+              onDiscard={discardProposed}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
+  const dialogs = (
+    <>
+      {showPicker && (
+        <FolderPicker
+          onSelect={(p) => {
+            setShowPicker(false);
+            onOpen(p);
+          }}
+          onSelectFile={(p) => {
+            setShowPicker(false);
+            navigate(markdownPath(p));
+          }}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
+      {newOpen && (
+        <NewSkillDialog
+          onClose={() => setNewOpen(false)}
+          onCreated={(root) => {
+            setNewOpen(false);
+            onOpen(root);
+          }}
+        />
+      )}
+      {importOpen && (
+        <ImportSkillDialog
+          onClose={() => setImportOpen(false)}
+          onImported={(root) => {
+            setImportOpen(false);
+            onOpen(root);
+          }}
+        />
+      )}
+      {mineOpen && (
+        <MineDialog
+          onClose={() => setMineOpen(false)}
+          onStarted={(terminalId) => {
+            setMineOpen(false);
+            navigate(terminalsPath(terminalId));
+          }}
+        />
+      )}
+      {openOpen && (
+        <OpenSkillDialog
+          onClose={() => setOpenOpen(false)}
+          onOpenPath={(p) => {
+            setOpenOpen(false);
+            openPath(p);
+          }}
+          onBrowse={() => {
+            setOpenOpen(false);
+            browse();
+          }}
+        />
+      )}
+    </>
+  );
+
+  // Embedded on the home dashboard: just the gallery + dialogs (the page shell,
+  // nav, and the Recent/Mining strip belong to the dashboard).
+  if (embedded) {
+    return (
+      <>
+        {skillsSection}
+        {dialogs}
+      </>
+    );
+  }
+
   return (
     <div className="flex min-h-dvh flex-col">
-      <NavBar>
-        <button
-          type="button"
-          onClick={() => setOpenOpen(true)}
-          title="Open a skill by path"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-          </svg>
-          <span className="hidden text-xs sm:inline">Open</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setNewOpen(true)}
-          title="New skill"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
-        >
-          <PlusIcon />
-          <span className="hidden text-xs sm:inline">New</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setImportOpen(true)}
-          title="Import a skill from a folder, .skill or .zip"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
-        >
-          <ImportIcon />
-          <span className="hidden text-xs sm:inline">Import</span>
-        </button>
-      </NavBar>
-
+      <NavBar>{actions}</NavBar>
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 pb-24 pt-10">
         {/* Utility strip above the main gallery. With recent work to resume, that
             leads (left) and mining rides alongside (right); on a fresh start there's
-            nothing to resume, so the row becomes the get-started on-ramps — Mine
-            first as the primary, since mining (not hand-authoring) is how skills
-            actually get made. "Your skills" below is the page's main section. */}
+            nothing to resume, so the row becomes the get-started on-ramps. */}
         <section>
           {recents.length > 0 ? (
             <div className="grid gap-3 lg:grid-cols-3">
               <div className="flex flex-col lg:col-span-2">
                 <AsideLabel>Recent</AsideLabel>
-                {/* flex-1 + auto-rows-fr: the row fills the column so the cards
-                    stretch to the same height as the mining tile beside them. */}
                 <div className="grid flex-1 auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {recents.slice(0, 3).map((r) => (
-                    <RecentCard
-                      key={r.root}
-                      r={r}
-                      onOpen={() => openRecent(r)}
-                      onRemove={() => removeRecent(r.root)}
-                    />
+                    <RecentCard key={r.root} r={r} onOpen={() => openRecent(r)} onRemove={() => removeRecent(r.root)} />
                   ))}
                 </div>
               </div>
-              {/* Recents present → the toolbar already carries New / Open / Import,
-                  so the rail shows just mining, the one on-ramp that isn't up there. */}
               <div className="flex flex-col lg:col-span-1">
                 <AsideLabel>Skill Mining</AsideLabel>
                 <MineTile
@@ -931,130 +1043,10 @@ export function Component() {
           )}
         </section>
 
-        <section className="mt-12">
-          <SectionTitle
-            trailing={
-              <>
-                {discovering ? <Spinner className="h-3 w-3" /> : <span className="text-sm text-faint">{totalFound}</span>}
-                <button
-                  type="button"
-                  onClick={() => void runDiscovery()}
-                  disabled={discovering}
-                  title="Rescan your machine for installed skills"
-                  className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <RefreshIcon className={discovering ? "animate-spin" : ""} />
-                  Discover
-                </button>
-              </>
-            }
-          >
-            Your skills
-          </SectionTitle>
-          {actionError && <p className="mb-3 text-sm text-danger">{actionError}</p>}
-          {!discovering && totalFound === 0 ? (
-            <p className="max-w-2xl text-sm text-muted">
-              No installed skills found. Skills live under <code className="font-mono text-[0.8em]">~/.agents/skills</code>,{" "}
-              <code className="font-mono text-[0.8em]">~/.claude/skills</code>,{" "}
-              <code className="font-mono text-[0.8em]">~/.codex/skills</code>,{" "}
-              <code className="font-mono text-[0.8em]">~/.cursor/skills-cursor</code>,{" "}
-              <code className="font-mono text-[0.8em]">~/.config/opencode/skills</code>, and{" "}
-              <code className="font-mono text-[0.8em]">~/.openclaw/skills</code>.
-            </p>
-          ) : (
-            <div className="space-y-8">
-              {groups.map((g) => (
-                <AgentSection
-                  key={g.agent}
-                  group={g}
-                  dirtyRoots={dirtyRoots}
-                  deletingRoot={busyRoot}
-                  busyRoot={busyRoot}
-                  onOpen={onOpen}
-                  onDelete={doDelete}
-                  onAccept={acceptProposed}
-                  onDiscard={discardProposed}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="mt-12">
-          <AsideLabel>Examples</AsideLabel>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {EXAMPLES.map((ex) => (
-              <button key={ex.path} type="button" onClick={() => onOpen(ex.path)} className={cardCls}>
-                <span className="flex items-center gap-2">
-                  <FolderIcon open={false} name={ex.name} />
-                  <span className="text-sm font-semibold text-fg">{ex.name}</span>
-                </span>
-                <span className="text-xs leading-relaxed text-muted">{ex.blurb}</span>
-              </button>
-            ))}
-          </div>
-        </section>
+        {skillsSection}
       </main>
 
-      {showPicker && (
-        <FolderPicker
-          onSelect={(p) => {
-            setShowPicker(false);
-            onOpen(p);
-          }}
-          onSelectFile={(p) => {
-            setShowPicker(false);
-            navigate(markdownPath(p));
-          }}
-          onClose={() => setShowPicker(false)}
-        />
-      )}
-
-      {newOpen && (
-        <NewSkillDialog
-          onClose={() => setNewOpen(false)}
-          onCreated={(root) => {
-            setNewOpen(false);
-            onOpen(root);
-          }}
-        />
-      )}
-
-      {importOpen && (
-        <ImportSkillDialog
-          onClose={() => setImportOpen(false)}
-          onImported={(root) => {
-            setImportOpen(false);
-            onOpen(root);
-          }}
-        />
-      )}
-
-      {mineOpen && (
-        <MineDialog
-          onClose={() => setMineOpen(false)}
-          // Land the user in the run's terminal right away: they see where it
-          // runs and can answer any first-run trust dialog without hunting.
-          onStarted={(terminalId) => {
-            setMineOpen(false);
-            navigate(terminalsPath(terminalId));
-          }}
-        />
-      )}
-
-      {openOpen && (
-        <OpenSkillDialog
-          onClose={() => setOpenOpen(false)}
-          onOpenPath={(p) => {
-            setOpenOpen(false);
-            openPath(p);
-          }}
-          onBrowse={() => {
-            setOpenOpen(false);
-            browse();
-          }}
-        />
-      )}
+      {dialogs}
     </div>
   );
 }

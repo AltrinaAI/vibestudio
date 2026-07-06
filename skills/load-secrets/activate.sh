@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# activate.sh — load every secret Skill Studio manages into the agent's
+# activate.sh — load every secret VibeStudio manages into the agent's
 # environment. Agent-agnostic and sandbox-tolerant: it never hard-fails just
 # because it can't write to your shell startup files (some agents, e.g. Codex,
 # run each command in a fresh shell with a read-only HOME).
@@ -26,7 +26,7 @@ MARKER='# skill-studio (managed — loads your Skill Studio secrets)'
 
 if [ ! -s "$ENV_FILE" ]; then
   echo "skill-studio: no secrets configured yet ($ENV_FILE is missing or empty)." >&2
-  echo "Add them in Skill Studio, then run this again." >&2
+  echo "Add them in VibeStudio, then run this again." >&2
   exit 0
 fi
 

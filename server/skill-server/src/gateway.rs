@@ -122,7 +122,7 @@ fn token_failure(request: Request, method: &Method, body: &[u8], err: TokenError
                 .and_then(|v| v.get("id").cloned())
                 .unwrap_or(Value::Null);
             let message = format!(
-                "{label} connection needs re-authorizing — open Skill Studio → Secrets and click Reconnect."
+                "{label} connection needs re-authorizing — open VibeStudio → Secrets and click Reconnect."
             );
             send_reply(
                 request,

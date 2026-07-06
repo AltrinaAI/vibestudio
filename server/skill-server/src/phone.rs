@@ -19,7 +19,7 @@ pub const PHONE_PORT: u16 = 8765;
 pub struct PhoneControl {
     /// Our actual bound port — set right after spawn (0 until then).
     port: AtomicU16,
-    /// Shown in the modal ("Served by Skill Studio vX.Y.Z…").
+    /// Shown in the modal ("Served by VibeStudio vX.Y.Z…").
     pub version: String,
 }
 

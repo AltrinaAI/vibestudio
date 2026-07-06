@@ -1,6 +1,6 @@
-# Skill Studio — agent guide
+# VibeStudio — agent guide
 
-Skill Studio is a **Tauri 2 desktop app** for viewing, editing, versioning, and
+VibeStudio is a **Tauri 2 desktop app** for viewing, editing, versioning, and
 running [Agent Skills](https://agentskills.io/home). The repo is laid out by the
 **client / server** boundary it's built around:
 

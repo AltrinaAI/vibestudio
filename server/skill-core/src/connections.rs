@@ -1,4 +1,4 @@
-// MCP connections: Skill Studio is the OAuth 2.1 client for remote MCP servers
+// MCP connections: VibeStudio is the OAuth 2.1 client for remote MCP servers
 // (metadata discovery → dynamic client registration → PKCE authorization-code).
 // Tokens live only here — agents reach the MCP through the server's loopback
 // /gw/<id>/mcp gateway, which injects Authorization upstream. The connection id
@@ -397,7 +397,7 @@ fn discover(mcp_url: &str) -> Result<Discovered, BeginError> {
 /// RFC 7591 dynamic registration as a public client (PKCE, no secret).
 fn register_client(endpoint: &str, redirect_uri: &str) -> Result<String, BeginError> {
     let body = json!({
-        "client_name": "Skill Studio",
+        "client_name": "VibeStudio",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -599,7 +599,7 @@ pub fn finish_callback(state: &str, code: &str, error: &str, gw_port: u16) -> Ca
     purge_flows();
     let Some(pend) = pending().lock().ok().and_then(|mut p| p.remove(state)) else {
         return CallbackOutcome::Failed {
-            message: "This authorization link is unknown or has expired. Return to Skill Studio and start again."
+            message: "This authorization link is unknown or has expired. Return to VibeStudio and start again."
                 .into(),
         };
     };

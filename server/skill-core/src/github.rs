@@ -43,7 +43,7 @@ const USER_AGENT: &str = "skill-studio";
 /// Studio. All of an owner's skills are one filter away
 /// (`gh search repos --topic skill-studio`).
 const SKILL_TOPICS: [&str; 2] = ["agent-skill", "skill-studio"];
-/// OAuth device-flow client id. Baked in when the Skill Studio OAuth app is
+/// OAuth device-flow client id. Baked in when the VibeStudio OAuth app is
 /// registered; until then the env var enables the flow for development.
 const DEFAULT_CLIENT_ID: &str = "";
 /// Scopes the device flow asks for: `repo` (create/push incl. private),
@@ -535,7 +535,7 @@ fn create_repo(token: &str, login: &str, owner: &str, repo: &str, private: bool)
         "name": repo,
         "private": private,
         "auto_init": false,
-        "description": "Agent Skill — published from Skill Studio",
+        "description": "Agent Skill — published from VibeStudio",
     });
     let url = if owner.eq_ignore_ascii_case(login) {
         format!("{API}/user/repos")

@@ -1,4 +1,4 @@
-//! Where Skill Studio keeps its per-user state on disk. One helper so every module
+//! Where VibeStudio keeps its per-user state on disk. One helper so every module
 //! (secrets, recents, the remote-connection memory) resolves the SAME directory:
 //! `$XDG_CONFIG_HOME/skill-studio` or `~/.config/skill-studio`.
 use std::path::PathBuf;

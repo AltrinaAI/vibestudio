@@ -183,7 +183,7 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
             {error && <p className="text-sm text-danger">{error}</p>}
             <div className="flex items-center justify-between gap-3 pt-1">
               <p className="text-xs text-faint">
-                Served by {remoteHost ?? "Skill Studio"}
+                Served by {remoteHost ?? "VibeStudio"}
                 {live.server.version && !["dev", "0.0.0"].includes(live.server.version)
                   ? ` v${live.server.version}`
                   : ""}{" "}
@@ -200,7 +200,7 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
         ) : (
           <>
             <p className="text-sm text-fg">
-              Get a QR code your phone can scan to open Skill Studio, over your Tailscale network.
+              Get a QR code your phone can scan to open VibeStudio, over your Tailscale network.
             </p>
             {fail?.stage === "operator" && fail.command ? (
               <div className="space-y-2">

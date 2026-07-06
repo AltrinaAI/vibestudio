@@ -265,7 +265,7 @@ pub fn run() {
                 format!("http://127.0.0.1:{port}") // the in-process server serves UI + /api
             };
             WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::External(url.parse().unwrap()))
-                .title("Skill Studio")
+                .title("VibeStudio")
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(720.0, 480.0)
                 // Off by default in wry; enables Cmd/Ctrl +/-/0 whole-window zoom
@@ -289,9 +289,9 @@ pub fn run() {
             // explicit full teardown — every studio terminal on this machine, the
             // live SSH session, and the engine end with it. Update restarts and
             // plain window closes never touch the terminals.
-            let open_item = MenuItemBuilder::with_id("open", "Open Skill Studio").build(app)?;
+            let open_item = MenuItemBuilder::with_id("open", "Open VibeStudio").build(app)?;
             let phone_item = MenuItemBuilder::with_id("phone", "Open on your phone…").build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quit Skill Studio").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit VibeStudio").build(app)?;
             let menu = MenuBuilder::new(app)
                 .item(&open_item)
                 .item(&phone_item)
@@ -300,7 +300,7 @@ pub fn run() {
                 .build()?;
             let remote_for_tray = remote.clone();
             let mut tray = TrayIconBuilder::with_id("main-tray")
-                .tooltip("Skill Studio")
+                .tooltip("VibeStudio")
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "open" => show_main(app),

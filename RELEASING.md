@@ -1,4 +1,4 @@
-# Releasing Skill Studio
+# Releasing VibeStudio
 
 How a desktop release is cut, verified, and shipped. Read this end-to-end before
 your first release; after that the **Checklist** is the working copy.
@@ -16,13 +16,13 @@ A release is driven entirely by **pushing a `vX.Y.Z` git tag**:
    - **Windows** — NSIS `_x64-setup.exe` (currently **unsigned**).
    - **Linux** — `.deb` only (AppImage is disabled; its bundler is flaky on CI runners).
    - **`skill-server`** standalone binaries for 4 targets (musl x86_64/arm64, macOS x86_64/arm64) — used by Remote-SSH provisioning.
-4. `tauri-action` creates a **DRAFT** GitHub Release named `Skill Studio vX.Y.Z`,
+4. `tauri-action` creates a **DRAFT** GitHub Release named `VibeStudio vX.Y.Z`,
    uploads all bundles plus `latest.json` (the updater manifest, with inline minisign signatures).
 5. **You publish the draft.** Publishing flips it to "Latest" (which is what the
    auto-updater reads) and triggers [`release-tidy.yml`](.github/workflows/release-tidy.yml),
    which renames installers to stable, version-less names
-   (`Skill-Studio-macOS.dmg`, `Skill-Studio-Windows-x64-setup.exe`,
-   `Skill-Studio-Linux-x86_64.deb`), drops redundant `.sig` files, and rewrites
+   (`VibeStudio-macOS.dmg`, `VibeStudio-Windows-x64-setup.exe`,
+   `VibeStudio-Linux-x86_64.deb`), drops redundant `.sig` files, and rewrites
    `latest.json` to point at the renamed installers.
 
 Until you publish, **nothing reaches users** — a draft is invisible to the updater.
@@ -54,7 +54,7 @@ Until you publish, **nothing reaches users** — a draft is invisible to the upd
    step 403s and the draft never appears. This is the #1 release failure.
 4. **Tag and push.**
    ```bash
-   git tag -a vX.Y.Z -m "Skill Studio vX.Y.Z" <commit>   # usually HEAD
+   git tag -a vX.Y.Z -m "VibeStudio vX.Y.Z" <commit>   # usually HEAD
    git push origin vX.Y.Z
    ```
 5. **Watch CI to completion.**

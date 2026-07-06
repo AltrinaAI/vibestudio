@@ -1,6 +1,6 @@
 {
-  "name": "Skill Studio",
-  "short_name": "Skill Studio",
+  "name": "VibeStudio",
+  "short_name": "VibeStudio",
   "description": "View, edit, version, and run Agent Skills — with live agent terminals.",
   "start_url": "/",
   "scope": "/",

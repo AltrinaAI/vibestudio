@@ -153,7 +153,7 @@ export default function MineDialog({
     if (
       !(await confirm({
         title: "Reinstall the official skill-miner?",
-        body: "Replaces every installed copy of the skill-miner skill with the version bundled with Skill Studio. Versioned copies keep their history — the restore shows up as uncommitted changes you can review or revert.",
+        body: "Replaces every installed copy of the skill-miner skill with the version bundled with VibeStudio. Versioned copies keep their history — the restore shows up as uncommitted changes you can review or revert.",
         confirmLabel: "Reinstall",
         danger: true,
       }))
@@ -181,7 +181,7 @@ export default function MineDialog({
         className="space-y-4 px-5 py-4"
       >
         <p className="text-xs leading-relaxed text-muted">
-          Skill Studio studies your recent agent sessions for work you keep redoing. The run is a live agent
+          VibeStudio studies your recent agent sessions for work you keep redoing. The run is a live agent
           session on this machine — you&rsquo;ll be taken to its terminal — using your own agent and keys; no
           new service sees your sessions.
         </p>

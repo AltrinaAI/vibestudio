@@ -171,7 +171,7 @@ fn render_env(map: &BTreeMap<String, String>) -> Result<(), String> {
     let path = env_path()?;
     let mut body = String::new();
     if !map.is_empty() {
-        body.push_str("# Rendered by Skill Studio — do not edit by hand.\n");
+        body.push_str("# Rendered by VibeStudio — do not edit by hand.\n");
         for (k, val) in map {
             body.push_str(&format!("export {k}={}\n", sh_quote(val)));
         }
@@ -238,7 +238,7 @@ pub fn render_dotenv(names: &[String]) -> Result<String, String> {
     for name in names {
         if let Some(val) = store.get(name) {
             if body.is_empty() {
-                body.push_str("# Secrets bundled by Skill Studio. Keep this file private.\n");
+                body.push_str("# Secrets bundled by VibeStudio. Keep this file private.\n");
             }
             body.push_str(&format!("{name}={}\n", dotenv_quote(val)));
         }

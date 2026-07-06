@@ -69,9 +69,9 @@ export interface KindMeta {
 export const KIND_META: Record<SkillKind, KindMeta> = {
   personal: { kind: "personal", label: "Personal", rank: 0 },
   official: { kind: "official", label: "Official", rank: 1 },
-  // The Skill Studio activation skill tallies with official but keeps its own
+  // The VibeStudio activation skill tallies with official but keeps its own
   // badge; rank it just after official so the list order matches that tally.
-  studio: { kind: "studio", label: "Skill Studio", rank: 2 },
+  studio: { kind: "studio", label: "VibeStudio", rank: 2 },
   plugin: { kind: "plugin", label: "Plugin", rank: 3 },
 };
 
@@ -80,7 +80,7 @@ export const KIND_TAG: Record<SkillKind, { label: string; cls: string }> = {
   personal: { label: "Yours", cls: "bg-accent-soft text-accent" },
   official: { label: "Official", cls: "bg-[color-mix(in_srgb,var(--ok)_16%,transparent)] text-ok" },
   plugin: { label: "Plugin", cls: "bg-panel text-muted" },
-  studio: { label: "Skill Studio", cls: "bg-panel text-muted" },
+  studio: { label: "VibeStudio", cls: "bg-panel text-muted" },
 };
 
 export function kindMeta(kind: string): KindMeta {
@@ -94,7 +94,7 @@ export function kindMeta(kind: string): KindMeta {
 export function skillKind(root: string): KindMeta {
   const s = root.replace(/\\/g, "/");
   if (/\/\.codex\/skills\/\.system\//.test(s)) return KIND_META.official;
-  if (isBootstrapSkill(root)) return KIND_META.studio; // shipped by Skill Studio, not yours
+  if (isBootstrapSkill(root)) return KIND_META.studio; // shipped by VibeStudio, not yours
   if (/\/\.cursor\/skills-cursor\//.test(s)) return KIND_META.official; // built-in Cursor skills
 
   const isPackaged =
@@ -115,7 +115,7 @@ export function skillKind(root: string): KindMeta {
 // personal dirs, so discovery would tag them "personal" and surface them as
 // your own — but you didn't author them, so we give them the "studio" kind:
 // they keep their folder names but tuck into the bundled dropdown with a
-// "Skill Studio" tag instead of showing as your cards.
+// "VibeStudio" tag instead of showing as your cards.
 export const BUNDLED_SKILL_DIRNAMES = ["load-secrets", "skill-miner", "skill-studio"];
 
 // Bundled skills the user is meant to make their own after install: editable

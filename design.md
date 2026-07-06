@@ -1,4 +1,4 @@
-# Skill Studio — Architecture & Design Principles
+# VibeStudio — Architecture & Design Principles
 
 > Read before adding a feature. **One rule: every capability is reached over HTTP. There is no second transport.**
 
@@ -78,7 +78,7 @@ Hash router (`createHashRouter`, Tauri webview) with one persistent shell + lazy
   only; `--accent` (teal) = all interaction.** Primitives: one `Modal`,
   `btn{Primary,Ghost,Danger}` (one filled primary per row), `Badge` via `color-mix`,
   `useConfirm` (`window.confirm` is a no-op in the `wry` webview). **Never render "altrina" in
-  UI**; app name is Title Case "Skill Studio".
+  UI**; app name is "VibeStudio" (camelCase, one word).
 
 ## Skill versioning: tracked by default
 
@@ -194,7 +194,7 @@ deliberately not handled yet.
 
 **Roadmap — account-backed access (not built).** The Tailscale prerequisite is three services in
 a trench coat — trust (reachability = auth), browser-valid certs, and NAT traversal — and a
-Skill Studio account could take over all three: cookie login (the keystone; it also unlocks LAN
+VibeStudio account could take over all three: cookie login (the keystone; it also unlocks LAN
 mode and phone→remote direct), Let's Encrypt via DNS-01 on a domain we control
 (`<user>.tunnel.…` — the `ts.net` trick: our DNS publishes the ACME TXT record, the private key
 never leaves the user's machine), and an outbound relay the app dials so NAT'd machines are

@@ -79,7 +79,7 @@ function NavLink({
 /**
  * The app's top chrome — constant height + identical layout across pages (no shift on
  * navigation). It deliberately carries four distinct IA categories (our mental model):
- *   1. Identity / location — the "Skill Studio" brand (links home, except on home) and
+ *   1. Identity / location — the "VibeStudio" brand (links home, except on home) and
  *      the optional `breadcrumb` (page or skill name).
  *   2. Page chrome — the page's own `children` actions (e.g. Studio's Review/Manage/
  *      Export). Owned by the page; they sit in the bar only because there's room, and
@@ -122,7 +122,14 @@ export default function NavBar({
   // in a skill → its index (SKILL.md); else resume the last-opened skill; else Home.
   const studioSeg = pathname.startsWith("/skills/") ? pathname.split("/")[2] : null;
   const lastSkill = recents.find((r) => r.kind !== "markdown");
-  const studioTarget = studioSeg ? `/skills/${studioSeg}` : lastSkill ? studioPath(lastSkill.root) : "/";
+  // Skills now live on the home dashboard. Resume the current/last skill if there
+  // is one; otherwise go home and scroll to the gallery section.
+  const goSkills = () => {
+    if (studioSeg) return navigate(`/skills/${studioSeg}`);
+    if (lastSkill) return navigate(studioPath(lastSkill.root));
+    if (pathname === "/") document.getElementById("skills")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    else navigate("/");
+  };
 
   // Terminal is a first-class destination; the Studio side panel is just its inline
   // projection. So in Studio the link opens that projection, and once it's open a
@@ -133,7 +140,7 @@ export default function NavBar({
   const brand = (
     <span className="flex items-center gap-1.5 text-brand">
       <AltrinaMark className="h-5 w-auto" />
-      <span className="whitespace-nowrap text-[0.95rem] font-semibold tracking-tight">Skill Studio</span>
+      <span className="whitespace-nowrap text-[0.95rem] font-semibold tracking-tight">VibeStudio</span>
       {version && (
         <span className="text-[0.7rem] font-normal tabular-nums text-muted" title={`Version ${version}`}>
           {version}
@@ -172,7 +179,7 @@ export default function NavBar({
           icon={<StudioIcon />}
           label="Skills"
           active={pathname.startsWith("/skills")}
-          onClick={() => navigate(studioTarget)}
+          onClick={goSkills}
         />
         <NavLink
           icon={<TerminalIcon />}

@@ -355,7 +355,7 @@ export function GitHubSection({ root, dirName }: { root: string; dirName: string
         )}
         {status.ghCli && (
           <p className="text-[0.7rem] text-faint">
-            Tip: sign in once with <span className="font-mono">gh auth login</span> and Skill Studio uses it
+            Tip: sign in once with <span className="font-mono">gh auth login</span> and VibeStudio uses it
             automatically.
           </p>
         )}

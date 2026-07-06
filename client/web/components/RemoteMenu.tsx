@@ -75,7 +75,9 @@ export default function RemoteMenu() {
   );
 }
 
-function RemoteDialog({ onClose, onOpenPhone }: { onClose: () => void; onOpenPhone: () => void }) {
+/** The SSH-host connect/disconnect dialog. Exported so other surfaces (e.g. the
+ *  home dashboard's Server card) can open the same control as the top-chrome pill. */
+export function RemoteDialog({ onClose, onOpenPhone }: { onClose: () => void; onOpenPhone: () => void }) {
   const { status, connect, disconnect, cancel } = useRemote();
   const [hosts, setHosts] = useState<api.RemoteHost[] | null>(null);
   const [value, setValue] = useState("");

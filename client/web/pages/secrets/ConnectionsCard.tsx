@@ -11,7 +11,7 @@ import type { ConnectionInfo } from "@/lib/api";
  *  sample, NOT the supported set: any server that speaks the MCP OAuth flow
  *  works via the URL field. Rows also key into this by host for the capability
  *  line + access pill; any other host gets a generic line and no pill. All
- *  URLs were live-verified against Skill Studio's anonymous-DCR + PKCE flow. */
+ *  URLs were live-verified against VibeStudio's anonymous-DCR + PKCE flow. */
 const CATALOG = [
   {
     label: "Linear",
@@ -381,7 +381,7 @@ export default function ConnectionsCard() {
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-fg">Connections</h2>
           <p className="truncate text-xs text-muted">
-            Services your agents can use. Sign in once — Skill Studio holds the keys.
+            Services your agents can use. Sign in once — VibeStudio holds the keys.
           </p>
         </div>
         {connections !== null && connections.length > 0 && (

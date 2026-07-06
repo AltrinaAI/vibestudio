@@ -380,7 +380,7 @@ fn commit_synced(target: &Path) {
 /// Readiness of the installed skill-miner relative to the bundled official copy,
 /// for the mine dialog. `drifted` is a NEUTRAL signal — the installed copy is
 /// deliberately editable, so it can differ because the user customized it OR
-/// because a newer Skill Studio shipped an updated skill (e.g. a new transcript
+/// because a newer VibeStudio shipped an updated skill (e.g. a new transcript
 /// adapter) the user hasn't pulled — either way "Reinstall" is the way to the
 /// official version.
 #[derive(Serialize)]

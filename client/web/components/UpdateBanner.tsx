@@ -56,7 +56,7 @@ export default function UpdateBanner() {
         <div className="flex flex-col gap-2">
           <div>
             <div className="font-medium text-fg">Update available</div>
-            <div className="text-muted">Skill Studio {version}</div>
+            <div className="text-muted">VibeStudio {version}</div>
           </div>
           <div className="flex items-center gap-2">
             {status.canAuto ? (

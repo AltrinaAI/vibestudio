@@ -669,7 +669,7 @@ fn callback_page(outcome: connections::CallbackOutcome) -> Reply {
     let (title, detail) = match &outcome {
         O::Success { label } => (
             "You’re connected".to_string(),
-            format!("{} is now connected — return to Skill Studio.", html_escape(label)),
+            format!("{} is now connected — return to VibeStudio.", html_escape(label)),
         ),
         O::Denied => {
             ("Authorization declined".into(), "No changes made — you can close this tab.".into())
@@ -679,7 +679,7 @@ fn callback_page(outcome: connections::CallbackOutcome) -> Reply {
     let body = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>Skill Studio</title>\
+         <title>VibeStudio</title>\
          <style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;\
          font-family:system-ui,-apple-system,sans-serif;background:#f5f6f8;color:#1d2733}}\
          main{{max-width:26rem;padding:2.5rem;text-align:center}}\
@@ -980,7 +980,21 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         #[cfg(feature = "local-backend")]
         (Method::Get, "/api/terminal/agents") => json_reply(Ok(skill_term::detect_agents())),
         #[cfg(feature = "local-backend")]
-        (Method::Get, "/api/terminal/list") => json_reply(skill_term::list_sessions()),
+        (Method::Get, "/api/terminal/list") => json_reply(skill_term::list_sessions().map(|list| {
+            // Enrich each session with a human title read from the agent's own
+            // session store (falls back to the cwd client-side when absent).
+            list.into_iter()
+                .map(|s| {
+                    let mut v = serde_json::to_value(&s).unwrap_or_default();
+                    let title =
+                        skill_core::agents::session_title_for(&s.agent, &s.cwd, s.created.parse().unwrap_or(0));
+                    if let (Some(t), Some(obj)) = (title, v.as_object_mut()) {
+                        obj.insert("title".into(), serde_json::Value::String(t));
+                    }
+                    v
+                })
+                .collect::<Vec<_>>()
+        })),
         #[cfg(feature = "local-backend")]
         (Method::Post, "/api/terminal/create") => {
             let u16f = |k: &str, d: u16| v.get(k).and_then(|x| x.as_u64()).map(|n| n as u16).unwrap_or(d);

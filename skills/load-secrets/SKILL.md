@@ -1,12 +1,12 @@
 ---
 name: load-secrets
-description: Fallback for missing credentials — loads the secrets managed in Skill Studio (for example OPENAI_API_KEY, GITHUB_TOKEN) into your environment. Only use this after a skill or command actually fails with a missing API key, token, or environment variable; environments launched from Skill Studio already have these secrets loaded, so don't run it preemptively.
+description: Fallback for missing credentials — loads the secrets managed in VibeStudio (for example OPENAI_API_KEY, GITHUB_TOKEN) into your environment. Only use this after a skill or command actually fails with a missing API key, token, or environment variable; environments launched from VibeStudio already have these secrets loaded, so don't run it preemptively.
 ---
 
-# Load secrets — Skill Studio activation (fallback)
+# Load secrets — VibeStudio activation (fallback)
 
-Skill Studio keeps your API keys and secrets in one place and renders them to a
-single env file. Terminals launched from Skill Studio source that file
+VibeStudio keeps your API keys and secrets in one place and renders them to a
+single env file. Terminals launched from VibeStudio source that file
 automatically, so the secrets are normally **already in your environment** —
 check first (e.g. `[ -n "$OPENAI_API_KEY" ]`). Reach for this skill only as a
 last resort, when a command has actually failed because a key, token, or
@@ -37,5 +37,5 @@ when HOME is read-only:
 . "${SKILL_STUDIO_ENV:-$HOME/.config/skill-studio/env}" && your-command
 ```
 
-If it reports that no secrets are configured, add them in Skill Studio and run
+If it reports that no secrets are configured, add them in VibeStudio and run
 it again.

@@ -1,4 +1,4 @@
-//! The agent interface. Every agent CLI Skill Studio integrates with is one
+//! The agent interface. Every agent CLI VibeStudio integrates with is one
 //! [`AgentDef`] entry declaring the shared properties an integration needs:
 //!
 //! - **skills_dirs** — where the agent discovers skills (its own folders, plus
@@ -56,11 +56,16 @@ pub struct AgentDef {
     pub reads_shared: bool,
     pub launch: Option<fn(&LaunchCtx) -> String>,
     pub resume: Option<fn(&ResumeCtx) -> String>,
-    /// How to point the agent at a remote MCP server through Skill Studio's
+    /// How to point the agent at a remote MCP server through VibeStudio's
     /// loopback gateway (None = the agent can't consume a remote HTTP MCP). See
-    /// [`McpWiring`]. The agent is handed only the gateway URL — Skill Studio
+    /// [`McpWiring`]. The agent is handed only the gateway URL — VibeStudio
     /// holds the OAuth token — so no header/secret ever appears in agent config.
     pub mcp: Option<McpWiring>,
+    /// Extract a short human title for a live terminal from the agent's own
+    /// session record (cwd + the terminal's spawn time). `None` = the agent has
+    /// no readable session store yet; the UI falls back to the cwd. See
+    /// [`crate::session_title`].
+    pub session_title: Option<fn(&std::path::Path, i64) -> Option<String>>,
 }
 
 /// The two shapes of "add/remove a remote streamable-HTTP MCP server named
@@ -99,6 +104,7 @@ pub const AGENTS: &[AgentDef] = &[
         launch: Some(claude_launch),
         resume: Some(claude_resume),
         mcp: Some(McpWiring::Cli { bin: "claude", add: claude_mcp_add, remove: claude_mcp_remove }),
+        session_title: Some(crate::session_title::claude_title),
     },
     AgentDef {
         family: "codex",
@@ -108,6 +114,7 @@ pub const AGENTS: &[AgentDef] = &[
         launch: Some(codex_launch),
         resume: Some(codex_resume),
         mcp: Some(McpWiring::Cli { bin: "codex", add: codex_mcp_add, remove: codex_mcp_remove }),
+        session_title: Some(crate::session_title::codex_title),
     },
     AgentDef {
         family: "cursor",
@@ -125,6 +132,7 @@ pub const AGENTS: &[AgentDef] = &[
             servers_key: "mcpServers",
             entry: cursor_mcp_entry,
         }),
+        session_title: Some(crate::session_title::cursor_title),
     },
     AgentDef {
         family: "gemini",
@@ -134,6 +142,7 @@ pub const AGENTS: &[AgentDef] = &[
         launch: Some(gemini_launch),
         resume: Some(gemini_resume),
         mcp: Some(McpWiring::Cli { bin: "gemini", add: gemini_mcp_add, remove: gemini_mcp_remove }),
+        session_title: Some(crate::session_title::gemini_title),
     },
     AgentDef {
         family: "openclaw",
@@ -143,6 +152,7 @@ pub const AGENTS: &[AgentDef] = &[
         launch: None,
         resume: None,
         mcp: None,
+        session_title: None,
     },
     AgentDef {
         // opencode keeps its own global skills under ~/.config/opencode/skills and
@@ -162,6 +172,7 @@ pub const AGENTS: &[AgentDef] = &[
             servers_key: "mcp",
             entry: opencode_mcp_entry,
         }),
+        session_title: None, // store is SQLite-only — see session_title.rs
     },
 ];
 
@@ -169,6 +180,14 @@ pub const AGENTS: &[AgentDef] = &[
 pub fn by_family(family_or_id: &str) -> Option<&'static AgentDef> {
     let family = family_or_id.split(':').next().unwrap_or(family_or_id);
     AGENTS.iter().find(|a| a.family == family)
+}
+
+/// A short human title for a live terminal, read from the agent's own session
+/// store. `None` when the family is unknown or has no session_title capability —
+/// callers fall back to the cwd.
+pub fn session_title_for(family_or_id: &str, cwd: &str, created_unix: i64) -> Option<String> {
+    let def = by_family(family_or_id)?;
+    (def.session_title?)(std::path::Path::new(cwd), created_unix)
 }
 
 /// True when the family has an interactive launch line — the gate for
@@ -333,7 +352,7 @@ fn opencode_resume(c: &ResumeCtx) -> String {
 
 // ─────────────────────────────── MCP wiring recipes ───────────────────────────────
 // Each recipe was verified against the shipped CLI/schema (2026-07). Remote HTTP
-// transport only; url-only, no headers/token — Skill Studio is the OAuth client.
+// transport only; url-only, no headers/token — VibeStudio is the OAuth client.
 
 /// `claude mcp add-json <name> '{"type":"http","url":…}' --scope user`.
 fn claude_mcp_add(name: &str, url: &str) -> Vec<String> {

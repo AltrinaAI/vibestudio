@@ -160,7 +160,7 @@ export function parseAllowedTools(value: unknown): string[] {
 
 /**
  * `metadata` key skills use to declare the env vars their scripts read —
- * Skill Studio's own portable contract, auto-detected on save (see
+ * VibeStudio's own portable contract, auto-detected on save (see
  * `reconcileRequiredEnv`). It powers the export-time "bundle these secrets?"
  * prompt and lets an import surface which secrets a skill needs before it runs.
  * Stored as a space-separated string (the spec types metadata values as

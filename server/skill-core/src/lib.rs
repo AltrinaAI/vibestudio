@@ -17,6 +17,7 @@ pub mod process;
 pub mod recents;
 pub mod remotesync;
 pub mod secrets;
+pub mod session_title;
 pub mod skill;
 pub mod switchboard;
 pub mod sync;

@@ -111,7 +111,7 @@ export async function discoverSkills(): Promise<AgentSkills[]> {
   // The bundled built-in skills (load-secrets, skill-miner) ship with the app
   // and install into personal dirs, so discovery tags them "personal". Re-tag
   // them "studio" so they keep their folder names but tuck into the bundled
-  // dropdown (with a "Skill Studio" tag) rather than showing as your own skills.
+  // dropdown (with a "VibeStudio" tag) rather than showing as your own skills.
   return groups.map((g) => ({
     ...g,
     skills: g.skills.map((s) => (isBootstrapSkill(s.root) ? { ...s, kind: "studio" } : s)),
@@ -860,6 +860,10 @@ export interface TermSession {
    *  ("0" until the first). The rail compares it against a per-session "last
    *  viewed" mark for the unread dot — so the dot means "finished a turn". */
   bellAt: string;
+  /** A short human title read server-side from the agent's own session store
+   *  (Claude ai-title, Codex/Gemini/Cursor first prompt). Absent when the agent
+   *  has no readable session yet — callers fall back to the cwd. */
+  title?: string;
 }
 
 export interface CreateTermArgs {

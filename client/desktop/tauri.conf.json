@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Skill Studio",
+  "productName": "VibeStudio",
   "identifier": "ai.generalagency.skillstudio",
   "build": {
     "beforeDevCommand": {
@@ -18,7 +18,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Skill Studio",
+        "title": "VibeStudio",
         "width": 1200,
         "height": 800,
         "minWidth": 720,
