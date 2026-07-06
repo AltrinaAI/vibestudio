@@ -588,7 +588,11 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
           reads the host's computed height, which under border-box includes its
           own padding — counting it as usable space adds a clipped extra row. */}
       <div className="h-full w-full overflow-hidden bg-surface p-1.5">
-        <div ref={hostRef} className={`h-full w-full ${selectMode ? "[&_.xterm-screen]:!cursor-text" : ""}`} />
+        {/* touch-pinch-zoom disables single-finger native panning so iOS can't
+            commit a slow drag to a rubber-band / URL-bar scroll that fights the
+            synthetic wheel→tmux scroll below (the mid-scroll "hop") — the gesture
+            handler owns every one-finger pan; two-finger zoom still works. */}
+        <div ref={hostRef} className={`h-full w-full touch-pinch-zoom ${selectMode ? "[&_.xterm-screen]:!cursor-text" : ""}`} />
       </div>
     </div>
   );
