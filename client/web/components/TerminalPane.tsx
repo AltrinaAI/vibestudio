@@ -24,6 +24,10 @@ const TOUCH_SCROLL_PX = 25;
 /** A pan must move this far before committing to an axis (vertical = scroll,
  *  horizontal = ignored). */
 const TOUCH_AXIS_LOCK_PX = 6;
+/** Within this many px of the terminal's top/bottom edge, a select drag nudges
+ *  xterm's own drag-scroll so the selection can reach into off-screen scrollback —
+ *  a finger is already selecting, so there's no second gesture free to scroll. */
+const SELECT_EDGE_SCROLL_PX = 40;
 
 /** No real pane is ever this small — below it is a transient layout artifact.
  *  skill-term enforces the same floor as a backstop. */
@@ -92,7 +96,20 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
   const applySelectMode = useCallback((on: boolean) => {
     selectModeRef.current = on;
     setSelectMode(on);
-    termRef.current?.focus();
+    const term = termRef.current;
+    const ta = term?.textarea;
+    if (!term || !ta) return;
+    // On a phone the soft keyboard would just bury the text you're selecting, and
+    // xterm re-focuses its input on every mousedown — so a select drag would keep
+    // re-summoning it. inputmode=none lets xterm hold focus without iOS raising the
+    // keyboard; blur closes it if it was already up. Fine pointers keep real focus
+    // so the copy chord and Esc-to-exit still work (they have no soft keyboard).
+    if (window.matchMedia("(pointer: coarse)").matches) {
+      ta.inputMode = on ? "none" : "";
+      ta.blur();
+    } else {
+      term.focus();
+    }
   }, []);
 
   // Coarse-pointer tap affordances: chords and native clipboard events don't
@@ -363,26 +380,84 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     };
     host.addEventListener("paste", onPaste, true);
 
-    // xterm 6 has no touch handling, so vertical pans are re-issued as synthetic
-    // wheel events (one tick per TOUCH_SCROLL_PX of pan) at the screen element,
-    // riding the normal wheel → tmux copy-mode scroll path. DOM_DELTA_LINE
-    // deltas dodge the trackpad damping in xterm's consumeWheelEvent that can
-    // swallow small pixel deltas; pan down ⇒ deltaY < 0 ⇒ back into history.
+    // xterm 6 has no touch handling, so we translate touch gestures ourselves.
+    // The Select toggle picks the mode at gesture start:
+    //  • normal — vertical pans become synthetic wheel ticks (one per
+    //    TOUCH_SCROLL_PX) on the screen element, riding the wheel → tmux copy-mode
+    //    scroll path. DOM_DELTA_LINE dodges the trackpad damping in xterm's
+    //    consumeWheelEvent; pan down ⇒ deltaY < 0 ⇒ back into history.
+    //  • select — the drag becomes synthetic mouse events so xterm builds a NATIVE
+    //    selection (shouldForceSelection is true in select mode, so mousedown wins
+    //    over tmux's mouse mode). xterm's selection is mouse-only, so without this
+    //    it's unreachable by finger — a phone can't select at all.
+    const asMouse = (
+      type: "mousedown" | "mousemove" | "mouseup",
+      p: { clientX: number; clientY: number },
+      buttons: number,
+    ) =>
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+        buttons,
+        detail: type === "mousedown" ? 1 : 0,
+        clientX: p.clientX,
+        clientY: p.clientY,
+      });
     let pan: { x: number; y: number; acc: number; axis: "v" | "h" | null } | null = null;
+    let selecting = false;
+    // A synthetic mousedown makes xterm attach its own mousemove/mouseup listeners
+    // on document — we MUST emit a matching mouseup or they leak and the next real
+    // drag keeps extending the selection.
+    const endSelect = (p: { clientX: number; clientY: number }) => {
+      if (!selecting) return;
+      selecting = false;
+      document.dispatchEvent(asMouse("mouseup", p, 0));
+    };
     const onTouchStart = (e: TouchEvent) => {
-      pan =
-        e.touches.length === 1
-          ? { x: e.touches[0].clientX, y: e.touches[0].clientY, acc: 0, axis: null }
-          : null;
+      // A second finger ends any in-progress selection and is never a scroll.
+      if (e.touches.length !== 1) {
+        endSelect(e.touches[0] ?? { clientX: 0, clientY: 0 });
+        pan = null;
+        return;
+      }
+      const t = e.touches[0];
+      if (selectModeRef.current) {
+        pan = null;
+        selecting = true;
+        host.querySelector(".xterm-screen")?.dispatchEvent(asMouse("mousedown", t, 1));
+        return;
+      }
+      pan = { x: t.clientX, y: t.clientY, acc: 0, axis: null };
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (!pan || !handle || e.touches.length !== 1) return;
+      if (e.touches.length !== 1) return;
       const t = e.touches[0];
+      if (selecting) {
+        e.preventDefault(); // hold the page still while dragging out a selection
+        // In the edge margin, shift the synthetic point past the edge so xterm's
+        // drag-scroll engages and the selection extends into off-screen scrollback.
+        // The shift grows from 0 at the margin's inner boundary to the full margin
+        // at the terminal edge (and beyond, if the finger leaves the terminal), so
+        // the scroll speed tracks how far into the margin the finger is.
+        const rect = host.getBoundingClientRect();
+        let y = t.clientY;
+        if (y < rect.top + SELECT_EDGE_SCROLL_PX) y -= SELECT_EDGE_SCROLL_PX;
+        else if (y > rect.bottom - SELECT_EDGE_SCROLL_PX) y += SELECT_EDGE_SCROLL_PX;
+        document.dispatchEvent(asMouse("mousemove", { clientX: t.clientX, clientY: y }, 1));
+        return;
+      }
+      if (!pan || !handle) return;
       const dx = t.clientX - pan.x;
       const dy = t.clientY - pan.y;
       if (pan.axis === null) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) < TOUCH_AXIS_LOCK_PX) return;
         pan.axis = Math.abs(dy) >= Math.abs(dx) ? "v" : "h";
+        // Starting a vertical scroll dismisses the soft keyboard (mobile
+        // convention): blur xterm's input so iOS closes the keyboard, releasing
+        // the visual-viewport clamp so the terminal grows back as history scrolls.
+        if (pan.axis === "v") term.textarea?.blur();
       }
       if (pan.axis === "h") return; // horizontal pans are not ours
       e.preventDefault(); // ours: keep the page from scrolling / pull-to-refresh
@@ -406,7 +481,8 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
         );
       }
     };
-    const endPan = () => {
+    const endPan = (e: TouchEvent) => {
+      endSelect(e.changedTouches[0] ?? { clientX: 0, clientY: 0 });
       pan = null;
     };
     host.addEventListener("touchstart", onTouchStart, { passive: true });
