@@ -23,6 +23,7 @@ import {
 } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { type MarkdownConfig, type InlineParser, type BlockParser, type Element as MdElement } from "@lezer/markdown";
 import { languages } from "@codemirror/language-data";
 import { imageDataUrl, writeSkillAsset } from "@/lib/api";
 import { log } from "@/lib/log";
@@ -195,11 +196,19 @@ class TableWidget extends WidgetType {
   constructor(
     readonly from: number,
     readonly source: string,
+    // Whether KaTeX was loaded when this widget was built. Part of eq() so the
+    // table re-renders (picking up `$…$` cells) once the engine lands.
+    readonly mathReady: boolean,
   ) {
     super();
   }
   eq(other: WidgetType): boolean {
-    return other instanceof TableWidget && other.source === this.source && other.from === this.from;
+    return (
+      other instanceof TableWidget &&
+      other.source === this.source &&
+      other.from === this.from &&
+      other.mathReady === this.mathReady
+    );
   }
   ignoreEvent(): boolean {
     return true;
@@ -314,7 +323,7 @@ class TableWidget extends WidgetType {
       const el = document.createElement(tag);
       if (align) el.style.textAlign = align;
       el.className = "cm-md-cell";
-      el.innerHTML = inlineMd(display);
+      el.innerHTML = renderCellMath(display);
       const raw = source.slice(range.from - from, range.to - from);
       el.addEventListener("mousedown", (e) => {
         e.preventDefault(); // don't let CodeMirror move its own selection
@@ -695,8 +704,16 @@ const focusWatcher = EditorView.domEventHandlers({
   focus: (_e, view) => {
     view.dispatch({ effects: setFocused.of(true) });
   },
-  blur: (_e, view) => {
-    view.dispatch({ effects: [setFocused.of(false), setEdit.of(null)] });
+  blur: (e, view) => {
+    // Only tear down an in-progress reveal when focus genuinely moves to ANOTHER
+    // element outside the editor (a link, a button, another input). A click in the
+    // editor's own margin/whitespace — or a window switch — blurs to nothing
+    // (relatedTarget null); collapsing then would make a centered or wide display-
+    // math block impossible to edit, because the click meant to reposition the
+    // caret lands just outside the narrow text column and would close the block.
+    const fe = e as FocusEvent;
+    const leftEditor = fe.relatedTarget instanceof Node && !view.dom.contains(fe.relatedTarget);
+    if (leftEditor) view.dispatch({ effects: [setFocused.of(false), setEdit.of(null)] });
   },
 });
 
@@ -1247,6 +1264,283 @@ const mediaPaste = EditorView.domEventHandlers({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Math. `$…$` (inline) and `$$…$$` (block) are parsed into the syntax tree and
+// rendered with KaTeX — the same engine VS Code's built-in Markdown preview
+// uses. Rendered when idle, revealed as raw `$`-delimited source the moment the
+// block is edited (the same conceal/reveal as tables, images, and code).
+//
+// The `$` delimiter rule is markdown-it-katex's (which VS Code ports), so a bare
+// "$5" in prose isn't mistaken for math: an opening `$` may not be followed by
+// whitespace, and a closing `$` may not be preceded by whitespace nor followed
+// by a digit. Inline math is consumed WHOLE (an eager parser, not a resolve-
+// delimiter) so the TeX inside is never re-parsed as markdown (no `_`→emphasis).
+// ---------------------------------------------------------------------------
+const DOLLAR = 36; // "$"
+const BACKSLASH = 92; // "\"
+const isMathSpace = (c: number) => c < 0 || c === 32 || c === 9 || c === 10 || c === 13;
+const isDigit = (c: number) => c >= 48 && c <= 57;
+
+const inlineMathParser: InlineParser = {
+  name: "InlineMath",
+  before: "Emphasis", // claim `$` before emphasis so `$a_b$` isn't italicized
+  parse(cx, next, pos) {
+    // A single `$` only. Both dollars of a `$$` decline: display math is the
+    // block parser's job, and declining the SECOND `$` too stops `$$x$$` written
+    // mid-paragraph from opening a stray inline span on it.
+    if (next !== DOLLAR || cx.char(pos + 1) === DOLLAR || cx.char(pos - 1) === DOLLAR) return -1;
+    if (isMathSpace(cx.char(pos + 1))) return -1; // can't open before whitespace
+    for (let p = pos + 1; p < cx.end; p++) {
+      const c = cx.char(p);
+      if (c === BACKSLASH) {
+        p++; // TeX escape (`\$`, `\%`, …) — the next char is literal, skip it
+        continue;
+      }
+      if (c === 10) return -1; // inline math stays on one line
+      if (c === DOLLAR) {
+        // The first unescaped `$` is the ONLY close candidate. If it can't close
+        // (preceded by whitespace, or followed by a digit — the currency guard),
+        // this isn't math: leave the opening `$` as literal rather than scan on and
+        // swallow prose into a bogus span. (markdown-it-katex / VS Code semantics.)
+        if (!isMathSpace(cx.char(p - 1)) && !isDigit(cx.char(p + 1))) {
+          return cx.addElement(
+            cx.elt("InlineMath", pos, p + 1, [
+              cx.elt("InlineMathMark", pos, pos + 1),
+              cx.elt("InlineMathMark", p, p + 1),
+            ]),
+          );
+        }
+        return -1;
+      }
+    }
+    return -1;
+  },
+};
+
+const blockMathParser: BlockParser = {
+  name: "BlockMath",
+  parse(cx, line) {
+    if (line.next !== DOLLAR || line.text.charCodeAt(line.pos + 1) !== DOLLAR) return false;
+    const from = cx.lineStart + line.pos;
+    const marks: MdElement[] = [cx.elt("BlockMathMark", from, from + 2)];
+    // Closing `$$` later on the SAME line → a one-line `$$ x $$` block, but ONLY
+    // when the `$$` ends the (trimmed) line. Trailing text (a period, an equation
+    // number) would otherwise be swallowed into the block widget and hidden, so if
+    // the line doesn't cleanly end there, don't claim it — leave it as text rather
+    // than hide content (or, via the scan below, eat the rest of the document).
+    const sameLine = line.text.indexOf("$$", line.pos + 2);
+    if (sameLine >= 0) {
+      if (line.text.slice(sameLine + 2).trim() !== "") return false;
+      const closeFrom = cx.lineStart + sameLine;
+      marks.push(cx.elt("BlockMathMark", closeFrom, closeFrom + 2));
+      cx.nextLine();
+      cx.addElement(cx.elt("BlockMath", from, closeFrom + 2, marks));
+      return true;
+    }
+    // Otherwise scan following lines for one that ends with `$$` (unclosed → EOF,
+    // matching how a fenced code block consumes to the end of the document).
+    let to = cx.lineStart + line.text.length;
+    while (cx.nextLine()) {
+      const trimmed = line.text.replace(/\s+$/, "");
+      if (trimmed.endsWith("$$")) {
+        const closeFrom = cx.lineStart + trimmed.length - 2;
+        marks.push(cx.elt("BlockMathMark", closeFrom, closeFrom + 2));
+        to = cx.lineStart + trimmed.length;
+        cx.nextLine();
+        break;
+      }
+      to = cx.lineStart + line.text.length;
+    }
+    cx.addElement(cx.elt("BlockMath", from, to, marks));
+    return true;
+  },
+  // A `$$` line ends an open paragraph even without a blank line before it, so a
+  // display block written straight under a line of prose is still recognized
+  // (matching markdown-it-katex / VS Code) instead of being swallowed as text.
+  endLeaf(_cx, line) {
+    return line.next === DOLLAR && line.text.charCodeAt(line.pos + 1) === DOLLAR;
+  },
+};
+
+const mathMarkdownExtension: MarkdownConfig = {
+  defineNodes: [
+    { name: "BlockMath", block: true },
+    { name: "BlockMathMark", style: t.processingInstruction },
+    { name: "InlineMath" },
+    { name: "InlineMathMark", style: t.processingInstruction },
+  ],
+  parseBlock: [blockMathParser],
+  parseInline: [inlineMathParser],
+};
+
+// KaTeX is loaded lazily (it's a few hundred KB + fonts) the first time a
+// document actually contains math, so the many math-free files pay nothing.
+// Mirrors imageLoader: a module-scoped handle survives editor remounts, and a
+// `bumpMath` effect triggers one decoration rebuild once the engine + its CSS
+// land. Until then, math stays as raw `$…$` source (a usable fallback).
+type Katex = (typeof import("katex"))["default"];
+let katexMod: Katex | null = null;
+let katexLoading = false;
+// Views waiting on the (shared, one-time) lazy KaTeX load. Every mounted editor
+// that contains math registers here, so ALL of them rebuild when the engine lands
+// — not just the one whose scan kicked off the import. (A remount mid-load would
+// otherwise stay raw until its next edit.)
+const katexWaiters = new Set<() => void>();
+const bumpMath = StateEffect.define<null>();
+
+function requestKatex(bump: () => void): void {
+  if (katexMod) {
+    bump();
+    return;
+  }
+  katexWaiters.add(bump);
+  if (katexLoading) return;
+  katexLoading = true;
+  Promise.all([import("katex"), import("katex/dist/katex.min.css")])
+    .then(([m]) => {
+      katexMod = m.default;
+    })
+    .catch((e) => log.debug("editor", "katex load failed", e instanceof Error ? e.message : String(e)))
+    .finally(() => {
+      katexLoading = false;
+      const waiters = [...katexWaiters];
+      katexWaiters.clear();
+      for (const w of waiters) w();
+    });
+}
+
+const mathLoader = ViewPlugin.fromClass(
+  class {
+    destroyed = false;
+    requested = false;
+    constructor(readonly view: EditorView) {
+      this.scan();
+    }
+    update(u: ViewUpdate) {
+      if (!katexMod && !this.requested && (u.docChanged || syntaxTree(u.startState) !== syntaxTree(u.state))) this.scan();
+    }
+    destroy() {
+      this.destroyed = true;
+    }
+    scan() {
+      if (katexMod || this.requested) return;
+      let hasMath = false;
+      syntaxTree(this.view.state).iterate({
+        enter: (node) => {
+          if (node.name === "InlineMath" || node.name === "BlockMath") {
+            hasMath = true;
+            return false;
+          }
+          return undefined;
+        },
+      });
+      if (hasMath) {
+        this.requested = true;
+        requestKatex(() => !this.destroyed && this.view.dispatch({ effects: bumpMath.of(null) }));
+      }
+    }
+  },
+);
+
+// Renders one formula. `throwOnError: false` makes KaTeX render a malformed
+// formula as inline red source rather than throw; the catch is a final backstop.
+// `output: "html"` drops KaTeX's parallel MathML tree (smaller DOM, no
+// double-copy of the equation text when selecting).
+class MathWidget extends WidgetType {
+  constructor(
+    readonly tex: string,
+    readonly display: boolean,
+  ) {
+    super();
+  }
+  eq(other: WidgetType): boolean {
+    return other instanceof MathWidget && other.tex === this.tex && other.display === this.display;
+  }
+  ignoreEvent(): boolean {
+    return false; // let a double-click reach editGate and reveal the raw source
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement(this.display ? "div" : "span");
+    el.className = this.display ? "cm-md-math cm-md-math-block" : "cm-md-math cm-md-math-inline";
+    if (!katexMod) {
+      el.textContent = this.tex; // gated on katexMod, so effectively unreachable
+      return el;
+    }
+    try {
+      el.innerHTML = katexMod.renderToString(this.tex, {
+        displayMode: this.display,
+        throwOnError: false,
+        output: "html",
+      });
+    } catch {
+      el.classList.add("cm-md-math-error");
+      el.textContent = this.display ? `$$${this.tex}$$` : `$${this.tex}$`;
+    }
+    return el;
+  }
+}
+
+// Render one GFM table cell's inline markdown, additionally turning `$…$` spans
+// into KaTeX. The TableWidget draws cells through its own inlineMd path (which
+// bypasses the syntax tree, and thus the InlineMath parser), so inline math in a
+// cell needs handling of its own. Math is split out of the RAW text FIRST, before
+// escaping, so the TeX reaches KaTeX intact; the surrounding text keeps the normal
+// inlineMd treatment. Same `$` delimiter rule as the inline parser. Falls back to
+// plain inlineMd until KaTeX has loaded (raw `$…$` stays visible meanwhile).
+function renderCellMath(raw: string): string {
+  if (!katexMod) return inlineMd(raw);
+  const km = katexMod;
+  const out: string[] = [];
+  let textStart = 0;
+  const flush = (end: number) => {
+    if (end > textStart) out.push(inlineMd(raw.slice(textStart, end)));
+  };
+  for (let i = 0; i < raw.length; i++) {
+    // Skip an escaped char so `\$` can't open math (prose gets this for free from
+    // the built-in Escape parser; renderCellMath must do it itself).
+    if (raw.charCodeAt(i) === BACKSLASH) {
+      i++;
+      continue;
+    }
+    // Opening `$`: a single dollar (neither dollar of a `$$`) not before space.
+    if (
+      raw.charCodeAt(i) !== DOLLAR ||
+      raw.charCodeAt(i + 1) === DOLLAR ||
+      raw.charCodeAt(i - 1) === DOLLAR ||
+      isMathSpace(raw.charCodeAt(i + 1))
+    )
+      continue;
+    let close = -1;
+    for (let j = i + 1; j < raw.length; j++) {
+      const c = raw.charCodeAt(j);
+      if (c === BACKSLASH) {
+        j++;
+        continue;
+      }
+      if (c === 10) break;
+      if (c === DOLLAR) {
+        // First unescaped `$` decides — close if valid, else give up on this span
+        // (same rule as the inline parser, so a cell renders like prose).
+        if (!isMathSpace(raw.charCodeAt(j - 1)) && !isDigit(raw.charCodeAt(j + 1))) close = j;
+        break;
+      }
+    }
+    if (close >= 0) {
+      flush(i);
+      const tex = raw.slice(i + 1, close);
+      try {
+        out.push(km.renderToString(tex, { throwOnError: false, output: "html" }));
+      } catch {
+        out.push(escHtml(`$${tex}$`));
+      }
+      i = close; // the for-loop's i++ steps past the closing `$`
+      textStart = close + 1;
+    }
+  }
+  flush(raw.length);
+  return out.join("");
+}
+
 function buildMarkdownDecorations(state: EditorState): DecorationSet {
   const doc = state.doc;
   const tree = syntaxTree(state);
@@ -1352,11 +1646,54 @@ function buildMarkdownDecorations(state: EditorState): DecorationSet {
         } else {
           const source = doc.sliceString(startLine.from, endLine.to);
           decos.push(
-            Decoration.replace({ widget: new TableWidget(startLine.from, source), block: true }).range(
+            Decoration.replace({ widget: new TableWidget(startLine.from, source, !!katexMod), block: true }).range(
               startLine.from,
               endLine.to,
             ),
           );
+        }
+        return false;
+      }
+
+      // Display math: a centered KaTeX block when idle, raw monospace `$$…$$`
+      // source while editing (or inside a diff chunk) — same reveal as tables.
+      // Rendered only once KaTeX has loaded (mathLoader); until then the source
+      // stays visible.
+      if (name === "BlockMath") {
+        const block = node.node;
+        const startLine = doc.lineAt(block.from);
+        const lastPos = Math.min(block.to, doc.length);
+        const endLine = doc.lineAt(lastPos > startLine.from ? lastPos - 1 : startLine.from);
+        if (editIntersects(startLine.from, endLine.to)) {
+          let pos = startLine.from;
+          while (true) {
+            const line = doc.lineAt(pos);
+            decos.push(tableSrcLine.range(line.from));
+            if (line.to + 1 > endLine.to) break;
+            pos = line.to + 1;
+          }
+        } else if (katexMod) {
+          const bm = block.getChildren("BlockMathMark");
+          const texFrom = bm.length ? bm[0].to : block.from + 2;
+          // No closing mark ⇒ an unclosed block: slice to the block end (there's
+          // no closing `$$` to trim, so `block.to - 2` would eat two real chars).
+          const texTo = bm.length >= 2 ? bm[bm.length - 1].from : block.to;
+          const tex = doc.sliceString(texFrom, texTo);
+          decos.push(
+            Decoration.replace({ widget: new MathWidget(tex.trim(), true), block: true }).range(startLine.from, endLine.to),
+          );
+        }
+        return false;
+      }
+
+      // Inline math: `$…$` → a KaTeX span when idle, raw source while its line is
+      // being edited (same reveal as links/inline code).
+      if (name === "InlineMath") {
+        if (!lineActive(node.from) && katexMod) {
+          const im = node.node.getChildren("InlineMathMark");
+          const tex =
+            im.length >= 2 ? doc.sliceString(im[0].to, im[im.length - 1].from) : doc.sliceString(node.from + 1, node.to - 1);
+          decos.push(Decoration.replace({ widget: new MathWidget(tex, false) }).range(node.from, node.to));
         }
         return false;
       }
@@ -1455,7 +1792,7 @@ const markdownBlocks = StateField.define<DecorationSet>({
       tr.docChanged ||
       tr.selection ||
       tr.effects.some(
-        (e) => e.is(setFocused) || e.is(setEdit) || e.is(foldEffect) || e.is(unfoldEffect) || e.is(bumpImages),
+        (e) => e.is(setFocused) || e.is(setEdit) || e.is(foldEffect) || e.is(unfoldEffect) || e.is(bumpImages) || e.is(bumpMath),
       ) ||
       syntaxTree(tr.startState) !== syntaxTree(tr.state) ||
       // The diff chunks finished computing / changed → re-decide which lines to
@@ -1470,7 +1807,7 @@ const markdownBlocks = StateField.define<DecorationSet>({
 });
 
 const markdownExtensions: Extension[] = [
-  markdown({ base: markdownLanguage, codeLanguages: languages }),
+  markdown({ base: markdownLanguage, codeLanguages: languages, extensions: mathMarkdownExtension }),
   EditorView.lineWrapping,
   syntaxHighlighting(markdownHighlight),
   syntaxHighlighting(codeHighlight),
@@ -1480,6 +1817,7 @@ const markdownExtensions: Extension[] = [
   editGate,
   anchorNav,
   imageLoader,
+  mathLoader,
   mediaPaste,
   markdownBlocks,
   baseTheme,

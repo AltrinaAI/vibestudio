@@ -281,6 +281,29 @@ body {
   font-size: 0.9em;
 }
 
+/* Math (KaTeX). Inline `$…$` sits in the text flow; display `$$…$$` renders as a
+   centered block that scrolls horizontally when an equation is wider than the
+   text column, rather than forcing the whole page to scroll. KaTeX inherits
+   `currentColor`, so formulas follow light/dark automatically. Double-click
+   reveals the raw `$`-delimited source (rendered monospace via .cm-md-table). */
+.cm-md-math-block {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15em 0;
+}
+.cm-md-math-block .katex-display {
+  margin: 0.5em 0;
+}
+/* The try/catch backstop when KaTeX can't render at all (its own soft parse
+   errors are already tinted red inline with a hover tooltip). */
+.cm-md-math-error {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--error);
+  white-space: pre-wrap;
+}
+
 /* In-editor left gutter for the chrome (fold chevrons + diff change bars).
    Rather than render that chrome OUTSIDE the editor (a portal) — which forced a
    text-column shift — the editor extends `--gutter` into the page's side padding
