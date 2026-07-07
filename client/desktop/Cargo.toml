@@ -38,6 +38,11 @@ serde_json = "1"
 # System-browser opens for `target="_blank"` links (release page, GitHub device
 # flow) — wry's default new-window handling silently drops them.
 open = "5"
+# One instance at a time: after an update the exiting process can still hold the
+# tray (and port 8765); a second launch forwards its argv and exits instead of
+# adding a second tray. Registered release-only (see run()) — dev shares the
+# bundle id and must stay free to run beside the installed app.
+tauri-plugin-single-instance = "2"
 
 [profile.release]
 panic = "abort"

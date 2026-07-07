@@ -5,6 +5,7 @@
 // a standalone `skill-server`.
 
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
@@ -42,6 +43,33 @@ impl PhoneControl {
     /// Record the port the server actually bound (ephemeral fallback included).
     pub fn set_port(&self, port: u16) {
         self.port.store(port, Ordering::Relaxed);
+    }
+
+    /// Self-heal after a restart/update. If phone mode was left enabled, its
+    /// `tailscale serve` mapping persists in tailscaled — but it points at the
+    /// port the *previous* boot bound. When this boot binds a different port
+    /// (e.g. the exiting process still held the preferred 8765 and we fell back
+    /// to an ephemeral one), that mapping is now stale and the phone hits a dead
+    /// port. Re-point it at the port we actually bound so the phone reconnects
+    /// with no manual re-enable. No-op when phone mode was never enabled (no
+    /// mapping) or the mapping already targets us. Runs off-thread — it shells
+    /// out to `tailscale` and must never delay serving.
+    pub fn resync_on_start(self: Arc<Self>) {
+        std::thread::spawn(move || {
+            let port = self.port();
+            if port == 0 {
+                return;
+            }
+            match tailscale::served_loopback_port() {
+                Some(stale) if stale != port => match tailscale::serve_on(port) {
+                    Ok(()) => log::info!("phone: re-pointed tailscale serve {stale} → {port}"),
+                    Err(_) => log::warn!(
+                        "phone: tailscale serve still points at {stale}; re-enable from the phone modal"
+                    ),
+                },
+                _ => {}
+            }
+        });
     }
 
     fn port(&self) -> u16 {

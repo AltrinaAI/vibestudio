@@ -102,14 +102,22 @@ pub fn serve_on(port: u16) -> Result<(), ServeError> {
     Err(ServeError::Other(text.trim().to_string()))
 }
 
-/// True when `tailscale serve status` shows a proxy to our loopback port.
+/// The loopback port the live `tailscale serve` config proxies `/` to, if any.
+/// `serve status` maps the root to `http://127.0.0.1:<port>`; startup reads this
+/// to spot a mapping left pointing at a previous boot's port (see resync_on_start).
+pub fn served_loopback_port() -> Option<u16> {
+    let b = bin()?;
+    let out = hidden_command(b).args(["serve", "status"]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let after = text.split_once("127.0.0.1:")?.1;
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// True when the live serve config proxies to our loopback port specifically —
+/// not a mapping left behind for some other (e.g. a prior ephemeral) port.
 pub fn serve_status(port: u16) -> bool {
-    let Some(b) = bin() else { return false };
-    hidden_command(b)
-        .args(["serve", "status"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("127.0.0.1:{port}")))
-        .unwrap_or(false)
+    served_loopback_port() == Some(port)
 }
 
 pub fn serve_off() -> Result<(), String> {

@@ -99,6 +99,8 @@ fn main() {
     };
     if let Some(p) = &phone {
         p.set_port(handle.addr.port());
+        // Re-point a persisted `tailscale serve` mapping if this boot's port drifted.
+        p.clone().resync_on_start();
     }
 
     // Machine-readable ready line FIRST (flushed), so the desktop can read back the

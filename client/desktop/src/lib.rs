@@ -161,7 +161,24 @@ pub fn run() {
     let remote_slot: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
     let remote_slot_setup = remote_slot.clone();
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+    // Single instance FIRST, so a second launch short-circuits before it spawns a
+    // rival server or tray. This is the fix for the update seam: `app.restart()`
+    // releases the lock (cleanup_before_exit → RunEvent::Exit → the plugin's
+    // destroy) before exec, so the new build acquires it cleanly — but if the old
+    // process lingers (a slow-exiting tray, or a manual relaunch of a hidden
+    // window), the newcomer forwards its argv here and exits instead of adding a
+    // SECOND tray and stealing 8765 (which is what strands the phone mapping).
+    // Release-only: dev shares the bundle id, so the guard would otherwise send
+    // `npm run dev` straight to the installed tray app.
+    #[cfg(not(debug_assertions))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main(app); // surface the already-running window (un-hides a tray-hidden one)
+        }));
+    }
+    builder
         .plugin(tauri_plugin_updater::Builder::new().build()) // self-update; driven from ShellUpdater, no JS API
         .plugin(tauri_plugin_notification::init()) // OS toasts; driven from ShellNotifier, no JS API
         .setup(move |app| {
@@ -256,6 +273,11 @@ pub fn run() {
                     preferred
                 }
             };
+            // If we bound an ephemeral port because the exiting process still held
+            // 8765 (an update restart racing shutdown), a persisted `tailscale serve`
+            // mapping now points at a dead port — re-point it so the phone reconnects
+            // without re-enabling. No-op when phone mode was never turned on.
+            phone.clone().resync_on_start();
 
             // Same-origin model: the webview's origin IS the server, so api.ts's
             // relative `/api` calls + the SSE EventSource pass CSP `default-src 'self'`.
