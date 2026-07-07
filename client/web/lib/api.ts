@@ -1044,6 +1044,9 @@ export interface TermEvent {
   agent: string;
   cwd: string;
   at: string;
+  /** Bell frames only: a captured preview of the agent's last output line, for
+   *  the notification body. Absent on opened/closed and on the poll backstop. */
+  last?: string;
 }
 
 /**

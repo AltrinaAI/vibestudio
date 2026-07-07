@@ -179,16 +179,20 @@ fn someone_watching() -> bool {
 pub(crate) struct Bell {
     pub id: String,
     pub label: String,
+    /// The agent's last output line (a captured preview), or `None` when the pane
+    /// held nothing substantive — then the body falls back to the fixed phrase.
+    pub last: Option<String>,
 }
 
 /// Declarative Web Push payload (Safari 18.4+ renders it OS-side; sw.js renders
 /// the same JSON as a classic push elsewhere).
 fn payload(bell: &Bell) -> Vec<u8> {
+    let body = bell.last.as_deref().unwrap_or("Your turn — the agent finished.");
     json!({
         "web_push": 8030,
         "notification": {
             "title": bell.label,
-            "body": "Your turn — the agent finished.",
+            "body": body,
             "navigate": format!("/#/terminals?id={}", urlencoding::encode(&bell.id)),
             // Not part of the declarative schema (iOS ignores it); sw.js uses it
             // so a classic push replaces the page's same-session web banner

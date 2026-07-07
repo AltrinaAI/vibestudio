@@ -57,8 +57,13 @@ fn frame(event: &str, data: &serde_json::Value) -> String {
     format!("event: {event}\ndata: {data}\n\n")
 }
 
-fn payload(s: &SessionInfo) -> serde_json::Value {
-    json!({ "id": s.id, "label": s.label, "agent": s.agent, "cwd": s.cwd, "at": s.bell_at })
+fn payload(s: &SessionInfo, last: Option<&str>) -> serde_json::Value {
+    let mut v = json!({ "id": s.id, "label": s.label, "agent": s.agent, "cwd": s.cwd, "at": s.bell_at });
+    // Only bells carry a preview of the agent's last line (opened/closed pass None).
+    if let Some(last) = last {
+        v["last"] = json!(last);
+    }
+    v
 }
 
 fn bell_secs(s: &SessionInfo) -> u64 {
@@ -77,20 +82,19 @@ pub(crate) fn bell_edges<'a>(
         .collect()
 }
 
-/// Frames for what changed between two snapshots.
+/// Opened/closed frames between two snapshots. Bell frames are built in the
+/// watcher instead ([`watcher_loop`]) — each carries a captured preview of the
+/// agent's last line, which needs a tmux read `diff` deliberately stays free of.
 pub(crate) fn diff(prev: &HashMap<String, SessionInfo>, now: &[SessionInfo]) -> Vec<String> {
     let mut frames = Vec::new();
     for s in now {
         if !prev.contains_key(&s.id) {
-            frames.push(frame("opened", &payload(s)));
+            frames.push(frame("opened", &payload(s, None)));
         }
-    }
-    for s in bell_edges(prev, now) {
-        frames.push(frame("bell", &payload(s)));
     }
     for (id, p) in prev {
         if !now.iter().any(|s| &s.id == id) {
-            frames.push(frame("closed", &payload(p)));
+            frames.push(frame("closed", &payload(p, None)));
         }
     }
     frames
@@ -114,10 +118,19 @@ fn watcher_loop() {
             for f in diff(p, &now) {
                 emit(f);
             }
-            let bells = bell_edges(p, &now)
-                .into_iter()
-                .map(|s| crate::push::Bell { id: s.id.clone(), label: s.label.clone() })
-                .collect();
+            // Each bell edge: read the agent's last line ONCE and feed it to both
+            // channels — the SSE frame (the desktop toast body) and Web Push (the
+            // phone body). Capture is bell-only, so it costs nothing on a quiet tick.
+            let mut bells = Vec::new();
+            for s in bell_edges(p, &now) {
+                let last = skill_term::capture_tail(&s.id);
+                emit(frame("bell", &payload(s, last.as_deref())));
+                bells.push(crate::push::Bell {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    last,
+                });
+            }
             crate::push::notify_bells(bells);
         }
         prev = Some(now.into_iter().map(|s| (s.id.clone(), s)).collect());
@@ -156,13 +169,16 @@ mod tests {
 
     #[test]
     fn bell_fires_only_on_increase() {
+        // Bells are edges the watcher turns into frames (with a captured preview);
+        // `diff` no longer emits them, so assert on `bell_edges` directly.
         let prev = snap(&[sess("ass-1", "500"), sess("ass-2", "0"), sess("ass-3", "")]);
         let now = [sess("ass-1", "500"), sess("ass-2", "600"), sess("ass-3", "")];
-        let frames = diff(&prev, &now);
-        assert_eq!(frames.len(), 1, "{frames:?}");
-        assert!(frames[0].starts_with("event: bell\n"));
-        assert!(frames[0].contains("\"id\":\"ass-2\""));
-        assert!(frames[0].contains("\"at\":\"600\""));
+        let edges = bell_edges(&prev, &now);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].id, "ass-2");
+        assert_eq!(edges[0].bell_at, "600");
+        // diff itself is silent when only a bell advanced (no open/close).
+        assert!(diff(&prev, &now).is_empty());
     }
 
     #[test]

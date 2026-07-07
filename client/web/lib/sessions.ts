@@ -296,10 +296,18 @@ function maybeNotify(e: TermEvent): void {
   // hidden/unfocused window (and, in browser mode, the backgrounded tab).
   if (!document.hidden && document.hasFocus()) return;
   announced.set(e.id, bell);
-  void deliver(e.label || e.id, "Your turn", e.id);
+  // Body = the agent's last line (SSE bell frames carry it); the poll backstop and
+  // an empty pane fall back to the fixed summons.
+  void deliver(e.label || e.id, e.last?.trim() || "Your turn — the agent finished.", e.id);
 }
 
 async function deliver(title: string, body: string, tag: string): Promise<void> {
+  // A push-capable surface (installed PWA / push-subscribed browser) already gets
+  // the server's Web Push for this same bell — raising a local notification too is
+  // the "exactly two per turn" double. Web Push is the authoritative channel there,
+  // so defer to it. The desktop shell has no service worker (canPush false), so it
+  // still falls through to its native toast below.
+  if (canPush() && Notification.permission === "granted") return;
   if (nativeNotify !== false) {
     try {
       await api.notifyNative(title, body);

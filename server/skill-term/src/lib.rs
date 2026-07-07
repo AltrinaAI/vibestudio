@@ -306,6 +306,61 @@ fn basename(p: &str) -> String {
         .to_string()
 }
 
+/// Leading gutter glyphs an agent TUI prefixes onto a line of its own text
+/// (message bullets, box borders, prompt / selection markers) — stripped so a
+/// notification preview reads as the words, not the furniture.
+const GUTTER_GLYPHS: &[char] = &[
+    '│', '┃', '┆', '┊', '╎', '▌', '▏', '▕', '║', '⏺', '●', '○', '◉', '◯', '•', '∙', '·', '▪', '▸',
+    '▹', '►', '▶', '❯', '➤', '➜', '>',
+];
+
+/// Truncate to `max` chars (not bytes — pane text is UTF-8), adding an ellipsis
+/// when it actually cuts, so a notification body stays one glanceable line.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// A captured pane line reduced to its agent text, or `None` if it's blank or TUI
+/// furniture (a border, the input prompt, the shortcut footer). Heuristic and
+/// agent-shaped — tune the gutter set and CHROME list as the furniture changes.
+fn preview_line(raw: &str) -> Option<String> {
+    let text = raw
+        .trim()
+        .trim_start_matches(|c: char| GUTTER_GLYPHS.contains(&c) || c.is_whitespace())
+        .trim();
+    // Chrome (rules, spinners, empty box rows) carries almost no letters.
+    if text.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
+        return None;
+    }
+    let low = text.to_ascii_lowercase();
+    const CHROME: [&str; 4] = ["for shortcuts", "to interrupt", "accept edits", "ctrl+"];
+    if CHROME.iter().any(|c| low.contains(c)) {
+        return None;
+    }
+    Some(truncate_chars(&text.split_whitespace().collect::<Vec<_>>().join(" "), 140))
+}
+
+/// The agent's last meaningful output line — a one-line preview for a turn-finish
+/// notification body. `capture-pane -p` yields the visible pane as plain text (no
+/// escapes); walk it bottom-up past the input box, prompt, and hint footer to the
+/// last line that carries real words. `None` when nothing substantive is on screen
+/// (the notifier then falls back to its fixed phrase).
+pub fn capture_tail(id: &str) -> Option<String> {
+    if !id.starts_with(PREFIX) {
+        return None;
+    }
+    let out = tmux().args(["capture-pane", "-p", "-t", id]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout).lines().rev().find_map(preview_line)
+}
+
 // ──────────────────────────── session lifecycle ────────────────────────────
 
 /// List the app's live sessions (queries tmux, so this is correct within the
@@ -1320,6 +1375,30 @@ mod tests {
     fn sanitize_meta_strips_separators() {
         assert_eq!(sanitize_meta("a\tb\nc\rd"), "a b c d");
         assert_eq!(sanitize_meta("plain"), "plain");
+    }
+
+    #[test]
+    fn preview_line_keeps_agent_text_and_skips_furniture() {
+        // A message line: the leading bullet gutter is stripped, words kept.
+        assert_eq!(
+            preview_line("⏺ I've finished the feature. All tests pass."),
+            Some("I've finished the feature. All tests pass.".into())
+        );
+        // Box borders, the empty input prompt, the shortcut footer, blanks → skipped.
+        assert_eq!(preview_line("╰──────────────────────────────╯"), None);
+        assert_eq!(preview_line("│ >                            │"), None);
+        assert_eq!(preview_line("  ? for shortcuts"), None);
+        assert_eq!(preview_line("   "), None);
+        // Inner whitespace collapses to a single glanceable line.
+        assert_eq!(preview_line("● Done:   two   spaces"), Some("Done: two spaces".into()));
+    }
+
+    #[test]
+    fn preview_line_truncates_with_ellipsis() {
+        let long = "x ".repeat(200);
+        let out = preview_line(&format!("⏺ {long}")).unwrap();
+        assert_eq!(out.chars().count(), 141); // 140 chars + the ellipsis
+        assert!(out.ends_with('…'));
     }
 
     #[test]
