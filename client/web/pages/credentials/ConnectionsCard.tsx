@@ -380,7 +380,7 @@ export default function ConnectionsCard() {
         </span>
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-fg">Connections</h2>
-          <p className="truncate text-xs text-muted">
+          <p className="text-xs text-muted">
             Services your agents can use. Sign in once — VibeStudio holds the keys.
           </p>
         </div>

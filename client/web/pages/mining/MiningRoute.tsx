@@ -172,7 +172,7 @@ export function Component() {
       />
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 pb-24 pt-10">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-fg">Mining</h1>
             <p className="mt-1.5 max-w-prose text-sm text-muted">

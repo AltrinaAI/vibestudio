@@ -167,7 +167,7 @@ export default function LocalStoreCard() {
         </span>
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-fg">Your secrets</h2>
-          <p className="truncate text-xs text-muted">On this machine — cloud sync coming soon.</p>
+          <p className="text-xs text-muted">On this machine — cloud sync coming soon.</p>
         </div>
         {/* Gated on a real load: don't claim "Active" before we've reached the
             store (or if it's unreachable — refresh swallows fetch errors). */}
