@@ -1,22 +1,22 @@
 # VibeStudio
 
-The best human interface for **[Agent Skills](https://agentskills.io/home)**. Available on macOS, Linux, and Windows.
+Manage the coding agents running on your machine — from anywhere. Available on macOS, Linux, and Windows.
 
 ![VibeStudio — run, teach, and connect your coding agents from one dashboard](./dashboard.png)
 
-We love [agent skills](https://agentskills.io/home). As agents get more powerful, it's easy to feel like losing control over the direction of your project or organization. We think agent skills is the right place to specify your taste, expertise, and customize your way of doing things on an organization level. 
+Your coding agents work best where your code, keys, and tools already live: your own machine. But you're not always sitting at it. VibeStudio is one dashboard for every agent running there — Claude Code, Codex, Cursor, Gemini CLI, opencode — driven from your desktop, a browser, or your phone.
 
-There just isn't a good human interface for editing agent skills. Any place that requires human creativity needs a good human interface: clean, intuitive, version controlled. So we built one and open-sourced it. 
+It runs the agents and manages everything they need: the skills that carry your taste and expertise, and the credentials and MCP connections they call — versioned, synced, and kept on your own hardware.
 
-Built with [Tauri](https://tauri.app/), VibeStudio runs on macOS, Linux, and Windows, and connects to any remote dev setup you have natively VS Code style (see [`design.md`](./design.md)). 
+Built with [Tauri](https://tauri.app/), it also drives any remote dev host natively, VS Code-remote style (see [`design.md`](./design.md)).
 
 ## Features
 
-- **Skill Management** — locate and manage every skill on your machine (across Claude Code, Codex, opencode, Cursor, Gemini CLI, OpenClaw) with automatic versioning and git-remote sync as the source of truth.
-- **Skill Mining** — turn past agent conversations into skills or update your existing skills with recent conversations. 
-- **Best Markdown editor** — preview and edit `SKILL.md` and other Markdow at the same time; double-click any block to drop into the raw syntax.
-- **Credential Management** — a local store for the API keys and MCP tokens your agents need. Oauth your MCPs once and every agent reaches it through a local gateway. No token ever lands in an agent's config, environment, or transcript. 
-- **Agent Session Management** — managed agent terminals that survive UI disconnect and notifies when a run finishes or needs you. Run locally or on any SSH host VS Code-remote style. 
+- **Run every agent from one place** — launch, watch, and resume any of them from a single dashboard. Terminals survive UI disconnect and notify you when a run finishes or needs you — locally, or on any SSH host VS Code-remote style.
+- **Reach them from anywhere** — the backend serves the whole app over HTTP, so a browser or your phone drives the same agents on your machine (setup below).
+- **Skill Management** — find and edit every skill across your agents in a live `SKILL.md` editor, with automatic versioning and git-remote sync as the source of truth.
+- **Skill Mining** — turn past agent conversations into new skills, or fold recent ones back into existing skills.
+- **Credentials & Connections** — hold the API keys your agents need and OAuth an MCP once; every agent reaches it through a local gateway, so no token ever lands in a config, environment, or transcript.
 
 ## Install
 
@@ -35,9 +35,9 @@ Windows builds aren't code-signed yet, so each shows a one-time prompt:
 - **Windows** — SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**.
 - **Linux** — install the package with `sudo apt install ./VibeStudio-Linux-x86_64.deb`.
 
-## Use from a browser (phone included)
+## Use from anywhere (browser + phone)
 
-The backend serves the full app over plain HTTP, meaning all you need is a browser pointed at the skill-server to run the entire app. 
+The backend serves the full app over plain HTTP, meaning all you need is a browser pointed at the skill-server to run the entire app.
 
 **In the app:** click the **Local** pill → **Open on your phone…** → scan the QR. The app fronts its own server with [Tailscale](https://tailscale.com) (free) and walks you through the two one-time Tailscale permissions if needed. Any device signed in to your Tailscale network can open the URL. Closing the window keeps VibeStudio (and phone access) running in your tray; right-click the tray icon to quit entirely.
 
@@ -68,7 +68,7 @@ npm run dev          # native desktop
 
 ## Roadmap
 
-The thesis: the future is one where humans **collaborate** with AI agents, not one where they are replaced by them. Skills are the medium for human expert knowledge, so they need a first-class human UX. Next:
+The thesis: the future is one where humans **collaborate** with AI agents rather than being replaced by them — so you should own and direct the agents doing your work, not rent them. Next:
 
-1. **Team collaboration & secret management** — share skills and the secrets and connections they need across a team, account-backed. 
-2. **Multi-modal skills / SOP documents** in a format readable by both humans and agents, for computer use agents. 
+1. **Team collaboration & shared secrets** — share skills, and the secrets and connections they need, across a team, account-backed.
+2. **Multi-modal skills / SOP documents** in a format both humans and agents can read, for computer-use agents.
