@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Spinner, btnGhost, btnPrimary } from "@/components/ui";
 import * as api from "@/lib/api";
@@ -44,9 +44,14 @@ type EnableFailure = Extract<api.PhoneEnableResult, { ok: false }>;
 export default function PhoneModal({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<api.PhoneStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false); // enable/disable in flight
+  const [busy, setBusy] = useState(false); // enable/disable/login in flight
   const [fail, setFail] = useState<EnableFailure | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [login, setLogin] = useState<api.PhoneLoginResult | null>(null);
+  // Auto-serve guards: front the server once Tailscale is ready without a click,
+  // but never re-serve after the user turns it off, and never loop on a failure.
+  const autoServed = useRef(false);
+  const userDisabled = useRef(false);
   // While SSH-connected, /api/phone/* proxies to the remote server (tailscale runs
   // THERE), so the copy names the host instead of the local tray lifecycle.
   const { status: remote } = useRemote();
@@ -55,6 +60,7 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setLogin(null);
     try {
       setStatus(await api.phoneStatus());
     } catch (e) {
@@ -67,7 +73,7 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
     void load();
   }, [load]);
 
-  const doEnable = async () => {
+  const doEnable = useCallback(async () => {
     setBusy(true);
     setFail(null);
     setError(null);
@@ -80,9 +86,38 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
     } finally {
       setBusy(false);
     }
+  }, []);
+
+  // Once Tailscale is signed in, front the server automatically so the QR appears
+  // without a separate "Enable" click. Guarded (autoServed/userDisabled/fail) so
+  // it fires at most once and never undoes a manual "Turn off".
+  useEffect(() => {
+    if (!status || busy) return;
+    if (status.serving) {
+      autoServed.current = true;
+      return;
+    }
+    if (status.tailscale !== "ok" || autoServed.current || userDisabled.current || fail) return;
+    autoServed.current = true;
+    void doEnable();
+  }, [status, busy, fail, doEnable]);
+
+  const doLogin = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.phoneLogin();
+      setLogin(r);
+      if (!r.ok) setError(r.message || "Couldn't start Tailscale sign-in.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't start Tailscale sign-in.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const doDisable = async () => {
+    userDisabled.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -143,6 +178,38 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
               >
                 Get Tailscale ↗
               </a>
+            </div>
+          </>
+        ) : status.tailscale === "needs_login" ? (
+          <>
+            <p className="text-sm text-fg">
+              Tailscale is installed{remoteHost ? ` on the remote (${remoteHost})` : ""} but you're not signed in
+              yet.
+            </p>
+            <p className="text-sm text-muted">
+              Sign in with your Tailscale account (it's free), then check again. You'll also want Tailscale on your
+              phone, signed in to the same account.
+            </p>
+            {login?.message && <p className="text-sm text-muted">{login.message}</p>}
+            {error && <p className="text-sm text-danger">{error}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => void load()} className={btnGhost}>
+                Check again
+              </button>
+              {login?.loginUrl ? (
+                <a
+                  href={login.loginUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className={`${btnPrimary} inline-block`}
+                >
+                  Open sign-in ↗
+                </a>
+              ) : login?.ok ? null : (
+                <button type="button" onClick={() => void doLogin()} disabled={busy} className={btnPrimary}>
+                  {busy ? "Starting…" : "Sign in to Tailscale"}
+                </button>
+              )}
             </div>
           </>
         ) : status.tailscale === "stopped" ? (
@@ -216,7 +283,8 @@ export default function PhoneModal({ onClose }: { onClose: () => void }) {
             ) : fail?.stage === "consent" && fail.consentUrl ? (
               <p className="text-sm text-muted">
                 Tailscale needs your approval to serve from{" "}
-                {remoteHost ? `the remote (${remoteHost})` : "this computer"}. Approve it, then retry.
+                {remoteHost ? `the remote (${remoteHost})` : "this computer"}. Approve it (you'll need to be an admin
+                of your Tailscale network), then retry.
               </p>
             ) : fail ? (
               <p className="text-sm text-danger">{fail.message}</p>

@@ -153,7 +153,7 @@ export const remoteDisconnect = () => http<{ ok: boolean }>("POST", "remote/disc
 //     network and show a QR code a phone can scan. Absent (404) on standalone
 //     remote servers — the caller treats that as "unavailable". ---
 export interface PhoneStatus {
-  tailscale: "ok" | "missing" | "stopped";
+  tailscale: "ok" | "missing" | "stopped" | "needs_login";
   serving: boolean;
   /** The app's own in-process server — always present, it IS the responding process. */
   server: { version: string | null; port: number };
@@ -181,6 +181,15 @@ export const phoneStatus = (): Promise<PhoneStatus | null> =>
   });
 export const phoneEnable = () => http<PhoneEnableResult>("POST", "phone/enable");
 export const phoneDisable = () => http<{ ok: boolean; message?: string }>("POST", "phone/disable");
+/** Sign in to Tailscale (or bring it up) without leaving the app. */
+export interface PhoneLoginResult {
+  ok: boolean;
+  stage?: "login" | "started";
+  /** stage="login": open this to finish signing in to Tailscale. */
+  loginUrl?: string;
+  message?: string;
+}
+export const phoneLogin = () => http<PhoneLoginResult>("POST", "phone/login");
 
 // --- recents (server-side; a NORMAL /api/* route, so it follows the active server —
 //     each machine has its own list, the same whether reached locally or over SSH) ---

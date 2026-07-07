@@ -22,7 +22,7 @@ use std::thread;
 
 use serde_json::{json, Value};
 use skill_core::{
-    commit_agent, commitmsg, connections, discover, editor, engine, github, gitops, mining, recents,
+    commit_agent, commitmsg, connections, discover, engine, github, gitops, mining, recents,
     reveal, secrets, skill, sync, update,
 };
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
@@ -194,6 +194,21 @@ pub trait NotifyControl: Send + Sync {
     fn set_badge(&self, _count: u32) {}
 }
 
+/// Opening a session's folder in the user's local editor (VS Code) — the "Open in
+/// VS Code" affordance. A CLIENT-machine capability, not agent work: it acts on the
+/// screen the user is at, so it's implemented in `client/desktop` (same one-way
+/// dependency rule as [`NotifyControl`]) and reached only over the pinned-local
+/// `/api/editor/*` route (never proxied). A server without one (standalone binary,
+/// browser mode) 404s those routes and the SPA hides the button.
+pub trait EditorControl: Send + Sync {
+    /// The reachable editor's display name (`Some` → show the button), or `None`.
+    fn detect(&self) -> Option<String>;
+    /// Open `path` in the editor. `remote_host` set → the folder is on that SSH
+    /// remote, so open it over VS Code Remote-SSH (a local window attached over the
+    /// same SSH the tunnel uses); `None` → open the local path directly.
+    fn open(&self, path: &str, remote_host: Option<&str>) -> Result<(), String>;
+}
+
 /// How to run the server. Build with `..Default::default()` and override fields.
 pub struct ServerConfig {
     /// Bind host. Desktop and CLI both use `127.0.0.1`.
@@ -239,6 +254,10 @@ pub struct ServerConfig {
     /// turn-finish events. `None` (standalone/browser) = `/api/notify*` 404s
     /// and the SPA falls back to the Web Notification API.
     pub notifier: Option<Arc<dyn NotifyControl>>,
+    /// "Open in VS Code" (desktop only): open a session's folder in the local
+    /// editor, or on the connected remote over Remote-SSH. `None` (standalone/
+    /// browser) = `/api/editor/*` 404s and the SPA hides the button.
+    pub editor: Option<Arc<dyn EditorControl>>,
 }
 
 impl Default for ServerConfig {
@@ -256,6 +275,7 @@ impl Default for ServerConfig {
             updater: None,
             phone: None,
             notifier: None,
+            editor: None,
         }
     }
 }
@@ -337,6 +357,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
         remote: cfg.remote,
         phone: cfg.phone,
         notifier: cfg.notifier,
+        editor: cfg.editor,
         port: addr.port(),
     });
 
@@ -358,6 +379,7 @@ struct ServerCtx {
     remote: Option<Arc<dyn RemoteControl>>,
     phone: Option<Arc<PhoneControl>>,
     notifier: Option<Arc<dyn NotifyControl>>,
+    editor: Option<Arc<dyn EditorControl>>,
     /// The ACTUAL bound port — the MCP-connection flow bakes it into the
     /// `/gw/<id>/mcp` gateway URL written into agent configs.
     port: u16,
@@ -1455,6 +1477,10 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             Some(p) => json_reply(Ok(p.disable())),
             None => phone_unavailable(),
         },
+        (Method::Post, "/api/phone/login") => match &ctx.phone {
+            Some(p) => json_reply(Ok(p.login())),
+            None => phone_unavailable(),
+        },
         // Web Push — deliberately NOT pinned local (unlike /api/notify*): when a
         // remote hub is connected these proxy to it, so subscriptions live next
         // to the watcher that fires them. The phone reaches these through the
@@ -1504,13 +1530,32 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             }
             None => notify_unavailable(),
         },
-        // Open a session's folder in the local VS Code. Pinned local + gated on
-        // from_this_machine by the dispatch loop above (never proxied), so it opens
-        // on the screen the user is at. `status` drives the button's visibility.
-        (Method::Get, "/api/editor/status") => json_reply(Ok(editor::status())),
-        (Method::Post, "/api/editor/open") => {
-            json_reply(editor::open(&s("path")).map(|()| json!({ "ok": true })))
-        }
+        // Open a session's folder in VS Code. The control lives in the desktop shell
+        // (client-side); pinned local + gated on from_this_machine by the dispatch
+        // loop above (never proxied), so it opens on the screen the user is at.
+        // `status` drives the button's visibility. `None` (standalone/browser) 404s.
+        (Method::Get, "/api/editor/status") => match &ctx.editor {
+            Some(ed) => {
+                let name = ed.detect();
+                json_reply(Ok(json!({ "available": name.is_some(), "name": name })))
+            }
+            None => editor_unavailable(),
+        },
+        (Method::Post, "/api/editor/open") => match &ctx.editor {
+            Some(ed) => {
+                // A connected remote → the folder lives there; open it over Remote-SSH
+                // rather than on this machine. The ssh destination comes from the
+                // switchboard (authoritative + already validated), NEVER the request
+                // body, so a caller can't smuggle ssh options in via a fake host.
+                let host = ctx
+                    .remote
+                    .as_ref()
+                    .filter(|r| r.active_target().is_some())
+                    .and_then(|r| r.status().host);
+                json_reply(ed.open(&s("path"), host.as_deref()).map(|()| json!({ "ok": true })))
+            }
+            None => editor_unavailable(),
+        },
         // Reveal a saved file in the OS file manager (backs "Reveal in folder" on
         // the export confirmation). Pinned local + gated on from_this_machine by
         // the dispatch loop, so the window opens on the screen the user is at.

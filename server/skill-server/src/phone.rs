@@ -80,6 +80,7 @@ impl PhoneControl {
     pub fn status(&self) -> Value {
         let (ts, dns) = match tailscale::state() {
             tailscale::TsState::Ok { dns_name } => ("ok", Some(dns_name)),
+            tailscale::TsState::NeedsLogin => ("needs_login", None),
             tailscale::TsState::Stopped => ("stopped", None),
             tailscale::TsState::Missing => ("missing", None),
         };
@@ -105,6 +106,10 @@ impl PhoneControl {
             tailscale::TsState::Missing => {
                 return json!({"ok": false, "stage": "tailscale",
                     "message": "Tailscale isn't installed on this machine."});
+            }
+            tailscale::TsState::NeedsLogin => {
+                return json!({"ok": false, "stage": "tailscale",
+                    "message": "You're not signed in to Tailscale yet."});
             }
             tailscale::TsState::Stopped => {
                 return json!({"ok": false, "stage": "tailscale",
@@ -141,6 +146,20 @@ impl PhoneControl {
         match tailscale::serve_off() {
             Ok(()) => json!({"ok": true}),
             Err(m) => json!({"ok": false, "stage": "serve", "message": m}),
+        }
+    }
+
+    /// Sign in to Tailscale (or bring the backend up) for the modal's "Sign in"
+    /// button, so the user never has to drop to a terminal. Returns a login URL
+    /// to open when interactive auth is needed.
+    pub fn login(&self) -> Value {
+        match tailscale::up() {
+            tailscale::UpResult::LoginUrl(url) => json!({"ok": true, "stage": "login",
+                "loginUrl": url,
+                "message": "Finish signing in to Tailscale in your browser, then check again."}),
+            tailscale::UpResult::Started => json!({"ok": true, "stage": "started",
+                "message": "Tailscale is coming up — check again in a moment."}),
+            tailscale::UpResult::Error(m) => json!({"ok": false, "stage": "login", "message": m}),
         }
     }
 }
