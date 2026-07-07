@@ -864,6 +864,10 @@ export interface TermSession {
    *  (Claude ai-title, Codex/Gemini/Cursor first prompt). Absent when the agent
    *  has no readable session yet — callers fall back to the cwd. */
   title?: string;
+  /** The agent session id forced at launch (`claude --session-id`), used
+   *  server-side to map the terminal to its own transcript. Empty/absent for
+   *  shells, resumed, and pre-existing sessions. */
+  sessionId?: string;
 }
 
 export interface CreateTermArgs {
@@ -1005,6 +1009,18 @@ export const notifyPrime = () => http<{ ok: boolean }>("POST", "notify/prime").t
 /** Dock/taskbar unread-count badge; 0 clears. */
 export const notifyBadge = (count: number) =>
   http<{ ok: boolean }>("POST", "notify/badge", { count }).then(() => {});
+
+// --- open a folder in the local VS Code ---
+// Pinned LOCAL like the notify routes: opening an editor belongs to the machine
+// whose screen you're at, so a tailscale-fronted phone client 404s `editorStatus`
+// (button hidden) and the desktop opens VS Code on its own screen.
+
+/** Whether a local VS Code is installed & reachable from this client. A 404
+ *  (phone/remote origin, or no server support) surfaces as a thrown error. */
+export const editorStatus = () => http<{ available: boolean; name?: string }>("GET", "editor/status");
+/** Launch VS Code on `path` (a session's working directory). */
+export const editorOpen = (path: string) =>
+  http<{ ok: boolean }>("POST", "editor/open", { path }).then(() => {});
 
 // Web Push — notifications with the app closed. NOT pinned-local: with a remote
 // hub connected these proxy to it, so subscriptions live next to the bell

@@ -138,6 +138,7 @@ mod tests {
             created: "100".into(),
             activity: "200".into(),
             bell_at: bell.into(),
+            session_id: String::new(),
         }
     }
 

@@ -4,10 +4,11 @@
 //! degrade to `None`. Pure Rust (no SQLite): Claude, Codex, Gemini, Cursor are
 //! covered; opencode's store is SQLite-only and is a follow-up.
 //!
-//! Correlation: a terminal maps to the session whose file was CREATED closest to
-//! the terminal's spawn time (`created`) — this disambiguates several sessions in
-//! the same cwd (which plain newest-by-activity cannot). Falls back to newest
-//! activity when birth time is unavailable.
+//! Correlation: when the terminal recorded the session id we forced at launch
+//! (`claude --session-id`), it maps to exactly that transcript — the only way to
+//! tell apart several sessions in the same cwd. Otherwise (shells, resumes,
+//! other agents, pre-existing terminals) it falls back to the newest-activity
+//! session for the cwd.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -57,10 +58,10 @@ fn file_time(p: &Path, creation: bool) -> Option<u64> {
 /// activity) — a long-lived terminal outlives several agent sessions, so its
 /// CURRENT session is the most recent, not the one born when the terminal started.
 ///
-/// LIMITATION: several terminals in the SAME cwd can't be told apart this way —
-/// they resolve to the newest shared session. Robust per-terminal correlation
-/// needs a launch-time session id (e.g. `claude --session-id <uuid>`) recorded on
-/// the terminal; that's a follow-up. `created` is kept for that future use.
+/// LIMITATION: several terminals in the SAME cwd can't be told apart here — they
+/// resolve to the newest shared session. That's why `claude` terminals now carry
+/// a forced `--session-id` (see `claude_from_dir`) for an exact match; this path
+/// is only the fallback for sessions without one. `created` is kept for future use.
 fn pick_for_terminal(files: Vec<PathBuf>, _created: i64) -> Option<PathBuf> {
     files
         .into_iter()
@@ -179,12 +180,21 @@ fn claude_encode(cwd: &Path) -> String {
         .collect()
 }
 
-pub fn claude_title(cwd: &Path, created: i64) -> Option<String> {
-    claude_from_dir(home()?.join(".claude/projects"), cwd, created)
+pub fn claude_title(cwd: &Path, created: i64, session_id: Option<&str>) -> Option<String> {
+    claude_from_dir(home()?.join(".claude/projects"), cwd, created, session_id)
 }
 
-fn claude_from_dir(projects: PathBuf, cwd: &Path, created: i64) -> Option<String> {
+fn claude_from_dir(projects: PathBuf, cwd: &Path, created: i64, session_id: Option<&str>) -> Option<String> {
     let dir = projects.join(claude_encode(cwd));
+    // Exact match when the terminal recorded the id we forced at launch
+    // (`claude --session-id`): only that tells apart several sessions in one cwd.
+    // Claude names the transcript after the id, so the file is <sid>.jsonl.
+    if let Some(sid) = session_id.filter(|s| !s.is_empty()) {
+        let f = dir.join(format!("{sid}.jsonl"));
+        if f.is_file() {
+            return cached(&f, parse_claude);
+        }
+    }
     let file = pick_for_terminal(jsonl_files(&dir), created)?;
     cached(&file, parse_claude)
 }
@@ -226,7 +236,7 @@ fn parse_claude(file: &Path) -> Option<String> {
 // human `user_message` event. (The state_*.sqlite store holds nicer titles but is
 // SQLite — deferred.)
 
-pub fn codex_title(cwd: &Path, created: i64) -> Option<String> {
+pub fn codex_title(cwd: &Path, created: i64, _session_id: Option<&str>) -> Option<String> {
     let base = home()?.join(".codex/sessions");
     let mut rollouts: Vec<PathBuf> = walkdir::WalkDir::new(&base)
         .into_iter()
@@ -292,7 +302,7 @@ fn codex_meta_cwd(file: &Path) -> Option<String> {
 // sibling `.project_root` file. Title = the LLM `summary` if present, else the
 // first user message (a live session usually has no summary yet).
 
-pub fn gemini_title(cwd: &Path, created: i64) -> Option<String> {
+pub fn gemini_title(cwd: &Path, created: i64, _session_id: Option<&str>) -> Option<String> {
     let tmp = home()?.join(".gemini/tmp");
     let want = cwd.to_string_lossy();
     let proj = fs::read_dir(&tmp).ok()?.filter_map(|e| e.ok()).find(|e| {
@@ -365,7 +375,7 @@ fn cursor_encode(cwd: &Path) -> String {
     out.trim_matches('-').to_string()
 }
 
-pub fn cursor_title(cwd: &Path, created: i64) -> Option<String> {
+pub fn cursor_title(cwd: &Path, created: i64, _session_id: Option<&str>) -> Option<String> {
     let base = home()?
         .join(".cursor/projects")
         .join(cursor_encode(cwd))
@@ -453,6 +463,35 @@ mod tests {
         let long = "word ".repeat(40);
         assert!(truncate(&long).ends_with('…'));
         assert!(truncate("short title").eq("short title"));
+    }
+
+    #[test]
+    fn claude_maps_by_session_id_not_newest() {
+        // Two sessions in one cwd: the recorded session id must pick ITS transcript,
+        // not whichever was written last (the same-cwd collision this fix targets).
+        let base = std::env::temp_dir().join(format!("stitle-{}-{}", std::process::id(), line!()));
+        let cwd = Path::new("/tmp/proj/x");
+        let dir = base.join(claude_encode(cwd));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("aaa.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"Alpha task"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("bbb.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"Bravo task"}}"#,
+        )
+        .unwrap();
+
+        // Exact id → that session's own title, regardless of which file is newest.
+        assert_eq!(claude_from_dir(base.clone(), cwd, 0, Some("aaa")), Some("Alpha task".into()));
+        assert_eq!(claude_from_dir(base.clone(), cwd, 0, Some("bbb")), Some("Bravo task".into()));
+        // Unknown / empty id → falls back to newest-activity, never panics.
+        assert!(claude_from_dir(base.clone(), cwd, 0, Some("missing")).is_some());
+        assert!(claude_from_dir(base.clone(), cwd, 0, None).is_some());
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

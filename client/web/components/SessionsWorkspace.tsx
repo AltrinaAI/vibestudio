@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import NavBar from "@/components/NavBar";
 import NewSessionDialog from "@/components/NewSessionDialog";
@@ -8,7 +8,9 @@ import ResizeHandle from "@/components/ResizeHandle";
 import TerminalPane from "@/components/TerminalPane";
 import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
+import { log } from "@/lib/log";
 import * as push from "@/lib/push";
+import { useRemote } from "@/lib/remote";
 import * as store from "@/lib/sessions";
 
 // Legacy key string — keep the old "terminals" word so existing users' saved rail width survives the rename.
@@ -27,6 +29,18 @@ function PlusIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+// "Open externally" glyph for the open-in-VS-Code button; the tooltip names the
+// editor, so the icon stays a neutral, on-theme monochrome stroke.
+function OpenExternalIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
     </svg>
   );
 }
@@ -77,6 +91,35 @@ export default function SessionsWorkspace({
 
   const location = useLocation();
   const navigate = useNavigate();
+  const remote = useRemote();
+
+  // "Open in VS Code" is offered only when a local VS Code is reachable AND the
+  // sessions are on this machine. While a remote is connected the cwds are the
+  // remote host's paths (opening them locally would be wrong), and the status
+  // route itself 404s for a tailscale-fronted phone client — either way, hidden.
+  const [vscode, setVscode] = useState<{ available: boolean; name?: string } | null>(null);
+  const remoteConnected = remote.status.state === "connected";
+  useEffect(() => {
+    if (remoteConnected) {
+      setVscode(null);
+      return;
+    }
+    let alive = true;
+    api.editorStatus().then(
+      (e) => void (alive && setVscode(e)),
+      () => void (alive && setVscode(null)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [remoteConnected]);
+  const canOpenEditor = !remoteConnected && !!vscode?.available;
+  const editorName = vscode?.name ?? "VS Code";
+  const openInEditor = useCallback((cwd: string) => {
+    api.editorOpen(cwd).catch((e) =>
+      log.warn("sessions", "open in editor failed", e instanceof Error ? e.message : String(e)),
+    );
+  }, []);
 
   // Unread dot — the predicate (and its bell-not-activity rationale) lives with
   // the store; this just binds it to this workspace's own selection.
@@ -159,6 +202,71 @@ export default function SessionsWorkspace({
     await refresh();
   };
 
+  // Manual rail reorder — no handle, no affordance: press a row and drag it. The
+  // row itself is the drag surface (native HTML5 drag is unreliable in the macOS
+  // webview, so we use pointer events). A click only becomes a drag past a small
+  // move threshold, so a plain click still selects; below the threshold nothing
+  // happens. On each move the picked-up id is spliced to the row under the
+  // pointer — the list reflowing under you is the only feedback — and the new
+  // order commits to the store (and localStorage) once on release.
+  const ulRef = useRef<HTMLUListElement>(null);
+  const [drag, setDrag] = useState<{ id: string; ids: string[] } | null>(null);
+
+  const startRowDrag = useCallback(
+    (id: string, e: ReactPointerEvent) => {
+      if (e.button !== 0) return; // left button / primary touch only
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let dragging = false;
+      const move = (ev: PointerEvent) => {
+        if (!dragging) {
+          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;
+          dragging = true;
+          setDrag({ id, ids: sessions.map((s) => s.id) });
+          document.body.style.userSelect = "none";
+        }
+        const ul = ulRef.current;
+        if (!ul) return;
+        const rows = Array.from(ul.children) as HTMLElement[];
+        let to = rows.findIndex((r) => {
+          const rect = r.getBoundingClientRect();
+          return ev.clientY < rect.top + rect.height / 2;
+        });
+        if (to < 0) to = rows.length;
+        setDrag((d) => {
+          if (!d) return d;
+          const from = d.ids.indexOf(d.id);
+          if (from < 0) return d;
+          const next = [...d.ids];
+          next.splice(from, 1);
+          next.splice(to > from ? to - 1 : to, 0, d.id);
+          return { ...d, ids: next };
+        });
+      };
+      const stop = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        if (!dragging) return; // it was a plain click — let it select
+        document.body.style.userSelect = "";
+        setDrag((d) => {
+          if (d) store.reorder(d.ids);
+          return null;
+        });
+        // Swallow the click this drag-release synthesizes so it can't select a row.
+        const swallow = (ce: MouseEvent) => {
+          ce.stopPropagation();
+          ce.preventDefault();
+          document.removeEventListener("click", swallow, true);
+        };
+        document.addEventListener("click", swallow, true);
+        setTimeout(() => document.removeEventListener("click", swallow, true), 250);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+    },
+    [sessions],
+  );
+
   // Tight horizontal layouts (a phone, or the studio's Agent panel at its
   // default width) trade the sessions rail for a dropdown row above the
   // terminal. Measured on the workspace itself, not the viewport, so the
@@ -194,6 +302,10 @@ export default function SessionsWorkspace({
   // Collapsed (narrow) layout hides the rail, so surface a single dot when any
   // hidden session has new output.
   const anyUnread = sessions.some(unread);
+  // Mid-drag the rail renders the live-reordered order; otherwise the store's.
+  const view = drag
+    ? (drag.ids.map((id) => sessions.find((s) => s.id === id)).filter(Boolean) as TermSession[])
+    : sessions;
 
   const pane = active ? (
     <TerminalPane key={active.id} id={active.id} visible={visible} />
@@ -225,6 +337,18 @@ export default function SessionsWorkspace({
             </>
           }
         >
+          {active && canOpenEditor && (
+            <button
+              type="button"
+              onClick={() => openInEditor(active.cwd)}
+              title={`Open this session's folder in ${editorName}`}
+              aria-label={`Open ${active.label} in ${editorName}`}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
+            >
+              <OpenExternalIcon />
+              <span className="hidden text-xs sm:inline">Open in {editorName}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setNewOpen(true)}
@@ -288,6 +412,17 @@ export default function SessionsWorkspace({
                 ✕
               </button>
             )}
+            {active && canOpenEditor && (
+              <button
+                type="button"
+                onClick={() => openInEditor(active.cwd)}
+                aria-label={`Open ${active.label} in ${editorName}`}
+                title={`Open this session's folder in ${editorName}`}
+                className="shrink-0 rounded p-1 text-muted hover:bg-panel hover:text-fg"
+              >
+                <OpenExternalIcon />
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setNewOpen(true)}
@@ -309,14 +444,27 @@ export default function SessionsWorkspace({
             {embedded && (
               <div className="flex items-center justify-between border-b border-border py-1 pl-3 pr-1.5">
                 <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted">Sessions</span>
-                <button
-                  type="button"
-                  onClick={() => setNewOpen(true)}
-                  title="New session"
-                  className="rounded p-1 text-muted hover:bg-panel hover:text-fg"
-                >
-                  <PlusIcon />
-                </button>
+                <div className="flex items-center gap-0.5">
+                  {active && canOpenEditor && (
+                    <button
+                      type="button"
+                      onClick={() => openInEditor(active.cwd)}
+                      aria-label={`Open ${active.label} in ${editorName}`}
+                      title={`Open this session's folder in ${editorName}`}
+                      className="rounded p-1 text-muted hover:bg-panel hover:text-fg"
+                    >
+                      <OpenExternalIcon />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setNewOpen(true)}
+                    title="New session"
+                    className="rounded p-1 text-muted hover:bg-panel hover:text-fg"
+                  >
+                    <PlusIcon />
+                  </button>
+                </div>
               </div>
             )}
             <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -327,11 +475,12 @@ export default function SessionsWorkspace({
                   No sessions yet. Start one to run Claude Code, Codex, opencode, or a shell on this machine.
                 </p>
               ) : (
-                <ul className="space-y-1">
-                  {sessions.map((s) => (
+                <ul ref={ulRef} className="space-y-1">
+                  {view.map((s) => (
                     <li key={s.id} className="group flex items-center gap-1">
                       <button
                         type="button"
+                        onPointerDown={(e) => startRowDrag(s.id, e)}
                         onClick={() => setActiveId(s.id)}
                         className={`flex min-w-0 flex-1 flex-col items-start rounded-md px-2 py-1.5 text-left transition-colors ${
                           s.id === activeId ? "bg-panel text-fg" : "text-muted hover:bg-panel hover:text-fg"
@@ -355,7 +504,7 @@ export default function SessionsWorkspace({
                         onClick={() => void kill(s.id)}
                         aria-label={`Kill ${s.label}`}
                         title="Kill session"
-                        className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
+                        className="hidden shrink-0 appearance-none rounded p-1 text-faint hover:text-danger group-hover:inline-block"
                       >
                         ✕
                       </button>

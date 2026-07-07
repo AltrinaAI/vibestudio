@@ -22,7 +22,7 @@ use std::thread;
 
 use serde_json::{json, Value};
 use skill_core::{
-    commit_agent, commitmsg, connections, discover, engine, github, gitops, mining, recents,
+    commit_agent, commitmsg, connections, discover, editor, engine, github, gitops, mining, recents,
     secrets, skill, sync, update,
 };
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
@@ -461,6 +461,23 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
             send_reply(request, handle(&method, &url, &body, ctx));
             continue;
         }
+        // Opening a local editor (VS Code) belongs to the machine whose screen the
+        // user is at — like notifications, pinned LOCAL (never proxied) and served
+        // only to THIS machine's own webview/browser. A tailscale-fronted phone
+        // client gets the same 404 as an editor-less server, so the SPA hides the
+        // affordance rather than popping a window on the unattended host desktop.
+        if path == "/api/editor" || path.starts_with("/api/editor/") {
+            if !from_this_machine(&request) {
+                send_reply(request, editor_unavailable());
+                continue;
+            }
+            let mut body = String::new();
+            if method == Method::Post {
+                let _ = request.as_reader().read_to_string(&mut body);
+            }
+            send_reply(request, handle(&method, &url, &body, ctx));
+            continue;
+        }
         // While a remote is connected, every other /api/* is reverse-proxied to it.
         // (Must precede the local attach branch so the SSE stream proxies too.) BOTH
         // proxy paths run on their OWN thread, so a slow/hung remote can never pin a
@@ -871,6 +888,18 @@ fn notify_unavailable() -> Reply {
     }
 }
 
+/// 404 for `/api/editor/*` reached from anywhere but this machine's own client —
+/// the SPA reads it as "no local editor here" and hides the button.
+fn editor_unavailable() -> Reply {
+    Reply {
+        status: 404,
+        body: serde_json::to_vec(&json!({ "error": "opening a local editor is not available from here" }))
+            .unwrap_or_default(),
+        content_type: "application/json".into(),
+        extra: vec![],
+    }
+}
+
 fn query_param(url: &str, key: &str) -> Option<String> {
     let q = url.split_once('?')?.1;
     for pair in q.split('&') {
@@ -884,11 +913,11 @@ fn query_param(url: &str, key: &str) -> Option<String> {
 }
 
 /// Locate the base dir of the bundled built-in skills (`load-secrets`,
-/// `skill-miner`). Honors `SKILL_STUDIO_BUNDLED_SKILLS`, else looks relative to
+/// `skill-miner`). Honors `VIBESTUDIO_BUNDLED_SKILLS`, else looks relative to
 /// CWD and the dist dir. A candidate counts if it contains the activation skill.
 fn bundled_skills_dir(dist: &Path) -> Option<PathBuf> {
     let has_skills = |p: &Path| p.join("load-secrets").join("SKILL.md").exists();
-    if let Ok(p) = std::env::var("SKILL_STUDIO_BUNDLED_SKILLS") {
+    if let Ok(p) = std::env::var("VIBESTUDIO_BUNDLED_SKILLS") {
         let pb = PathBuf::from(p);
         if has_skills(&pb) {
             return Some(pb);
@@ -986,8 +1015,13 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             list.into_iter()
                 .map(|s| {
                     let mut v = serde_json::to_value(&s).unwrap_or_default();
-                    let title =
-                        skill_core::agents::session_title_for(&s.agent, &s.cwd, s.created.parse().unwrap_or(0));
+                    let sid = s.session_id.trim();
+                    let title = skill_core::agents::session_title_for(
+                        &s.agent,
+                        &s.cwd,
+                        s.created.parse().unwrap_or(0),
+                        (!sid.is_empty()).then_some(sid),
+                    );
                     if let (Some(t), Some(obj)) = (title, v.as_object_mut()) {
                         obj.insert("title".into(), serde_json::Value::String(t));
                     }
@@ -1396,6 +1430,13 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             }
             None => notify_unavailable(),
         },
+        // Open a session's folder in the local VS Code. Pinned local + gated on
+        // from_this_machine by the dispatch loop above (never proxied), so it opens
+        // on the screen the user is at. `status` drives the button's visibility.
+        (Method::Get, "/api/editor/status") => json_reply(Ok(editor::status())),
+        (Method::Post, "/api/editor/open") => {
+            json_reply(editor::open(&s("path")).map(|()| json!({ "ok": true })))
+        }
         // Unknown /api routes must not fall through to the SPA fallback — a JSON
         // client probing an endpoint would get index.html with a 200.
         (_, p) if p.starts_with("/api/") => Reply {

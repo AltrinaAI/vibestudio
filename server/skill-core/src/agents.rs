@@ -46,6 +46,10 @@ pub struct ResumeCtx<'a> {
     pub effort: Option<&'a str>,
 }
 
+/// Extract a live terminal's title from the agent's own session store, given
+/// `(cwd, terminal spawn time, forced session id)`. See [`crate::session_title`].
+pub type SessionTitleFn = fn(&std::path::Path, i64, Option<&str>) -> Option<String>;
+
 pub struct AgentDef {
     /// Family id — the prefix of skill-term agent ids ("claude" in "claude:cli").
     pub family: &'static str,
@@ -62,10 +66,12 @@ pub struct AgentDef {
     /// holds the OAuth token — so no header/secret ever appears in agent config.
     pub mcp: Option<McpWiring>,
     /// Extract a short human title for a live terminal from the agent's own
-    /// session record (cwd + the terminal's spawn time). `None` = the agent has
-    /// no readable session store yet; the UI falls back to the cwd. See
+    /// session record: `(cwd, terminal spawn time, forced session id)`. The
+    /// session id (from `claude --session-id` at launch) gives an exact transcript
+    /// match; `None`/empty → correlate by cwd + newest activity. `None` here = the
+    /// agent has no readable session store yet; the UI falls back to the cwd. See
     /// [`crate::session_title`].
-    pub session_title: Option<fn(&std::path::Path, i64) -> Option<String>>,
+    pub session_title: Option<SessionTitleFn>,
 }
 
 /// The two shapes of "add/remove a remote streamable-HTTP MCP server named
@@ -185,9 +191,14 @@ pub fn by_family(family_or_id: &str) -> Option<&'static AgentDef> {
 /// A short human title for a live terminal, read from the agent's own session
 /// store. `None` when the family is unknown or has no session_title capability —
 /// callers fall back to the cwd.
-pub fn session_title_for(family_or_id: &str, cwd: &str, created_unix: i64) -> Option<String> {
+pub fn session_title_for(
+    family_or_id: &str,
+    cwd: &str,
+    created_unix: i64,
+    session_id: Option<&str>,
+) -> Option<String> {
     let def = by_family(family_or_id)?;
-    (def.session_title?)(std::path::Path::new(cwd), created_unix)
+    (def.session_title?)(std::path::Path::new(cwd), created_unix, session_id)
 }
 
 /// True when the family has an interactive launch line — the gate for

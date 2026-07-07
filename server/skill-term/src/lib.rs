@@ -65,6 +65,7 @@ fn size_floor(what: &str, id: &str, cols: u16, rows: u16) -> (u16, u16) {
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 static ATTACH_SEQ: AtomicU64 = AtomicU64::new(0);
+static UUID_SEQ: AtomicU64 = AtomicU64::new(0);
 
 // ───────────────────────────── public types ─────────────────────────────
 
@@ -117,6 +118,11 @@ pub struct SessionInfo {
     /// "finished a turn / waiting for you" — what the rail's unread dot keys off.
     /// "0" until the first bell.
     pub bell_at: String,
+    /// The agent session id we forced at launch (`claude --session-id`), so this
+    /// terminal maps to its OWN transcript even when several share a cwd. Empty
+    /// for shells, resumed sessions, and terminals created before this existed —
+    /// title extraction then falls back to newest-activity in the cwd.
+    pub session_id: String,
 }
 
 // ─────────────────────────── base64 (single home) ───────────────────────────
@@ -311,7 +317,7 @@ pub fn list_sessions() -> Result<Vec<SessionInfo>, String> {
     // are single-window by construction, so the current window's activity is the
     // session's activity.
     let fmt = format!(
-        "#{{session_name}}{s}#{{@ass_label}}{s}#{{@ass_agent}}{s}#{{@ass_cwd}}{s}#{{@ass_created}}{s}#{{window_activity}}{s}#{{@ass_bell_at}}",
+        "#{{session_name}}{s}#{{@ass_label}}{s}#{{@ass_agent}}{s}#{{@ass_cwd}}{s}#{{@ass_created}}{s}#{{window_activity}}{s}#{{@ass_bell_at}}{s}#{{@ass_session_id}}",
         s = SEP
     );
     let out = match tmux().args(["list-sessions", "-F", &fmt]).output() {
@@ -349,6 +355,8 @@ pub fn list_sessions() -> Result<Vec<SessionInfo>, String> {
             // Empty (→ "0" on the client) for sessions created before the bell
             // hook existed, or any that haven't belled yet.
             bell_at: g(6),
+            // Empty for shells / resumed / pre-existing sessions (no forced id).
+            session_id: g(7),
         });
     }
     Ok(sessions)
@@ -497,6 +505,32 @@ fn is_shell(comm: &str) -> bool {
     SHELLS.contains(&name)
 }
 
+/// A random-enough UUIDv4 string, std-only (no extra deps). Uniqueness — not
+/// unpredictability — is the requirement: it becomes the agent's transcript
+/// filename via `--session-id`, so it only has to be well-formed and not collide
+/// with an existing one. SipHash over (nanos, seq, pid) gives that.
+fn new_uuid() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let seq = UUID_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let mk = |salt: u8| {
+        let mut h = DefaultHasher::new();
+        (nanos, seq, pid, salt).hash(&mut h);
+        h.finish()
+    };
+    let mut b = [0u8; 16];
+    b[..8].copy_from_slice(&mk(0xA5).to_le_bytes());
+    b[8..].copy_from_slice(&mk(0x5A).to_le_bytes());
+    b[6] = (b[6] & 0x0F) | 0x40; // version 4
+    b[8] = (b[8] & 0x3F) | 0x80; // variant 10xx
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15],
+    )
+}
+
 /// Create a detached tmux session running the chosen agent in `cwd`, tagged so
 /// it can be listed from any backend. The session is persistent: nothing about
 /// it dies with this process (see the module docs for the lifetime model).
@@ -518,6 +552,9 @@ pub fn create_session(
 
     // Build the agent argv (empty for a plain shell).
     let mut argv: Vec<String> = Vec::new();
+    // The agent session id we force at launch, recorded on the terminal so title
+    // extraction can map it to its OWN transcript (see create_session_inner).
+    let mut session_id: Option<String> = None;
     if opt.agent != "shell" {
         argv.push(opt.bin.clone());
         if opt.agent == "claude" {
@@ -539,6 +576,14 @@ pub fn create_session(
             // untouched.
             argv.push("--settings".into());
             argv.push(r#"{"preferredNotifChannel":"terminal_bell"}"#.into());
+            // Force a known session id so THIS terminal resolves to exactly its own
+            // ~/.claude/projects/<enc-cwd>/<uuid>.jsonl. Without it, several Claude
+            // sessions in one cwd all resolve to the newest transcript and show a
+            // single shared title. Claude names the file after the id we pass.
+            let sid = new_uuid();
+            argv.push("--session-id".into());
+            argv.push(sid.clone());
+            session_id = Some(sid);
         } else if opt.agent == "codex" {
             // Same goal for Codex: force a real BEL on turn-completion. Its default
             // `auto` method prefers an OSC-9 desktop notification tmux's bell
@@ -563,7 +608,7 @@ pub fn create_session(
         .map(|a| shell_quote(a))
         .collect::<Vec<_>>()
         .join(" ");
-    create_session_inner(&opt, cwd, cols, rows, agent_cmd)
+    create_session_inner(&opt, cwd, cols, rows, agent_cmd, session_id.as_deref())
 }
 
 /// Create a session that RESUMES the agent's most recent conversation in
@@ -589,7 +634,9 @@ pub fn create_session_resume(
         .and_then(|d| d.resume)
         .ok_or_else(|| format!("{} can't resume a recorded session yet.", opt.label))?;
     let cmd = resume(&skill_core::agents::ResumeCtx { bin: &opt.bin, model, effort });
-    create_session_inner(&opt, cwd, cols, rows, cmd)
+    // No forced session id on resume: `--continue` reopens the existing transcript
+    // (which is also the newest, so the fallback resolves it correctly).
+    create_session_inner(&opt, cwd, cols, rows, cmd, None)
 }
 
 /// Create a session whose agent command is a caller-built shell LINE — e.g.
@@ -607,7 +654,7 @@ pub fn create_session_cmd(
         .into_iter()
         .find(|a| a.id == agent_id)
         .ok_or_else(|| format!("Unknown agent option: {agent_id}"))?;
-    create_session_inner(&opt, cwd, cols, rows, cmd.to_string())
+    create_session_inner(&opt, cwd, cols, rows, cmd.to_string(), None)
 }
 
 fn create_session_inner(
@@ -616,6 +663,7 @@ fn create_session_inner(
     cols: u16,
     rows: u16,
     agent_cmd: String,
+    session_id: Option<&str>,
 ) -> Result<SessionInfo, String> {
     let cwd_resolved = if cwd.trim().is_empty() {
         dirs::home_dir()
@@ -696,6 +744,11 @@ fn create_session_inner(
     set("@ass_agent", &opt.agent);
     set("@ass_cwd", &cwd_resolved);
     set("@ass_created", &secs.to_string());
+    // The forced agent session id (claude), so title extraction maps this terminal
+    // to its own transcript; absent for shells / resumes / pre-existing sessions.
+    if let Some(sid) = session_id {
+        set("@ass_session_id", sid);
+    }
     // Informational only (provenance for debugging) — sessions deliberately
     // outlive their creator, so nothing keys lifecycle off this anymore.
     set("@ass_owner_pid", &owner.to_string());
@@ -744,6 +797,7 @@ fn create_session_inner(
         activity: secs.to_string(),
         // No bell yet — the dot stays dark until the agent finishes a turn.
         bell_at: "0".into(),
+        session_id: session_id.unwrap_or_default().to_string(),
     })
 }
 
@@ -933,7 +987,7 @@ static PASTE_SEQ: AtomicU64 = AtomicU64::new(0);
 fn paste_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("skill-studio")
+        .join("vibestudio")
         .join("pastes")
 }
 

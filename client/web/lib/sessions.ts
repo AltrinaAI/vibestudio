@@ -47,17 +47,41 @@ function persistSeen() {
   }
 }
 
+/** The user's manual rail order (session ids, see `reorder`). Legacy "terminals"
+ *  word kept so the key matches SEEN_KEY / the rail-width key across the rename. */
+const ORDER_KEY = "skillviewer-terminals-order";
+
+function readOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(ORDER_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistOrder() {
+  try {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
- * Stable, chronological order (oldest first) so the rail never reshuffles.
- * tmux lists sessions alphabetically by name, and our names lead with the
- * creating backend's pid — so a backend restart (app relaunch, version upgrade,
- * remote reconnect) would otherwise reorder the whole list under you. Sorting by
- * creation time keeps every existing row put and appends new sessions at the
- * end; the id is a deterministic tiebreak when two share a second.
+ * The user's manual order first (see `reorder`), then chronological (oldest
+ * first, id tiebreak) for any session they haven't placed — new ones, and the
+ * whole list before any drag. Chronological is the stable fallback the rail
+ * always needs: tmux lists by pid-led name, so without a fixed key a backend
+ * restart (relaunch, upgrade, remote reconnect) would reshuffle every row.
  */
 function sortSessions(list: TermSession[]): TermSession[] {
+  const rank = new Map(order.map((id, i) => [id, i] as const));
+  const rk = (s: TermSession) => rank.get(s.id) ?? Number.MAX_SAFE_INTEGER;
   return [...list].sort(
     (a, b) =>
+      rk(a) - rk(b) ||
       (Number(a.created) || 0) - (Number(b.created) || 0) ||
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
@@ -82,6 +106,7 @@ export function isUnread(
 let sessions: TermSession[] = [];
 let loading = true;
 let seen: Record<string, number> = readSeen();
+let order: string[] = readOrder();
 /** The session a VISIBLE workspace is currently showing (null = none visible). */
 let watchedId: string | null = null;
 const listeners = new Set<() => void>();
@@ -156,6 +181,16 @@ export function noteCreated(s: TermSession): void {
     seen = { ...seen, [s.id]: bellOf(s) };
     persistSeen();
   }
+  rebuild();
+}
+
+/** Apply the user's manual rail order (drag- or keyboard-reorder). `orderedIds`
+ *  is the full visual order of the currently-listed sessions; sessions not in it
+ *  (new ones) fall to the end chronologically until placed. */
+export function reorder(orderedIds: string[]): void {
+  order = orderedIds.slice();
+  persistOrder();
+  sessions = sortSessions(sessions);
   rebuild();
 }
 
