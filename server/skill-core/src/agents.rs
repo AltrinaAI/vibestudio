@@ -158,6 +158,8 @@ pub const AGENTS: &[AgentDef] = &[
         launch: None,
         resume: None,
         mcp: None,
+        // Not launchable here, and its on-disk transcript format is unverified (no
+        // install to test against) — wire this once there's a real store to read.
         session_title: None,
     },
     AgentDef {
@@ -178,7 +180,7 @@ pub const AGENTS: &[AgentDef] = &[
             servers_key: "mcp",
             entry: opencode_mcp_entry,
         }),
-        session_title: None, // store is SQLite-only — see session_title.rs
+        session_title: Some(crate::session_title::opencode_title),
     },
 ];
 

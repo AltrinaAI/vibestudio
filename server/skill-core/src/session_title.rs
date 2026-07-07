@@ -1,8 +1,9 @@
 //! A short human title for a live terminal, read from the agent's OWN session
 //! record — far more meaningful than the raw cwd. Hung off `AgentDef.session_title`
 //! (the common agent interface) so each agent contributes what it can and the rest
-//! degrade to `None`. Pure Rust (no SQLite): Claude, Codex, Gemini, Cursor are
-//! covered; opencode's store is SQLite-only and is a follow-up.
+//! degrade to `None`. Claude, Codex, Gemini, Cursor parse their JSONL transcripts;
+//! opencode reads its WAL SQLite store (bundled SQLite). Only openclaw is still
+//! uncovered — it isn't launchable and its on-disk format is unverified.
 //!
 //! Correlation: when the terminal recorded the session id we forced at launch
 //! (`claude --session-id`), it maps to exactly that transcript — the only way to
@@ -10,13 +11,14 @@
 //! other agents, pre-existing terminals) it falls back to the newest-activity
 //! session for the cwd.
 
+use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 const MAX_LEN: usize = 72;
 
@@ -428,6 +430,104 @@ fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
     Some(s[a..b].trim())
 }
 
+// ─── opencode ───
+// opencode records every session as a row in a WAL SQLite db, with the launch cwd
+// in `directory` and a model-summarized `title`. Until it's summarized the title is
+// a "New session - …" / "Child session - …" placeholder — fall back to the first
+// user message then. Opened READ-ONLY (never disturb opencode's writer); any error
+// (locked, schema drift, moved) degrades to None so the caller shows the cwd.
+
+/// One shared db serves every cwd, so the file-mtime `cached()` can't key it — keep
+/// a cwd-keyed cache instead, busted when the db advances (see `oc_sig`).
+type OcCache = HashMap<String, (u64, Option<String>)>;
+static OC_CACHE: LazyLock<Mutex<OcCache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Newest-write signature: the `-wal` moves on every turn, the db itself on
+/// checkpoint — take the max so a fresh turn always re-queries.
+fn oc_sig(db: &Path) -> u64 {
+    let wal = PathBuf::from(format!("{}-wal", db.display()));
+    file_time(&wal, false).unwrap_or(0).max(file_time(db, false).unwrap_or(0))
+}
+
+fn oc_placeholder(t: &str) -> bool {
+    t.starts_with("New session - ") || t.starts_with("Child session - ")
+}
+
+pub fn opencode_title(cwd: &Path, _created: i64, _session_id: Option<&str>) -> Option<String> {
+    opencode_from_db(&home()?.join(".local/share/opencode/opencode.db"), cwd)
+}
+
+fn opencode_from_db(db: &Path, cwd: &Path) -> Option<String> {
+    if !db.is_file() {
+        return None;
+    }
+    let sig = oc_sig(db);
+    let key = cwd.to_string_lossy().to_string();
+    if let Ok(c) = OC_CACHE.lock() {
+        if let Some((s, title)) = c.get(&key) {
+            if *s == sig {
+                return title.clone();
+            }
+        }
+    }
+    let title = oc_query(db, &key);
+    if let Ok(mut c) = OC_CACHE.lock() {
+        c.insert(key, (sig, title.clone()));
+    }
+    title
+}
+
+fn oc_query(db: &Path, cwd: &str) -> Option<String> {
+    // READ_ONLY still reads committed WAL frames; `immutable` would ignore the WAL
+    // and read a stale checkpoint, so don't set it.
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let _ = conn.busy_timeout(Duration::from_millis(200));
+    // Newest top-level session for this cwd; parent_id IS NULL drops subagent sessions.
+    let (id, title): (String, String) = conn
+        .query_row(
+            "SELECT id, title FROM session \
+             WHERE directory = ?1 AND parent_id IS NULL \
+             ORDER BY time_updated DESC LIMIT 1",
+            [cwd],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()?;
+    let title = title.trim();
+    if !title.is_empty() && !oc_placeholder(title) {
+        return Some(truncate(&tidy(title)));
+    }
+    oc_first_user_text(&conn, &id)
+}
+
+/// The earliest user message's text parts, joined — the fallback when the title is
+/// still a placeholder. (json_extract is built into bundled SQLite.)
+fn oc_first_user_text(conn: &Connection, session_id: &str) -> Option<String> {
+    let msg_id: String = conn
+        .query_row(
+            "SELECT id FROM message \
+             WHERE session_id = ?1 AND json_extract(data, '$.role') = 'user' \
+             ORDER BY time_created LIMIT 1",
+            [session_id],
+            |r| r.get(0),
+        )
+        .ok()?;
+    let mut stmt = conn
+        .prepare("SELECT data FROM part WHERE message_id = ?1 ORDER BY time_created")
+        .ok()?;
+    let rows = stmt.query_map([&msg_id], |r| r.get::<_, String>(0)).ok()?;
+    let mut parts = Vec::new();
+    for data in rows.flatten() {
+        if let Ok(v) = serde_json::from_str::<Value>(&data) {
+            if v.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                    parts.push(t.to_string());
+                }
+            }
+        }
+    }
+    clean_prompt(&parts.join(" ")).map(|c| truncate(&c))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,5 +600,40 @@ mod tests {
             between("a<user_query>\n hi there \n</user_query>b", "<user_query>", "</user_query>"),
             Some("hi there")
         );
+    }
+
+    #[test]
+    fn opencode_title_and_fallback() {
+        let dir = std::env::temp_dir().join(format!("octitle-{}-{}", std::process::id(), line!()));
+        fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("opencode.db");
+        // Unique cwds (the OC_CACHE is a process-wide static keyed by cwd).
+        let a = format!("/octest/{}/a", std::process::id());
+        let b = format!("/octest/{}/b", std::process::id());
+        {
+            let c = Connection::open(&db).unwrap();
+            c.execute_batch(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, title TEXT, time_updated INTEGER);
+                 CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+                 CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT);",
+            )
+            .unwrap();
+            let ins = |q: &str| c.execute(q, []).unwrap();
+            // cwd a: newest real title wins over an older one; a subsession is ignored.
+            ins(&format!("INSERT INTO session VALUES ('s1',NULL,'{a}','Fix the parser',100)"));
+            ins(&format!("INSERT INTO session VALUES ('s0',NULL,'{a}','Older title',50)"));
+            ins(&format!("INSERT INTO session VALUES ('sub','s1','{a}','Sub work',999)"));
+            // cwd b: placeholder title → fall back to the first user message's text parts.
+            ins(&format!("INSERT INTO session VALUES ('s2',NULL,'{b}','New session - 2026-06-22T04:07:02.329Z',100)"));
+            ins("INSERT INTO message VALUES ('m1','s2',10,'{\"role\":\"assistant\"}')");
+            ins("INSERT INTO message VALUES ('m2','s2',20,'{\"role\":\"user\"}')");
+            ins("INSERT INTO part VALUES ('p1','m2','s2',20,'{\"type\":\"text\",\"text\":\"Add dark mode\"}')");
+            ins("INSERT INTO part VALUES ('p2','m2','s2',21,'{\"type\":\"file\"}')");
+        }
+        assert_eq!(opencode_from_db(&db, Path::new(&a)), Some("Fix the parser".into()));
+        assert_eq!(opencode_from_db(&db, Path::new(&b)), Some("Add dark mode".into()));
+        assert_eq!(opencode_from_db(&db, Path::new("/octest/none")), None);
+        assert!(opencode_from_db(Path::new("/no/such.db"), Path::new(&a)).is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 }
