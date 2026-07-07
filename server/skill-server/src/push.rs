@@ -34,7 +34,7 @@ const TTL_SECS: u32 = 3600;
 
 /// VAPID `sub` contact (spec-required; a bare localhost URL gets BadJwtToken).
 fn contact() -> String {
-    std::env::var("SKILL_STUDIO_PUSH_CONTACT")
+    std::env::var("VIBESTUDIO_PUSH_CONTACT")
         .unwrap_or_else(|_| "mailto:push@agentskills.io".into())
 }
 

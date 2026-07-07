@@ -812,10 +812,10 @@ pub fn git_discard_all(root: &str) -> Result<(), String> {
 /// Stash message tagging the work we set aside to preview a version, so later we
 /// consume EXACTLY that stash (never an unrelated one the user made) and so a
 /// crash leaves a findable, single entry rather than a pile.
-const PREVIEW_STASH_MSG: &str = "skill-studio: version preview";
+const PREVIEW_STASH_MSG: &str = "vibestudio: version preview";
 /// Local-config key remembering the branch we detached from, so returning to
 /// "current" — or recovering after a crash/reload — reattaches to the right place.
-const PREVIEW_BRANCH_CFG: &str = "skillstudio.previewbranch";
+const PREVIEW_BRANCH_CFG: &str = "vibestudio.previewbranch";
 
 /// The branch HEAD points at, or None when detached (i.e. mid-preview).
 pub(crate) fn current_branch(root: &Path) -> Option<String> {

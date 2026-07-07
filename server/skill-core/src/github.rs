@@ -7,7 +7,7 @@
 //     setup), * one-click repo creation (user or org, private by default,
 //     EMPTY — no auto_init/README; the first push populates it), * the owner
 //     picker (orgs the user can create repos in), * the `agent-skill` +
-//     `skill-studio` topic badges (GitHub has no repo folders or slashed
+//     `vibestudio` topic badges (GitHub has no repo folders or slashed
 //     names; topics are its grouping primitive).
 //
 // Auth reuses what's already on the machine, most explicit first:
@@ -21,7 +21,7 @@
 // Every candidate is validated against `GET /user` before use; the first valid
 // one wins and is cached for the session. The device flow (no client secret —
 // public client per RFC 8628) covers machines with none of the above, gated on
-// a client id (env `SKILL_STUDIO_GITHUB_CLIENT_ID`); pasting a PAT is the
+// a client id (env `VIBESTUDIO_GITHUB_CLIENT_ID`); pasting a PAT is the
 // universal fallback. The token is handed to the sync engine for github.com
 // remotes only, and rides an env var into a one-shot credential helper — never
 // argv or the remote URL.
@@ -37,12 +37,12 @@ use crate::process::hidden_command;
 use crate::remotesync;
 
 const API: &str = "https://api.github.com";
-const USER_AGENT: &str = "skill-studio";
+const USER_AGENT: &str = "vibestudio";
 /// Topics set on repos we create: `agent-skill` is the ecosystem-wide marker
-/// (this repo IS an Agent Skill), `skill-studio` marks it as managed by Skill
+/// (this repo IS an Agent Skill), `vibestudio` marks it as managed by Skill
 /// Studio. All of an owner's skills are one filter away
-/// (`gh search repos --topic skill-studio`).
-const SKILL_TOPICS: [&str; 2] = ["agent-skill", "skill-studio"];
+/// (`gh search repos --topic vibestudio`).
+const SKILL_TOPICS: [&str; 2] = ["agent-skill", "vibestudio"];
 /// OAuth device-flow client id. Baked in when the VibeStudio OAuth app is
 /// registered; until then the env var enables the flow for development.
 const DEFAULT_CLIENT_ID: &str = "";
@@ -167,7 +167,7 @@ fn git_credential_token(cwd: &Path) -> Option<String> {
         .args(["credential", "fill"])
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "skill-studio-no-askpass")
+        .env("GIT_ASKPASS", "vibestudio-no-askpass")
         .env("GCM_INTERACTIVE", "never")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -315,7 +315,7 @@ pub fn disconnect() -> Result<(), String> {
 // ───────────────────────────── device flow ─────────────────────────────
 
 fn client_id() -> Option<String> {
-    std::env::var("SKILL_STUDIO_GITHUB_CLIENT_ID")
+    std::env::var("VIBESTUDIO_GITHUB_CLIENT_ID")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -561,7 +561,7 @@ fn create_repo(token: &str, login: &str, owner: &str, repo: &str, private: bool)
     Err(api_err(&format!("create {owner}/{repo}"), &c))
 }
 
-/// Badge the repo (agent-skill + skill-studio) so all of an owner's skills are
+/// Badge the repo (agent-skill + vibestudio) so all of an owner's skills are
 /// one topic-filter away and Studio-managed repos are identifiable.
 /// Best-effort — a policy that forbids topics shouldn't fail the publish.
 fn set_skill_topics(token: &str, owner: &str, repo: &str) {

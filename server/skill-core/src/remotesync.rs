@@ -24,7 +24,7 @@ use crate::process::hidden_command;
 
 /// Env var a one-shot git credential helper reads the token from (kept out of
 /// argv and remote URLs, so it never shows in `ps` or `git remote -v`).
-const TOKEN_ENV: &str = "SKILL_STUDIO_GH_TOKEN";
+const TOKEN_ENV: &str = "VIBESTUDIO_GH_TOKEN";
 
 /// `.env` and friends never leave the machine.
 pub(crate) fn is_env_file(name: &str) -> bool {
@@ -43,7 +43,7 @@ pub(crate) fn git_net(root: &Path, token: Option<&str>, args: &[&str]) -> Result
     cmd.arg("-C")
         .arg(root)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "skill-studio-no-askpass")
+        .env("GIT_ASKPASS", "vibestudio-no-askpass")
         .env("GCM_INTERACTIVE", "never");
     if std::env::var_os("GIT_SSH_COMMAND").is_none()
         && gitops::git_ok(root, &["config", "core.sshcommand"]).is_none()

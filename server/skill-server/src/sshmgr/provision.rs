@@ -17,7 +17,7 @@ use super::ssh::{self, Transport};
 /// literal, unlike `format!`).
 const INSTALL_SCRIPT: &str = r#"set -e
 ver="__VERSION__"
-dir="$HOME/.skill-studio/server/$ver"
+dir="$HOME/.vibestudio/server/$ver"
 bin="$dir/skill-server"
 if [ -x "$bin" ] && "$bin" --version >/dev/null 2>&1; then echo INSTALLED; exit 0; fi
 mkdir -p "$dir"
@@ -47,7 +47,7 @@ echo DOWNLOADED
 
 /// The no-downloader fallback's remote side: receive the binary on stdin, install it.
 const PIPE_SCRIPT: &str = r#"set -e
-dir="$HOME/.skill-studio/server/__VERSION__"
+dir="$HOME/.vibestudio/server/__VERSION__"
 mkdir -p "$dir"
 tmp="$dir/skill-server.tmp.$$"
 cat > "$tmp"
@@ -56,20 +56,20 @@ mv -f "$tmp" "$dir/skill-server"
 "#;
 
 /// How many version-pinned `skill-server` binaries to keep on a remote. Each connect
-/// provisions one under `~/.skill-studio/server/<version>/`; without pruning, iterating
+/// provisions one under `~/.vibestudio/server/<version>/`; without pruning, iterating
 /// on the app (a new version per release) would pile them up forever. We retain the most
 /// recently used few and delete the rest.
 const KEEP_VERSIONS: usize = 3;
 
 /// Remote-side prune: mark the version we just provisioned as most-recently-used, then
 /// delete all but the newest `KEEP_VERSIONS` version directories under
-/// `~/.skill-studio/server`. mtime-ordered with a touch-on-use, so it's effectively LRU
+/// `~/.vibestudio/server`. mtime-ordered with a touch-on-use, so it's effectively LRU
 /// and the version we're about to launch is always kept. Deleting a binary another client
 /// still has running is safe on Unix (the live process keeps its open inode); that client
 /// just re-downloads on its next connect. `__VERSION__`/`__KEEP_PLUS_1__` are substituted
 /// (raw string ⇒ literal shell braces, like the install scripts above).
 const PRUNE_SCRIPT: &str = r#"set -e
-root="$HOME/.skill-studio/server"
+root="$HOME/.vibestudio/server"
 cur="__VERSION__"
 [ -d "$root" ] || exit 0
 [ -e "$root/$cur" ] && touch "$root/$cur" 2>/dev/null || true
@@ -81,11 +81,11 @@ exit 0
 
 /// The release version whose `skill-server` asset we prefer. Defaults to the running
 /// app's version (`app_version`, from `tauri.conf.json`, which CI stamps from the
-/// release tag); override with `SKILL_STUDIO_SERVER_VERSION`. A released build's version
+/// release tag); override with `VIBESTUDIO_SERVER_VERSION`. A released build's version
 /// exact-matches its tag; an unstamped dev build sits at the placeholder `0.1.0` that
 /// was never released, so `candidate_urls` falls back to the latest release.
 pub fn server_version(app_version: &str) -> String {
-    std::env::var("SKILL_STUDIO_SERVER_VERSION")
+    std::env::var("VIBESTUDIO_SERVER_VERSION")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| app_version.to_string())
@@ -95,14 +95,14 @@ pub fn server_version(app_version: &str) -> String {
 /// build pins the remote server to the exact version it ships, never drifting to a
 /// newer/incompatible API), then the latest release (so an unstamped dev build — or any
 /// version that was never published — still resolves to something current). Override the
-/// whole scheme with `SKILL_STUDIO_SERVER_BASE_URL` (no trailing slash; the asset name
+/// whole scheme with `VIBESTUDIO_SERVER_BASE_URL` (no trailing slash; the asset name
 /// `skill-server-<target>` is appended) — when set, only that single URL is tried.
 fn candidate_urls(version: &str, target: &str) -> Vec<String> {
     let asset = format!("skill-server-{target}");
-    if let Some(base) = std::env::var("SKILL_STUDIO_SERVER_BASE_URL").ok().filter(|v| !v.is_empty()) {
+    if let Some(base) = std::env::var("VIBESTUDIO_SERVER_BASE_URL").ok().filter(|v| !v.is_empty()) {
         return vec![format!("{}/{asset}", base.trim_end_matches('/'))];
     }
-    let releases = "https://github.com/AltrinaAI/skill-studio/releases";
+    let releases = "https://github.com/AltrinaAI/vibestudio/releases";
     vec![
         format!("{releases}/download/v{version}/{asset}"),
         format!("{releases}/latest/download/{asset}"),
@@ -144,7 +144,7 @@ pub fn detect(t: &Transport) -> Result<Platform, String> {
 /// release instead of failing the whole connect.
 pub fn ensure_installed(t: &Transport, platform: &Platform, app_version: &str) -> Result<String, String> {
     let version = server_version(app_version);
-    let bin = format!("$HOME/.skill-studio/server/{version}/skill-server");
+    let bin = format!("$HOME/.vibestudio/server/{version}/skill-server");
     let urls = candidate_urls(&version, platform.target);
 
     let mut last = String::new();
@@ -175,8 +175,8 @@ pub fn ensure_installed(t: &Transport, platform: &Platform, app_version: &str) -
     }
     Err(format!(
         "Couldn't download skill-server for {} (app version {version}). Tried: {}. The matching \
-         release may not be published yet — set SKILL_STUDIO_SERVER_VERSION or \
-         SKILL_STUDIO_SERVER_BASE_URL to override. Last error: {last}",
+         release may not be published yet — set VIBESTUDIO_SERVER_VERSION or \
+         VIBESTUDIO_SERVER_BASE_URL to override. Last error: {last}",
         platform.target,
         urls.join(", ")
     ))

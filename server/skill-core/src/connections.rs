@@ -27,7 +27,7 @@ const EXPIRY_SLACK: u64 = 60;
 const AGENT_CLI_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// One stored connection. Persisted verbatim (camelCase JSON) in
-/// `~/.config/skill-studio/connections.json`; never returned over the API —
+/// `~/.config/vibestudio/connections.json`; never returned over the API —
 /// the UI sees the token-free [`ConnectionInfo`] projection.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1003,7 +1003,7 @@ mod tests {
     fn json_file_set_skips_absent_agent() {
         // An agent whose home dir doesn't exist is a no-op — we never create a
         // config file for an agent that isn't installed (add or remove).
-        let missing = ".skill-studio-nonexistent-agent-xyz";
+        let missing = ".vibestudio-nonexistent-agent-xyz";
         assert!(!json_file_set(missing, &format!("{missing}/x.json"), "mcpServers", "n", Some(json!({ "url": "u" }))));
         assert!(!json_file_set(missing, &format!("{missing}/x.json"), "mcpServers", "n", None));
     }

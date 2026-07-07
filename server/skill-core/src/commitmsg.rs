@@ -124,12 +124,12 @@ fn store_cached(root: &str, hash: u64, message: &str) {
 
 /// Record the diff + raw backend output + final message, so "why did it say
 /// that?" is always answerable. The latest generation is ALWAYS written (overwrite)
-/// to `<data-dir>/skill-studio/commitmsg-last.log`. Set `SKILL_STUDIO_COMMIT_DEBUG=1`
+/// to `<data-dir>/vibestudio/commitmsg-last.log`. Set `VIBESTUDIO_COMMIT_DEBUG=1`
 /// to ALSO keep an appended history in `commitmsg-debug.log` (and, for the llama
 /// backend, to unsilence the engine logs).
 fn debug_log(root: &str, diff: &str, g: &commit_agent::Generated, final_msg: &str) {
     let Some(base) = dirs::data_dir() else { return };
-    let dir = base.join("skill-studio");
+    let dir = base.join("vibestudio");
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -142,7 +142,7 @@ fn debug_log(root: &str, diff: &str, g: &commit_agent::Generated, final_msg: &st
     // Always available: the most recent generation, overwritten each call.
     let _ = std::fs::write(dir.join("commitmsg-last.log"), &entry);
     // Opt-in: the full appended history.
-    if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_some() {
+    if std::env::var_os("VIBESTUDIO_COMMIT_DEBUG").is_some() {
         if let Ok(mut f) =
             std::fs::OpenOptions::new().create(true).append(true).open(dir.join("commitmsg-debug.log"))
         {

@@ -34,7 +34,7 @@ command** that needs the secrets — this only *reads* a file, so it works even
 when HOME is read-only:
 
 ```bash
-. "${SKILL_STUDIO_ENV:-$HOME/.config/skill-studio/env}" && your-command
+. "${VIBESTUDIO_ENV:-$HOME/.config/vibestudio/env}" && your-command
 ```
 
 If it reports that no secrets are configured, add them in VibeStudio and run

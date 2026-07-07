@@ -82,7 +82,7 @@ jobs:
       # NOTE: the on-device llama.cpp engine + CUDA bridge are no longer bundled.
       # Commit-message drafting defaults to shelling out to a logged-in coding-agent
       # CLI (see skill-core/commit_agent.rs); the engine is an opt-in offline
-      # backend the user provides (scripts/fetch-engine.sh + SKILL_STUDIO_LLAMA_SERVER).
+      # backend the user provides (scripts/fetch-engine.sh + VIBESTUDIO_LLAMA_SERVER).
 
       # Stamp the release version (the pushed tag, minus the leading `v`) into the
       # server workspace and desktop package so both binaries build at the tag version.
@@ -178,7 +178,7 @@ jobs:
         if: ${{ always() && github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@v7
         with:
-          name: skill-studio-${{ matrix.platform }}
+          name: vibestudio-${{ matrix.platform }}
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -196,7 +196,7 @@ jobs:
   # as the desktop bundles (needs: build, which creates the draft via tauri-action).
   # The desktop fetches the asset from the release tag matching its own version (the
   # "Sync app version from tag" step above stamps that version), so a fresh remote
-  # downloads the right binary. (Build-time override: SKILL_STUDIO_SERVER_BASE_URL.)
+  # downloads the right binary. (Build-time override: VIBESTUDIO_SERVER_BASE_URL.)
   server-binaries:
     name: skill-server (${{ matrix.target }})
     # Run AFTER build (so the draft release usually exists) but NOT gated on its

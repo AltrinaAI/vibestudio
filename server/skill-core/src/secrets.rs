@@ -101,13 +101,8 @@ pub struct SetupResult {
 }
 
 pub(crate) fn config_dir() -> Result<PathBuf, String> {
-    if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
-        if !x.is_empty() {
-            return Ok(PathBuf::from(x).join("skill-studio"));
-        }
-    }
-    let home = dirs::home_dir().ok_or_else(|| "Cannot locate home directory.".to_string())?;
-    Ok(home.join(".config").join("skill-studio"))
+    // One resolver for the whole app (incl. the pre-rebrand → vibestudio migration).
+    crate::paths::config_dir()
 }
 
 fn store_path() -> Result<PathBuf, String> {

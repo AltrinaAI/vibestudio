@@ -2,7 +2,7 @@ import { useState } from "react";
 import { btnPrimary, btnGhost, Spinner } from "@/components/ui";
 import { useUpdate, applyUpdate } from "@/lib/updates";
 
-const DISMISS_KEY = "skillstudio-update-dismissed";
+const DISMISS_KEY = "vibestudio-update-dismissed";
 
 /** Floating bottom-right update prompt. "Later" hides it for that version only —
  *  a newer release re-prompts. */

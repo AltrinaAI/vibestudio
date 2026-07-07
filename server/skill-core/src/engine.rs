@@ -92,17 +92,17 @@ pub fn model_status() -> ModelStatus {
 
 // ───────────────────────────── model on disk ─────────────────────────────
 
-/// Directory the GGUF is cached in: `$SKILL_STUDIO_MODEL_DIR` or the per-OS data
+/// Directory the GGUF is cached in: `$VIBESTUDIO_MODEL_DIR` or the per-OS data
 /// dir (`~/Library/Application Support`, `%APPDATA%`, `$XDG_DATA_HOME`) under
-/// `skill-studio/models`.
+/// `vibestudio/models`.
 fn model_dir() -> Result<PathBuf, String> {
-    if let Ok(d) = std::env::var("SKILL_STUDIO_MODEL_DIR") {
+    if let Ok(d) = std::env::var("VIBESTUDIO_MODEL_DIR") {
         if !d.is_empty() {
             return Ok(PathBuf::from(d));
         }
     }
     let base = dirs::data_dir().ok_or_else(|| "Cannot locate a data directory for models.".to_string())?;
-    Ok(base.join("skill-studio").join("models"))
+    Ok(base.join("vibestudio").join("models"))
 }
 
 fn model_path(spec: &ModelSpec) -> Result<PathBuf, String> {
@@ -110,16 +110,16 @@ fn model_path(spec: &ModelSpec) -> Result<PathBuf, String> {
 }
 
 /// Resolve the model to a usable local GGUF, downloading it on first use.
-/// A local override (`SKILL_STUDIO_COMMIT_MODEL_PATH`) wins — for airgapped /
+/// A local override (`VIBESTUDIO_COMMIT_MODEL_PATH`) wins — for airgapped /
 /// WSL2 installs that import a `.gguf` manually.
 fn ensure_model() -> Result<PathBuf, String> {
-    if let Ok(p) = std::env::var("SKILL_STUDIO_COMMIT_MODEL_PATH") {
+    if let Ok(p) = std::env::var("VIBESTUDIO_COMMIT_MODEL_PATH") {
         if !p.is_empty() {
             let path = PathBuf::from(p);
             return if path.exists() {
                 Ok(path)
             } else {
-                Err(format!("SKILL_STUDIO_COMMIT_MODEL_PATH does not exist: {}", path.display()))
+                Err(format!("VIBESTUDIO_COMMIT_MODEL_PATH does not exist: {}", path.display()))
             };
         }
     }
@@ -257,7 +257,7 @@ fn engine() -> &'static Mutex<Option<Engine>> {
 }
 
 /// Resolve the `llama-server` executable, in priority order:
-///   1. `SKILL_STUDIO_LLAMA_SERVER` (explicit override; the Tauri app also sets
+///   1. `VIBESTUDIO_LLAMA_SERVER` (explicit override; the Tauri app also sets
 ///      this to the bundled resource path on the user's machine).
 ///   2. Next to our own binary (where a Tauri sidecar would land).
 ///   3. The repo's vendored tree `<repo>/client/desktop/binaries/<triple>/` — covers
@@ -266,7 +266,7 @@ fn engine() -> &'static Mutex<Option<Engine>> {
 ///      skipped and (1) carries it.
 ///   4. `PATH`.
 pub(crate) fn engine_binary() -> PathBuf {
-    if let Ok(p) = std::env::var("SKILL_STUDIO_LLAMA_SERVER") {
+    if let Ok(p) = std::env::var("VIBESTUDIO_LLAMA_SERVER") {
         if !p.is_empty() {
             return PathBuf::from(p);
         }
@@ -376,7 +376,7 @@ fn spawn_one(
     ])
     .stdout(Stdio::null())
     // Surface llama-server's own logs when debugging; silent otherwise.
-    .stderr(if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_some() {
+    .stderr(if std::env::var_os("VIBESTUDIO_COMMIT_DEBUG").is_some() {
         Stdio::inherit()
     } else {
         Stdio::null()
@@ -401,7 +401,7 @@ fn spawn_one(
         format!(
             "Couldn't start the local AI engine (llama-server): {e}. \
              It should ship with the app; for a dev build run scripts/fetch-engine.sh, \
-             or set SKILL_STUDIO_LLAMA_SERVER to a llama-server path."
+             or set VIBESTUDIO_LLAMA_SERVER to a llama-server path."
         )
     })?;
 

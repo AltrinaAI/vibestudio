@@ -51,7 +51,7 @@ bytes as a blob precisely so a rejection isn't saved as the "file").
 *Reference (keyless commit messages):* `commitmsg.rs` (diff prep, cache) → `commit_agent.rs`
 shells out to a logged-in coding-agent CLI (Claude Code → Codex → Gemini, keyless via
 subscription OAuth; opencode last, BYO-key); `engine.rs` (llama.cpp) is opt-in offline
-(`SKILL_STUDIO_COMMIT_AGENT=llama`). Routes `POST /api/commit-message/generate`,
+(`VIBESTUDIO_COMMIT_AGENT=llama`). Routes `POST /api/commit-message/generate`,
 `GET /api/commit-message/model-status` → `api.generateCommitMessage()` / `api.commitModelStatus()`.
 
 ## UI layout (frontend IA)
@@ -92,7 +92,7 @@ at the empty repo and prompt on first manual save).
   nest `.git` in someone's project); already-`.git` roots are skipped. `ensure_exclude` seeds a
   local `.git/info/exclude` (never a committed `.gitignore`) before `git add -A`.
 - **Opt-out is sticky:** `git-untrack` deletes the skill's `.git` and denylists its path
-  (`~/.config/skill-studio/untracked.json`) so discovery won't re-create it; `git-track` clears
+  (`~/.config/vibestudio/untracked.json`) so discovery won't re-create it; `git-track` clears
   it + re-baselines. Untrack refuses when a parent repo owns history.
 - Routes: `git-track`/`git-untrack`, `git-commit` (Save-version) + `git-log`/`git-status`/
   `git-info`; surfaced in `SourceControl.tsx`.
@@ -270,7 +270,7 @@ A **local proxy switchboard**; the webview never changes origin.
 - **Same code everywhere;** two gates keep it from brokering where it shouldn't: a provisioned
   remote (`--lifeline-stdin`) and a non-loopback bind both leave `ServerConfig::remote = None`.
   Provisioning pulls `skill-server-<target>` from the GitHub release matching the app version
-  (override via `SKILL_STUDIO_SERVER_BASE_URL` / `_VERSION`).
+  (override via `VIBESTUDIO_SERVER_BASE_URL` / `_VERSION`).
 
 ## Roadmap
 

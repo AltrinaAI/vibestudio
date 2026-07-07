@@ -1,8 +1,8 @@
 [package]
-name = "skill-studio"
+name = "vibestudio"
 version = "0.0.0"
 description = "View and edit Agent Skills"
-authors = ["General Agency"]
+authors = ["Altrina"]
 edition = "2021"
 rust-version = "1.77"
 

@@ -2,7 +2,7 @@
 //   1. Console output — `debug`/`info` only in dev (Vite's `import.meta.env.DEV`);
 //      `warn`/`error` always. Namespaced by a `scope` string so it's greppable.
 //   2. Pipe `warn`/`error` to the backend so they land in the on-disk server log
-//      (skill-studio.log) — the ONLY way to see frontend problems in a packaged app
+//      (vibestudio.log) — the ONLY way to see frontend problems in a packaged app
 //      (the webview devtools console isn't reachable there).
 //
 // Networking is deliberately minimal: only warn/error (plus uncaught errors via the

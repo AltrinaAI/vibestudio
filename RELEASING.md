@@ -100,7 +100,7 @@ the agent session driving the release). Verify against a throwaway server instea
 ```bash
 # fresh server on a spare port, no auth token:
 cargo build -p skill-server   # workspace target is ./target, NOT ./server/target
-env -u SKILL_STUDIO_SERVER_TOKEN ./target/debug/skill-server --port 8799 &
+env -u VIBESTUDIO_SERVER_TOKEN ./target/debug/skill-server --port 8799 &
 # vite pointed at it (its /api proxy target is overridable):
 VITE_API_TARGET=http://127.0.0.1:8799 npx vite --port 1421 --strictPort &
 ```
@@ -121,7 +121,7 @@ skill root from `GET /api/skills/discover`, reached via `/#/skills/<encoded-root
 - **Hash router** — screenshots/deep links need `/#/…`.
 - **Updater pubkey guard** — CI fails fast if `tauri.conf.json` still carries the
   placeholder pubkey; the real key must be committed. The private key
-  (`~/.tauri/skill-studio.key`) is the only readable copy — do not lose it.
+  (`~/.tauri/vibestudio.key`) is the only readable copy — do not lose it.
 - **macOS** signing/notarization secrets and the **updater signing key** live in
   repo Actions secrets (see `release.yml` env). Windows Authenticode is wired but
   currently off (no cert).

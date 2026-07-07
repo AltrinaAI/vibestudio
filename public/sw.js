@@ -8,7 +8,7 @@
  *    handler; older iOS and other engines get it here and we render the same
  *    JSON ourselves.
  */
-const SHELL = "skillstudio-shell-v1";
+const SHELL = "vibestudio-shell-v1";
 const PRECACHE = ["/", "/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (e) => {

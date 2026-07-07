@@ -7,10 +7,10 @@
 //! so it's the exception to the scrub rule below. Same shell-out philosophy as
 //! `gitops`→`git` and `engine`→`llama-server`. The on-device `engine` (llama.cpp)
 //! is still here but DEMOTED to an opt-in offline backend
-//! (`SKILL_STUDIO_COMMIT_AGENT=llama`); it is no longer bundled.
+//! (`VIBESTUDIO_COMMIT_AGENT=llama`); it is no longer bundled.
 //!
 //! Precedence (first that's installed AND logged in): explicit
-//! `SKILL_STUDIO_COMMIT_AGENT` → claude → codex → gemini → opencode → manual.
+//! `VIBESTUDIO_COMMIT_AGENT` → claude → codex → gemini → opencode → manual.
 //! opencode sits last because it's the only one that may bill a metered API key
 //! rather than a flat subscription. `llama` is never auto-selected — it must be
 //! opted in.
@@ -206,11 +206,11 @@ pub fn status() -> CommitStatus {
 fn no_backend_message() -> String {
     if any_installed() {
         "No logged-in coding-agent CLI. Run `claude` (or `codex` / `gemini` / `opencode`) once to log in — \
-         or set SKILL_STUDIO_COMMIT_AGENT=llama to use the on-device model."
+         or set VIBESTUDIO_COMMIT_AGENT=llama to use the on-device model."
             .into()
     } else {
         "No commit-message generator available. Install and log in to claude, codex, gemini, or opencode — \
-         or set SKILL_STUDIO_COMMIT_AGENT=llama to use the on-device model."
+         or set VIBESTUDIO_COMMIT_AGENT=llama to use the on-device model."
             .into()
     }
 }
@@ -222,9 +222,9 @@ const CODEX_BINS: &[&str] = &["codex"];
 const GEMINI_BINS: &[&str] = &["gemini"];
 const OPENCODE_BINS: &[&str] = &["opencode"];
 
-/// Raw lowercased `SKILL_STUDIO_COMMIT_AGENT`, if set and non-empty.
+/// Raw lowercased `VIBESTUDIO_COMMIT_AGENT`, if set and non-empty.
 fn env_choice() -> Option<String> {
-    let v = std::env::var("SKILL_STUDIO_COMMIT_AGENT").ok()?;
+    let v = std::env::var("VIBESTUDIO_COMMIT_AGENT").ok()?;
     let v = v.trim().to_ascii_lowercase();
     (!v.is_empty()).then_some(v)
 }
@@ -459,7 +459,7 @@ fn run_codex(bin: &PathBuf, diff: &str) -> Result<Generated, String> {
     // codex's clean answer is only in the --output-last-message file; stdout is a
     // noisy session banner. Use a per-call temp file (unique across concurrent
     // generations) and remove it after reading.
-    let out_path = std::env::temp_dir().join(format!("skill-studio-codex-{}.txt", unique_suffix()));
+    let out_path = std::env::temp_dir().join(format!("vibestudio-codex-{}.txt", unique_suffix()));
     let mut cmd = hidden_command(bin);
     scrub(&mut cmd, &["OPENAI_API_KEY", "CODEX_API_KEY"]);
     neutral_cwd(&mut cmd);
@@ -640,7 +640,7 @@ pub(crate) fn run_proc(mut cmd: Command, stdin_data: Option<&str>, timeout: Dura
 mod tests {
     use super::*;
 
-    /// One test owns the process-global SKILL_STUDIO_COMMIT_AGENT (a second test
+    /// One test owns the process-global VIBESTUDIO_COMMIT_AGENT (a second test
     /// touching it would race under cargo's parallel runner). Covers both the
     /// offline opt-in and the named-backend override; the override branch of
     /// `detect_backend` returns directly with no filesystem probe, so the backend
@@ -648,7 +648,7 @@ mod tests {
     #[test]
     fn env_override_drives_offline_and_backend() {
         // No env override → not offline (default is the cloud CLI chain).
-        std::env::remove_var("SKILL_STUDIO_COMMIT_AGENT");
+        std::env::remove_var("VIBESTUDIO_COMMIT_AGENT");
         assert!(!offline_opted_in());
 
         for (val, want, offline) in [
@@ -659,11 +659,11 @@ mod tests {
             ("opencode", Backend::Opencode, false),
             ("off", Backend::None, false),
         ] {
-            std::env::set_var("SKILL_STUDIO_COMMIT_AGENT", val);
+            std::env::set_var("VIBESTUDIO_COMMIT_AGENT", val);
             assert_eq!(detect_backend(), want, "backend for env={val}");
             assert_eq!(offline_opted_in(), offline, "offline for env={val}");
         }
-        std::env::remove_var("SKILL_STUDIO_COMMIT_AGENT");
+        std::env::remove_var("VIBESTUDIO_COMMIT_AGENT");
         assert_eq!(Backend::Opencode.id(), "opencode");
     }
 

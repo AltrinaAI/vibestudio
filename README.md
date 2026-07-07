@@ -1,14 +1,14 @@
-# Skill Studio
+# VibeStudio
 
 The best human interface for **[Agent Skills](https://agentskills.io/home)**. Available on macOS, Linux, and Windows.
 
-![Skill Studio — recent skills, skill mining, and the discovered skills library](./Screenshot.png)
+![VibeStudio — recent skills, skill mining, and the discovered skills library](./Screenshot.png)
 
 We love [agent skills](https://agentskills.io/home). As agents get more powerful, it's easy to feel like losing control over the direction of your project or organization. We think agent skills is the right place to specify your taste, expertise, and customize your way of doing things on an organization level. 
 
 There just isn't a good human interface for editing agent skills. Any place that requires human creativity needs a good human interface: clean, intuitive, version controlled. So we built one and open-sourced it. 
 
-Built with [Tauri](https://tauri.app/), Skill Studio runs on macOS, Linux, and Windows, and connects to any remote dev setup you have natively VS Code style (see [`design.md`](./design.md)). 
+Built with [Tauri](https://tauri.app/), VibeStudio runs on macOS, Linux, and Windows, and connects to any remote dev setup you have natively VS Code style (see [`design.md`](./design.md)). 
 
 ## Features
 
@@ -24,30 +24,30 @@ Grab the latest build for your platform:
 
 | Platform | |
 |----------|--|
-| **macOS** — Apple silicon & Intel | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-macOS.dmg) |
-| **Windows** | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-Windows-x64-setup.exe) |
-| **Linux** — Debian/Ubuntu | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-Linux-x86_64.deb) |
+| **macOS** — Apple silicon & Intel | [Download](https://github.com/AltrinaAI/vibestudio/releases/latest/download/VibeStudio-macOS.dmg) |
+| **Windows** | [Download](https://github.com/AltrinaAI/vibestudio/releases/latest/download/VibeStudio-Windows-x64-setup.exe) |
+| **Linux** — Debian/Ubuntu | [Download](https://github.com/AltrinaAI/vibestudio/releases/latest/download/VibeStudio-Linux-x86_64.deb) |
 
 ### First launch
 
 Windows builds aren't code-signed yet, so each shows a one-time prompt:
 
 - **Windows** — SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**.
-- **Linux** — install the package with `sudo apt install ./Skill-Studio-Linux-x86_64.deb`.
+- **Linux** — install the package with `sudo apt install ./VibeStudio-Linux-x86_64.deb`.
 
 ## Use from a browser (phone included)
 
 The backend serves the full app over plain HTTP, meaning all you need is a browser pointed at the skill-server to run the entire app. 
 
-**In the app:** click the **Local** pill → **Open on your phone…** → scan the QR. The app fronts its own server with [Tailscale](https://tailscale.com) (free) and walks you through the two one-time Tailscale permissions if needed. Any device signed in to your Tailscale network can open the URL. Closing the window keeps Skill Studio (and phone access) running in your tray; right-click the tray icon to quit entirely.
+**In the app:** click the **Local** pill → **Open on your phone…** → scan the QR. The app fronts its own server with [Tailscale](https://tailscale.com) (free) and walks you through the two one-time Tailscale permissions if needed. Any device signed in to your Tailscale network can open the URL. Closing the window keeps VibeStudio (and phone access) running in your tray; right-click the tray icon to quit entirely.
 
 ## Build from source
 
 Install Rust, Node.js/npm, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS, then:
 
 ```bash
-git clone https://github.com/AltrinaAI/skill-studio.git
-cd skill-studio
+git clone https://github.com/AltrinaAI/vibestudio.git
+cd vibestudio
 npm install
 npm run tauri -- build
 ```

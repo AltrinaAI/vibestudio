@@ -146,7 +146,7 @@ export function useRemote(): RemoteSnapshot & {
 // rebinds the whole window (skills, files, git, secrets, terminals, recents) to the
 // remote. At most once per launch: sessionStorage survives the connect-triggered
 // reload but resets on a fresh app start, so disconnecting stays Local for the session.
-const RESUME_KEY = "skillstudio-remote-resumed";
+const RESUME_KEY = "vibestudio-remote-resumed";
 async function maybeResume(): Promise<void> {
   if (!snapshot.available) return; // this server has no remoting
   if (snapshot.status.state !== "idle") return; // already connecting/connected/errored

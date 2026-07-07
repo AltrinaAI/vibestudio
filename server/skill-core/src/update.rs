@@ -15,9 +15,9 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
-const RELEASE_URL: &str = "https://github.com/AltrinaAI/skill-studio/releases/latest";
+const RELEASE_URL: &str = "https://github.com/AltrinaAI/vibestudio/releases/latest";
 const LATEST_JSON_URL: &str =
-    "https://github.com/AltrinaAI/skill-studio/releases/latest/download/latest.json";
+    "https://github.com/AltrinaAI/vibestudio/releases/latest/download/latest.json";
 /// First check shortly after startup, then a slow steady cadence.
 const FIRST_CHECK: Duration = Duration::from_secs(5);
 const CHECK_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
@@ -88,11 +88,11 @@ fn state() -> MutexGuard<'static, State> {
     S.get_or_init(Mutex::default).lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// QA knob: `SKILL_STUDIO_UPDATE_FAKE=<version>` pretends that version is
+/// QA knob: `VIBESTUDIO_UPDATE_FAKE=<version>` pretends that version is
 /// available, no network check. Read at status time so it works without
 /// [`init`] too (a standalone server reports it, with `canAuto: false`).
 fn fake_available() -> Option<AvailableUpdate> {
-    let v = std::env::var("SKILL_STUDIO_UPDATE_FAKE").ok()?;
+    let v = std::env::var("VIBESTUDIO_UPDATE_FAKE").ok()?;
     let v = v.trim().trim_start_matches('v');
     (!v.is_empty()).then(|| AvailableUpdate { version: v.to_string(), notes: None, date: None })
 }
@@ -108,7 +108,7 @@ pub fn init(control: Arc<dyn UpdateControl>, current_version: &str) {
     }
     let _ = CONTROL.set(control);
     let _ = CURRENT.set(current_version.to_string());
-    if std::env::var("SKILL_STUDIO_UPDATE_FAKE").is_ok() || current_version == "0.0.0" {
+    if std::env::var("VIBESTUDIO_UPDATE_FAKE").is_ok() || current_version == "0.0.0" {
         return;
     }
     std::thread::spawn(|| {
@@ -144,7 +144,7 @@ pub fn apply() -> Result<(), String> {
     if fake_available().is_some() {
         // The shell would check the REAL feed and install whatever it finds —
         // on a 0.0.0 dev build that's any published release, over the dev tree.
-        return Err("SKILL_STUDIO_UPDATE_FAKE is set — install is disabled for fake updates.".to_string());
+        return Err("VIBESTUDIO_UPDATE_FAKE is set — install is disabled for fake updates.".to_string());
     }
     let control = CONTROL.get().filter(|c| c.can_install()).ok_or_else(|| {
         "Automatic install isn't available for this build — download the update from GitHub."
@@ -197,9 +197,9 @@ fn agent() -> ureq::Agent {
 /// Fetch `latest.json` and record the version if it's strictly newer than the
 /// running one. Missing `notes`/`pub_date` are fine — only `version` is required.
 fn check_once() -> Result<(), String> {
-    // QA knob: `SKILL_STUDIO_UPDATE_URL` overrides the release-feed URL.
-    let url = std::env::var("SKILL_STUDIO_UPDATE_URL").unwrap_or_else(|_| LATEST_JSON_URL.into());
-    let resp = match agent().get(&url).set("User-Agent", "skill-studio").call() {
+    // QA knob: `VIBESTUDIO_UPDATE_URL` overrides the release-feed URL.
+    let url = std::env::var("VIBESTUDIO_UPDATE_URL").unwrap_or_else(|_| LATEST_JSON_URL.into());
+    let resp = match agent().get(&url).set("User-Agent", "vibestudio").call() {
         Ok(r) => r,
         Err(ureq::Error::Status(code, _)) => return Err(format!("release feed returned {code}")),
         Err(e) => return Err(format!("release feed is unreachable: {e}")),

@@ -209,7 +209,7 @@ fn probe_running(transport: &Transport, version: &str) -> Option<(u16, String)> 
 /// `bin` is remote-`$HOME`-expanded, `remote_port` numeric, `token`/`version` shell-safe.
 fn launch_script(version: &str, bin: &str, remote_port: u16, token: &str) -> String {
     format!(
-        "d=\"$HOME/.skill-studio/server/{version}\"; mkdir -p \"$d\"; \
+        "d=\"$HOME/.vibestudio/server/{version}\"; mkdir -p \"$d\"; \
          printf '%s %s %s' \"$$\" {remote_port} {token} > \"$d/running\"; \
          exec \"{bin}\" --host 127.0.0.1 --port {remote_port} --lifeline-stdin"
     )
@@ -227,7 +227,7 @@ fn reattach_script(remote_port: u16) -> String {
 /// process). Silent (exit 0, no output) on any miss.
 fn probe_script(version: &str) -> String {
     format!(
-        "f=\"$HOME/.skill-studio/server/{version}/running\"; [ -f \"$f\" ] || exit 0; \
+        "f=\"$HOME/.vibestudio/server/{version}/running\"; [ -f \"$f\" ] || exit 0; \
          read pid port token < \"$f\"; [ -n \"$pid\" ] || exit 0; \
          ps -p \"$pid\" -o comm= 2>/dev/null | grep -q skill-server || exit 0; \
          echo \"$port $token\""
@@ -365,12 +365,12 @@ mod tests {
     // stop the server from starting.
     #[test]
     fn launch_script_records_then_execs_server() {
-        let s = launch_script("0.1.4", "$HOME/.skill-studio/server/0.1.4/skill-server", 39544, "abc123");
-        assert!(s.contains("/.skill-studio/server/0.1.4"), "writes under the version dir: {s}");
+        let s = launch_script("0.1.4", "$HOME/.vibestudio/server/0.1.4/skill-server", 39544, "abc123");
+        assert!(s.contains("/.vibestudio/server/0.1.4"), "writes under the version dir: {s}");
         assert!(s.contains("> \"$d/running\""), "persists the running record: {s}");
         assert!(s.contains("\"$$\""), "records the server's own pid via $$: {s}");
         assert!(s.contains(" abc123 > "), "token recorded for reattach compat: {s}");
-        assert!(!s.contains("SKILL_STUDIO_SERVER_TOKEN"), "tokenless launch — no env token: {s}");
+        assert!(!s.contains("VIBESTUDIO_SERVER_TOKEN"), "tokenless launch — no env token: {s}");
         assert!(s.contains("--port 39544") && s.contains("--lifeline-stdin"), "still launches the server: {s}");
         assert!(!s.contains("&&"), "record write joined with ; so it can't block the exec: {s}");
     }
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn probe_script_checks_liveness_and_identity() {
         let s = probe_script("0.1.4");
-        assert!(s.contains("/.skill-studio/server/0.1.4/running"), "reads the version's record: {s}");
+        assert!(s.contains("/.vibestudio/server/0.1.4/running"), "reads the version's record: {s}");
         assert!(s.contains("ps -p \"$pid\"") && s.contains("grep -q skill-server"), "pid alive AND is a skill-server: {s}");
         assert!(s.contains("echo \"$port $token\""), "yields port+token on a hit: {s}");
     }

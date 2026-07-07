@@ -59,7 +59,7 @@ jobs:
       - name: test
         run: cargo test -p skill-core -p skill-term -p skill-server
 
-  # The Tauri shell (client/desktop, crate `skill-studio`). tauri-build validates
+  # The Tauri shell (client/desktop, crate `vibestudio`). tauri-build validates
   # the frontendDist at check time, so the SPA must be built into ./dist first.
   # A `cargo check` (not a full bundle — that's the release's job) catches Rust /
   # tauri.conf drift pre-merge, which today only surfaces when a tag is cut.

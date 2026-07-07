@@ -8,7 +8,7 @@
 // Usage: skill-server [--host H] [--port N] [--dist PATH] [--token T] [--lifeline-stdin]
 //   --port 0        bind an ephemeral port (the chosen port is printed in the ready line)
 //   --token T       require `Authorization: Bearer T` on every request (the SSH case).
-//                   Prefer the SKILL_STUDIO_SERVER_TOKEN env var (keeps the token off
+//                   Prefer the VIBESTUDIO_SERVER_TOKEN env var (keeps the token off
 //                   the process command line); `--token` overrides it for manual use.
 //   --lifeline-stdin  exit when stdin hits EOF — the desktop holds the SSH channel's
 //                     stdin open, so the server dies the instant that session drops
@@ -37,11 +37,11 @@ fn main() {
     let mut host = "127.0.0.1".to_string();
     let mut port: u16 = 8765;
     let mut dist = std::env::var("SKILL_DIST").unwrap_or_else(|_| "dist".to_string());
-    // Prefer the token from the env (SKILL_STUDIO_SERVER_TOKEN) — the desktop delivers
+    // Prefer the token from the env (VIBESTUDIO_SERVER_TOKEN) — the desktop delivers
     // it that way so it stays off the world-readable command line; `--token` still
     // works for manual/standalone use and overrides the env.
     let mut token: Option<String> =
-        std::env::var("SKILL_STUDIO_SERVER_TOKEN").ok().filter(|t| !t.is_empty());
+        std::env::var("VIBESTUDIO_SERVER_TOKEN").ok().filter(|t| !t.is_empty());
     let mut lifeline_stdin = false;
     let mut i = 1;
     while i < args.len() {

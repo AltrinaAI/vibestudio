@@ -170,7 +170,7 @@ pub fn run() {
             // (so `npm run dev` still shows logs). The in-process server shares this
             // process, so its `log::*` records land here too. RUST_LOG-gated; quiet by
             // default. Frontend warns/errors arrive via POST /api/logs/client.
-            let log_path = app.path().app_log_dir().ok().map(|d| d.join("skill-studio.log"));
+            let log_path = app.path().app_log_dir().ok().map(|d| d.join("vibestudio.log"));
             match &log_path {
                 Some(p) => init_logging_to_file(p),
                 None => init_logging(),
@@ -185,9 +185,9 @@ pub fn run() {
             // Point the on-device generator at the bundled/vendored llama-server so
             // it works with no config; an explicit env override still wins. The
             // in-process server shares this process, so it sees the env var.
-            if std::env::var_os("SKILL_STUDIO_LLAMA_SERVER").is_none() {
+            if std::env::var_os("VIBESTUDIO_LLAMA_SERVER").is_none() {
                 if let Some(p) = find_bundled_engine(app) {
-                    std::env::set_var("SKILL_STUDIO_LLAMA_SERVER", p);
+                    std::env::set_var("VIBESTUDIO_LLAMA_SERVER", p);
                 }
             }
             engine::reap_orphans(); // kill any engine orphaned by a previous hard-kill
@@ -236,7 +236,7 @@ pub fn run() {
             // (the phone mapping goes stale until re-enabled, the app still works);
             // dev tolerates the failure outright — an external skill-server may
             // already hold 8765 and back the Vite proxy.
-            let preferred = std::env::var("SKILL_STUDIO_PORT")
+            let preferred = std::env::var("VIBESTUDIO_PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(skill_server::PHONE_PORT);

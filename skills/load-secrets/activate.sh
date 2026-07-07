@@ -6,7 +6,7 @@
 #
 # Most portable (works even in a read-only, fresh-shell sandbox) — source the
 # env file in the SAME command that needs the secrets:
-#   . "$HOME/.config/skill-studio/env" && your-command
+#   . "$HOME/.config/vibestudio/env" && your-command
 #
 # For a persistent shell, load them into the current shell via eval:
 #   eval "$(bash /path/to/load-secrets/activate.sh --print)"
@@ -21,11 +21,11 @@
 # before it has printed the exports the caller actually depends on.
 set -uo pipefail
 
-ENV_FILE="${SKILL_STUDIO_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/skill-studio/env}"
-MARKER='# skill-studio (managed — loads your Skill Studio secrets)'
+ENV_FILE="${VIBESTUDIO_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/vibestudio/env}"
+MARKER='# vibestudio (managed — loads your VibeStudio secrets)'
 
 if [ ! -s "$ENV_FILE" ]; then
-  echo "skill-studio: no secrets configured yet ($ENV_FILE is missing or empty)." >&2
+  echo "vibestudio: no secrets configured yet ($ENV_FILE is missing or empty)." >&2
   echo "Add them in VibeStudio, then run this again." >&2
   exit 0
 fi
@@ -43,7 +43,7 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.profile"; do
   if {
        printf '%s\n' "$MARKER"
        printf '[ -f "%s" ] && . "%s"\n' "$ENV_FILE" "$ENV_FILE"
-       printf '# end skill-studio\n\n'
+       printf '# end vibestudio\n\n'
        cat "$rc" 2>/dev/null || true
      } >"$tmp" 2>/dev/null && mv "$tmp" "$rc" 2>/dev/null; then
     :
@@ -54,5 +54,5 @@ done
 
 # 3. Summary — key names only, plus where to source them directly.
 names="$(sed -n 's/^[[:space:]]*export[[:space:]]\{1,\}\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$ENV_FILE" | paste -sd' ' - 2>/dev/null)"
-echo "skill-studio: ready — ${names:-no secrets found}  (source directly: . '$ENV_FILE')" >&2
+echo "vibestudio: ready — ${names:-no secrets found}  (source directly: . '$ENV_FILE')" >&2
 exit 0

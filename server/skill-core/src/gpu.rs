@@ -15,7 +15,7 @@
 //!
 //! CUDA-only by design (per product decision): no Vulkan/ROCm. macOS needs nothing
 //! here — its build has Metal compiled in, so `-ngl auto` uses the GPU directly.
-//! `SKILL_STUDIO_DISABLE_GPU=1` forces CPU; `SKILL_STUDIO_CUDA_DIR=<dir[:dir...]>`
+//! `VIBESTUDIO_DISABLE_GPU=1` forces CPU; `VIBESTUDIO_CUDA_DIR=<dir[:dir...]>`
 //! points at a CUDA runtime in a non-standard location.
 
 use std::path::{Path, PathBuf};
@@ -44,11 +44,11 @@ pub enum GpuPlan {
 }
 
 /// Decide how to run: built-in Metal on macOS, CUDA on Linux/Windows when an NVIDIA
-/// GPU + bridge are present, otherwise CPU. `SKILL_STUDIO_DISABLE_GPU=1` forces CPU
+/// GPU + bridge are present, otherwise CPU. `VIBESTUDIO_DISABLE_GPU=1` forces CPU
 /// everywhere (incl. Metal). Cheap and side-effect free (filesystem checks + one
 /// quick `nvidia-smi`), so it's safe on the spawn path — no downloads, never blocks.
 pub fn gpu_plan() -> GpuPlan {
-    if std::env::var_os("SKILL_STUDIO_DISABLE_GPU").is_some() {
+    if std::env::var_os("VIBESTUDIO_DISABLE_GPU").is_some() {
         return GpuPlan::Cpu;
     }
     // macOS ships Metal *inside* the engine — there's no separate backend to load;
@@ -137,7 +137,7 @@ fn find_backend_lib(lib_name: &str) -> Option<PathBuf> {
 /// resolvable (the bridge will find it without help) or absent (→ CPU fallback).
 fn cuda_runtime_dirs() -> Vec<PathBuf> {
     // Explicit override wins (airgapped / non-standard installs).
-    if let Ok(v) = std::env::var("SKILL_STUDIO_CUDA_DIR") {
+    if let Ok(v) = std::env::var("VIBESTUDIO_CUDA_DIR") {
         let dirs: Vec<PathBuf> = std::env::split_paths(&v).filter(|p| !p.as_os_str().is_empty()).collect();
         if !dirs.is_empty() {
             return dirs;
@@ -248,7 +248,7 @@ mod tests {
     fn disabled_env_forces_cpu() {
         // Can't toggle process env safely in parallel tests; assert the gate when
         // it happens to be set.
-        if std::env::var_os("SKILL_STUDIO_DISABLE_GPU").is_some() {
+        if std::env::var_os("VIBESTUDIO_DISABLE_GPU").is_some() {
             assert!(matches!(gpu_plan(), GpuPlan::Cpu));
         }
     }
@@ -258,7 +258,7 @@ mod tests {
     fn macos_uses_builtin_metal() {
         // Metal is compiled into the macOS engine: the plan must be BuiltIn (so we
         // pass `-ngl auto`), never Cpu, unless GPU is explicitly disabled.
-        if std::env::var_os("SKILL_STUDIO_DISABLE_GPU").is_none() {
+        if std::env::var_os("VIBESTUDIO_DISABLE_GPU").is_none() {
             assert!(matches!(gpu_plan(), GpuPlan::BuiltIn));
         }
     }
