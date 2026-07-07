@@ -19,6 +19,8 @@ use tauri_plugin_updater::UpdaterExt;
 use skill_core::engine;
 use skill_server::{init_logging, init_logging_to_file, ServerConfig, SshRemoteControl};
 
+mod editor; // ShellEditor: the "Open in VS Code" control (client-side, pinned-local route)
+
 /// Locate the bundled `llama-server` so the on-device commit-message generator
 /// runs with zero setup. Checks the production bundle (resource dir) then the
 /// dev-vendored tree (`client/desktop/binaries/<triple>/`, populated by
@@ -231,6 +233,10 @@ pub fn run() {
             }) as std::sync::Arc<dyn skill_core::update::UpdateControl>;
             let notifier = std::sync::Arc::new(ShellNotifier { app: app.handle().clone() })
                 as std::sync::Arc<dyn skill_server::NotifyControl>;
+            // "Open in VS Code" acts on this machine's screen — a client concern, so
+            // it lives in the shell (see editor.rs), reached over the pinned-local route.
+            let editor = std::sync::Arc::new(editor::ShellEditor)
+                as std::sync::Arc<dyn skill_server::EditorControl>;
             let make_cfg = |port: u16| ServerConfig {
                 host: "127.0.0.1".into(),
                 port,
@@ -245,6 +251,8 @@ pub fn run() {
                 phone: Some(phone.clone()),
                 // OS toasts + dock badge for the SPA's turn-finish notifier.
                 notifier: Some(notifier.clone()),
+                // "Open in VS Code" on this machine (or the remote over Remote-SSH).
+                editor: Some(editor.clone()),
                 ..Default::default()
             };
             // Bind the stable phone port first (it's also dev's Vite proxy target),

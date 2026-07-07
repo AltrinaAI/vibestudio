@@ -10,7 +10,6 @@ import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
 import { log } from "@/lib/log";
 import * as push from "@/lib/push";
-import { useRemote } from "@/lib/remote";
 import * as store from "@/lib/sessions";
 
 // Legacy key string — keep the old "terminals" word so existing users' saved rail width survives the rename.
@@ -91,19 +90,15 @@ export default function SessionsWorkspace({
 
   const location = useLocation();
   const navigate = useNavigate();
-  const remote = useRemote();
 
-  // "Open in VS Code" is offered only when a local VS Code is reachable AND the
-  // sessions are on this machine. While a remote is connected the cwds are the
-  // remote host's paths (opening them locally would be wrong), and the status
-  // route itself 404s for a tailscale-fronted phone client — either way, hidden.
+  // "Open in VS Code" is offered whenever a local VS Code is reachable AND we're on
+  // this machine's own client. It opens the session's folder — locally, or, when a
+  // remote is connected, on the remote over VS Code Remote-SSH (the server decides
+  // which and resolves the ssh host; see EditorControl). No remote coupling here:
+  // the status route runs locally (never proxied) and 404s for a tailscale-fronted
+  // phone client, so the button stays hidden there.
   const [vscode, setVscode] = useState<{ available: boolean; name?: string } | null>(null);
-  const remoteConnected = remote.status.state === "connected";
   useEffect(() => {
-    if (remoteConnected) {
-      setVscode(null);
-      return;
-    }
     let alive = true;
     api.editorStatus().then(
       (e) => void (alive && setVscode(e)),
@@ -112,8 +107,8 @@ export default function SessionsWorkspace({
     return () => {
       alive = false;
     };
-  }, [remoteConnected]);
-  const canOpenEditor = !remoteConnected && !!vscode?.available;
+  }, []);
+  const canOpenEditor = !!vscode?.available;
   const editorName = vscode?.name ?? "VS Code";
   const openInEditor = useCallback((cwd: string) => {
     api.editorOpen(cwd).catch((e) =>

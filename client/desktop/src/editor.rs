@@ -1,46 +1,60 @@
-//! Open a folder in the user's local VS Code — the "Open in VS Code" affordance
-//! on the Sessions page. Pure server-side: locate the `code` CLI and shell out
-//! `code <dir>` through the one sanctioned spawn (`hidden_command`).
+//! The shell's half of [`skill_server::EditorControl`] — the "Open in VS Code"
+//! affordance on the Sessions page. Opening an editor acts on the machine whose
+//! screen the user is at, so it lives HERE in the client shell, not in the
+//! shippable `skill-core` backend (which also runs headless on a remote host and
+//! must never try to pop a window). Reached only over the pinned-local
+//! `/api/editor/*` route (never proxied), same one-way rule as `ShellNotifier`.
+//!
+//! When a remote is connected the folder lives on the remote, so we open it via
+//! VS Code Remote-SSH (`code --remote ssh-remote+<host> <path>`) — a LOCAL window
+//! attached over the same SSH the tunnel uses — instead of a local `code <path>`.
 //!
 //! Locating `code` can't lean on PATH alone: a packaged desktop app is launched
 //! from the dock/menu with a stripped login PATH (notably macOS — `/usr/bin:/bin`
 //! only), so VS Code installed the usual way wouldn't be on it. We search PATH
 //! first, then the well-known install locations per OS (including the CLI shim
-//! inside the macOS `.app` bundle). These routes are pinned local + gated on
-//! `from_this_machine` by the server, so this only ever opens on the screen the
-//! user is actually at — never a remote host or the desktop behind a phone.
+//! inside the macOS `.app` bundle).
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{json, Value};
-
-use crate::process::hidden_command;
+use skill_core::process::hidden_command;
 
 /// The VS Code CLIs we recognize, best first. Both are "VS Code".
 const EDITORS: &[(&str, &str)] = &[("code", "VS Code"), ("code-insiders", "VS Code Insiders")];
 
-/// Whether a local VS Code is reachable, for the UI to show/hide the button.
-/// `{ available, name }` — `name` distinguishes stable from Insiders.
-pub fn status() -> Value {
-    match locate() {
-        Some((_, name)) => json!({ "available": true, "name": name }),
-        None => json!({ "available": false }),
-    }
-}
+/// The shell's editor control, injected into the loopback server as `ctx.editor`.
+pub struct ShellEditor;
 
-/// Launch VS Code on `path` (a session's working directory). Non-blocking — we
-/// spawn and return; the editor window is the user's feedback.
-pub fn open(path: &str) -> Result<(), String> {
-    let path = path.trim();
-    if path.is_empty() {
-        return Err("no folder to open".into());
+impl skill_server::EditorControl for ShellEditor {
+    /// The reachable editor's display name (`Some` → the button shows), or `None`.
+    fn detect(&self) -> Option<String> {
+        locate().map(|(_, name)| name.to_string())
     }
-    let (bin, name) = locate().ok_or("VS Code (the `code` command) was not found on this machine")?;
-    spawn_command(&bin)
-        .arg(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("failed to launch {name}: {e}"))
+
+    /// Launch VS Code on `path` (a session's working directory). Non-blocking — we
+    /// spawn and return; the editor window is the user's feedback. When `remote_host`
+    /// is set the path is on that remote, so open it over VS Code Remote-SSH.
+    fn open(&self, path: &str, remote_host: Option<&str>) -> Result<(), String> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Err("no folder to open".into());
+        }
+        let (bin, name) =
+            locate().ok_or("VS Code (the `code` command) was not found on this machine")?;
+        let mut cmd = spawn_command(&bin);
+        if let Some(host) = remote_host {
+            // `ssh-remote+<host>` is VS Code's remote authority; <host> is the same
+            // ssh destination the tunnel uses (already validated at connect time,
+            // so no option injection). A `:port` in the destination isn't honored
+            // here — non-default ports belong in the user's ssh config. Requires the
+            // Remote-SSH extension; without it VS Code opens and prompts to install.
+            cmd.arg("--remote").arg(format!("ssh-remote+{host}"));
+        }
+        cmd.arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("failed to launch {name}: {e}"))
+    }
 }
 
 /// The first recognized editor's resolved binary, with its display name.
