@@ -4,6 +4,8 @@ Manage the coding agents running on your machine — from anywhere. Available on
 
 ![VibeStudio — run, teach, and connect your coding agents from one dashboard](./dashboard.png)
 
+**Download →** [macOS](https://github.com/AltrinaAI/vibestudio/releases/latest/download/VibeStudio-macOS.dmg) · [Windows](https://github.com/AltrinaAI/vibestudio/releases/latest/download/VibeStudio-Windows-x64-setup.exe) · [Linux](https://github.com/AltrinaAI/vibestudio/releases/latest/download/VibeStudio-Linux-x86_64.deb) — free, runs locally, no account. ([install notes](#install))
+
 Your coding agents work best where your code, keys, and tools already live: your own machine. But you're not always sitting at it. VibeStudio is one dashboard for every agent running there — Claude Code, Codex, Cursor, Gemini CLI, opencode — driven from your desktop, a browser, or your phone.
 
 It runs the agents and manages everything they need: the skills that carry your taste and expertise, and the credentials and MCP connections they call — versioned, synced, and kept on your own hardware.
