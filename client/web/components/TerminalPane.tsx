@@ -527,6 +527,19 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     };
     const endPan = (e: TouchEvent) => {
       endSelect(e.changedTouches[0] ?? { clientX: 0, clientY: 0 });
+      // A tap (a one-finger touch that lifts without committing to a scroll axis;
+      // select mode leaves `pan` null, so it's skipped) forwards a click to the
+      // pty — the only way a phone with no arrow keys can pick an option out of a
+      // mouse-mode TUI (Claude Code's menus). We own the gesture (touch-pinch-zoom),
+      // so iOS won't synthesize a dependable compat click; emit the press/release
+      // ourselves (xterm reports it to tmux like a trackpad click) and preventDefault
+      // drops any compat click the browser does fire, so the option isn't picked twice.
+      if (e.type === "touchend" && pan && pan.axis === null && handle) {
+        const p = e.changedTouches[0] ?? { clientX: pan.x, clientY: pan.y };
+        e.preventDefault();
+        host.querySelector(".xterm-screen")?.dispatchEvent(asMouse("mousedown", p, 1));
+        document.dispatchEvent(asMouse("mouseup", p, 0));
+      }
       // A vertical flick coasts; a slow drag or a hold-then-lift (stale velocity,
       // >60ms since the last move) just stops with the finger.
       if (pan && pan.axis === "v" && performance.now() - pan.t < 60 && Math.abs(pan.v) >= TOUCH_FLING_MIN_VELOCITY) {
