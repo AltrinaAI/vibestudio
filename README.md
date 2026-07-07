@@ -1,6 +1,6 @@
 # VibeStudio
 
-Manage the coding agents running on your machine — from anywhere. Available on macOS, Linux, and Windows.
+Manage the coding agents running on your machine — from anywhere. Available on macOS, Linux, Windows, iPhone, and Android.
 
 ![VibeStudio — run, teach, and connect your coding agents from one dashboard](./dashboard.png)
 
@@ -35,11 +35,11 @@ Windows builds aren't code-signed yet, so each shows a one-time prompt:
 - **Windows** — SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**.
 - **Linux** — install the package with `sudo apt install ./VibeStudio-Linux-x86_64.deb`.
 
-## Use from anywhere (browser + phone)
+## Use from anywhere
 
-The backend serves the full app over plain HTTP, meaning all you need is a browser pointed at the skill-server to run the entire app.
+The backend serves the full app over plain HTTP, meaning all you need is a browser pointed at the skill-server to run the entire app — notifications included.
 
-**In the app:** click the **Local** pill → **Open on your phone…** → scan the QR. The app fronts its own server with [Tailscale](https://tailscale.com) (free) and walks you through the two one-time Tailscale permissions if needed. Any device signed in to your Tailscale network can open the URL. Closing the window keeps VibeStudio (and phone access) running in your tray; right-click the tray icon to quit entirely.
+**On the computer:** click the **Local** pill → **Open on your phone…** → scan the QR. The app fronts its own server with [Tailscale](https://tailscale.com) (free) and walks you through the two one-time Tailscale permissions if needed. Any device signed in to your Tailscale network can open the URL; on iPhone, open it in Safari and tap **Share → Add to Home Screen** so VibeStudio can notify you when a run finishes or needs you (Apple only grants web notifications to installed apps — Android needs no extra step). 
 
 ## Build from source
 

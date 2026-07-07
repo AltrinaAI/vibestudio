@@ -327,7 +327,7 @@ export function Component() {
           <div>
             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-accent">VibeStudio</p>
             <h1 className="mt-1 text-3xl font-semibold tracking-tight text-fg">{greeting()}.</h1>
-            <p className="mt-1.5 text-sm text-muted">Run, teach, and connect your coding agents — from any device, anywhere.</p>
+            <p className="mt-1.5 text-sm text-muted">Run, teach, and connect all your coding agents — from any device, anywhere.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={openNewSession} className={`${actionBase} bg-accent text-accent-fg hover:bg-accent-strong`}>
