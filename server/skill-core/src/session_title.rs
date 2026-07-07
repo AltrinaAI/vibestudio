@@ -10,6 +10,12 @@
 //! tell apart several sessions in the same cwd. Otherwise (shells, resumes,
 //! other agents, pre-existing terminals) it falls back to the newest-activity
 //! session for the cwd.
+//!
+//! The same stores feed the turn-finish notification body: [`claude_last_message`]
+//! reads the agent's last assistant message from its transcript, so the phone shows
+//! what the agent SAID rather than a screen-scrape of the TUI's bottom line. Wired
+//! through `AgentDef.last_message` (Claude for now; other families degrade to the
+//! fixed summons until their reader lands).
 
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
@@ -21,6 +27,10 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 const MAX_LEN: usize = 72;
+
+/// Longer budget for a turn-finish notification body (a phone banner shows a few
+/// lines) than a one-line rail title — see [`claude_last_message`].
+const PREVIEW_LEN: usize = 180;
 
 fn home() -> Option<PathBuf> {
     dirs::home_dir()
@@ -75,11 +85,16 @@ fn tidy(s: &str) -> String {
 }
 
 fn truncate(s: &str) -> String {
-    if s.chars().count() <= MAX_LEN {
+    truncate_to(s, MAX_LEN)
+}
+
+/// Truncate to `max` chars (chars, not bytes — the text is UTF-8), backing off to
+/// the last space so a word is never sliced, and marking the cut with an ellipsis.
+fn truncate_to(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
         return s.to_string();
     }
-    let cut: String = s.chars().take(MAX_LEN).collect();
-    // back off to the last space so we don't slice a word
+    let cut: String = s.chars().take(max).collect();
     let trimmed = cut.rsplit_once(' ').map(|(a, _)| a).unwrap_or(&cut);
     format!("{}…", trimmed.trim_end())
 }
@@ -186,19 +201,72 @@ pub fn claude_title(cwd: &Path, created: i64, session_id: Option<&str>) -> Optio
     claude_from_dir(home()?.join(".claude/projects"), cwd, created, session_id)
 }
 
-fn claude_from_dir(projects: PathBuf, cwd: &Path, created: i64, session_id: Option<&str>) -> Option<String> {
+/// The transcript file for a live Claude terminal: the exact `<sid>.jsonl` when the
+/// terminal recorded the id we forced at launch (`claude --session-id`) — the only
+/// way to tell apart several sessions in one cwd — else the newest-activity
+/// transcript in the cwd's project dir.
+fn claude_file(projects: &Path, cwd: &Path, created: i64, session_id: Option<&str>) -> Option<PathBuf> {
     let dir = projects.join(claude_encode(cwd));
-    // Exact match when the terminal recorded the id we forced at launch
-    // (`claude --session-id`): only that tells apart several sessions in one cwd.
-    // Claude names the transcript after the id, so the file is <sid>.jsonl.
     if let Some(sid) = session_id.filter(|s| !s.is_empty()) {
         let f = dir.join(format!("{sid}.jsonl"));
         if f.is_file() {
-            return cached(&f, parse_claude);
+            return Some(f);
         }
     }
-    let file = pick_for_terminal(jsonl_files(&dir), created)?;
-    cached(&file, parse_claude)
+    pick_for_terminal(jsonl_files(&dir), created)
+}
+
+fn claude_from_dir(projects: PathBuf, cwd: &Path, created: i64, session_id: Option<&str>) -> Option<String> {
+    cached(&claude_file(&projects, cwd, created, session_id)?, parse_claude)
+}
+
+/// The agent's last assistant message, as a one-line preview for a turn-finish
+/// notification body — read from the SAME transcript as the title, so it reflects
+/// what the agent actually SAID (its own structured message text) rather than
+/// whatever furniture happens to sit at the bottom of the TUI. `None` for a session
+/// with no assistant text yet (the notifier then falls back to its fixed phrase).
+pub fn claude_last_message(cwd: &Path, created: i64, session_id: Option<&str>) -> Option<String> {
+    let file = claude_file(&home()?.join(".claude/projects"), cwd, created, session_id)?;
+    parse_claude_last(&file)
+}
+
+fn parse_claude_last(file: &Path) -> Option<String> {
+    // Keep the newest assistant record that carried visible text: a turn ending in a
+    // tool_use (or pure thinking) has no words to preview, so walk back past it.
+    let mut last: Option<String> = None;
+    for line in read_lines(file)? {
+        let Ok(v) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        if let Some(text) = claude_assistant_text(&v) {
+            let t = tidy(&text);
+            if !t.is_empty() {
+                last = Some(t);
+            }
+        }
+    }
+    Some(truncate_to(&last?, PREVIEW_LEN))
+}
+
+/// The visible text of a Claude `assistant` record — its `text` blocks joined.
+/// `None` when the turn held only tool_use / thinking (nothing said).
+fn claude_assistant_text(rec: &Value) -> Option<String> {
+    let content = rec.get("message")?.get("content")?;
+    if let Some(s) = content.as_str() {
+        return Some(s.to_string());
+    }
+    let mut parts = Vec::new();
+    for b in content.as_array()? {
+        if b.get("type").and_then(|t| t.as_str()) == Some("text") {
+            if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                parts.push(t);
+            }
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 fn parse_claude(file: &Path) -> Option<String> {
@@ -592,6 +660,58 @@ mod tests {
         assert!(claude_from_dir(base.clone(), cwd, 0, None).is_some());
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn claude_last_message_reads_newest_assistant_text() {
+        let file = std::env::temp_dir().join(format!("slast-{}-{}.jsonl", std::process::id(), line!()));
+        fs::write(
+            &file,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"do the thing"}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"First reply."}]}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"All   done — tests   pass."}]}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        // Newest assistant TEXT wins; the trailing tool_use-only turn is skipped and
+        // inner whitespace collapses to a single glanceable line.
+        assert_eq!(parse_claude_last(&file), Some("All done — tests pass.".into()));
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn claude_last_message_none_when_nothing_said_and_truncates_long() {
+        // A turn that produced only a tool_use → no words → None (the notifier keeps
+        // its fixed summons).
+        let f1 = std::env::temp_dir().join(format!("slast-{}-{}.jsonl", std::process::id(), line!()));
+        fs::write(
+            &f1,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{}}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(parse_claude_last(&f1), None);
+        let _ = fs::remove_file(&f1);
+
+        // A long message is capped to the preview budget with a word-boundary ellipsis.
+        let f2 = std::env::temp_dir().join(format!("slast-{}-{}.jsonl", std::process::id(), line!()));
+        let long = "word ".repeat(80); // ~400 chars
+        fs::write(
+            &f2,
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{long}"}}]}}}}"#
+            ),
+        )
+        .unwrap();
+        let out = parse_claude_last(&f2).unwrap();
+        assert!(out.chars().count() <= PREVIEW_LEN + 1);
+        assert!(out.ends_with('…'));
+        let _ = fs::remove_file(&f2);
     }
 
     #[test]

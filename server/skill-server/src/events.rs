@@ -118,12 +118,15 @@ fn watcher_loop() {
             for f in diff(p, &now) {
                 emit(f);
             }
-            // Each bell edge: read the agent's last line ONCE and feed it to both
-            // channels — the SSE frame (the desktop toast body) and Web Push (the
-            // phone body). Capture is bell-only, so it costs nothing on a quiet tick.
+            // Each bell edge: read the agent's last assistant message ONCE from its
+            // own transcript and feed it to both channels — the SSE frame (the
+            // desktop toast body) and Web Push (the phone body). Reading is bell-only,
+            // so it costs nothing on a quiet tick.
             let mut bells = Vec::new();
             for s in bell_edges(p, &now) {
-                let last = skill_term::capture_tail(&s.id);
+                let created = s.created.trim().parse().unwrap_or(0);
+                let sid = Some(s.session_id.as_str()).filter(|x| !x.is_empty());
+                let last = skill_core::agents::last_message_for(&s.agent, &s.cwd, created, sid);
                 emit(frame("bell", &payload(s, last.as_deref())));
                 bells.push(crate::push::Bell {
                     id: s.id.clone(),

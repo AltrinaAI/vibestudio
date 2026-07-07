@@ -50,6 +50,10 @@ pub struct ResumeCtx<'a> {
 /// `(cwd, terminal spawn time, forced session id)`. See [`crate::session_title`].
 pub type SessionTitleFn = fn(&std::path::Path, i64, Option<&str>) -> Option<String>;
 
+/// Extract the agent's last assistant message (a turn-finish notification preview)
+/// from the same store, keyed the same way. See [`crate::session_title`].
+pub type LastMessageFn = fn(&std::path::Path, i64, Option<&str>) -> Option<String>;
+
 pub struct AgentDef {
     /// Family id — the prefix of skill-term agent ids ("claude" in "claude:cli").
     pub family: &'static str,
@@ -72,6 +76,11 @@ pub struct AgentDef {
     /// agent has no readable session store yet; the UI falls back to the cwd. See
     /// [`crate::session_title`].
     pub session_title: Option<SessionTitleFn>,
+    /// The agent's last assistant message, for the turn-finish notification body —
+    /// read from the same store as `session_title` (structured message text, not a
+    /// TUI screen-scrape). `None` = no reader yet; the notifier falls back to its
+    /// fixed summons. See [`crate::session_title::claude_last_message`].
+    pub last_message: Option<LastMessageFn>,
 }
 
 /// The two shapes of "add/remove a remote streamable-HTTP MCP server named
@@ -111,6 +120,7 @@ pub const AGENTS: &[AgentDef] = &[
         resume: Some(claude_resume),
         mcp: Some(McpWiring::Cli { bin: "claude", add: claude_mcp_add, remove: claude_mcp_remove }),
         session_title: Some(crate::session_title::claude_title),
+        last_message: Some(crate::session_title::claude_last_message),
     },
     AgentDef {
         family: "codex",
@@ -121,6 +131,7 @@ pub const AGENTS: &[AgentDef] = &[
         resume: Some(codex_resume),
         mcp: Some(McpWiring::Cli { bin: "codex", add: codex_mcp_add, remove: codex_mcp_remove }),
         session_title: Some(crate::session_title::codex_title),
+        last_message: None,
     },
     AgentDef {
         family: "cursor",
@@ -139,6 +150,7 @@ pub const AGENTS: &[AgentDef] = &[
             entry: cursor_mcp_entry,
         }),
         session_title: Some(crate::session_title::cursor_title),
+        last_message: None,
     },
     AgentDef {
         family: "gemini",
@@ -149,6 +161,7 @@ pub const AGENTS: &[AgentDef] = &[
         resume: Some(gemini_resume),
         mcp: Some(McpWiring::Cli { bin: "gemini", add: gemini_mcp_add, remove: gemini_mcp_remove }),
         session_title: Some(crate::session_title::gemini_title),
+        last_message: None,
     },
     AgentDef {
         family: "openclaw",
@@ -161,6 +174,7 @@ pub const AGENTS: &[AgentDef] = &[
         // Not launchable here, and its on-disk transcript format is unverified (no
         // install to test against) — wire this once there's a real store to read.
         session_title: None,
+        last_message: None,
     },
     AgentDef {
         // opencode keeps its own global skills under ~/.config/opencode/skills and
@@ -181,6 +195,7 @@ pub const AGENTS: &[AgentDef] = &[
             entry: opencode_mcp_entry,
         }),
         session_title: Some(crate::session_title::opencode_title),
+        last_message: None,
     },
 ];
 
@@ -201,6 +216,19 @@ pub fn session_title_for(
 ) -> Option<String> {
     let def = by_family(family_or_id)?;
     (def.session_title?)(std::path::Path::new(cwd), created_unix, session_id)
+}
+
+/// The agent's last assistant message, for a turn-finish notification body, read
+/// from its own session store. `None` when the family is unknown or has no reader
+/// yet — the notifier then falls back to its fixed summons.
+pub fn last_message_for(
+    family_or_id: &str,
+    cwd: &str,
+    created_unix: i64,
+    session_id: Option<&str>,
+) -> Option<String> {
+    let def = by_family(family_or_id)?;
+    (def.last_message?)(std::path::Path::new(cwd), created_unix, session_id)
 }
 
 /// True when the family has an interactive launch line — the gate for
