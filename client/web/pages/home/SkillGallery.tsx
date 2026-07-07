@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSkills, refreshSkills } from "@/lib/skills";
 import type { ReactNode } from "react";
 import { Spinner, btnGhost, btnPrimary } from "@/components/ui";
 import NavBar from "@/components/NavBar";
@@ -694,47 +695,13 @@ export default function SkillGallery({ embedded = false }: { embedded?: boolean 
   const [mineOpen, setMineOpen] = useState(false);
   const mining = useMining();
 
-  const [discovered, setDiscovered] = useState<AgentSkills[]>([]);
-  const [discovering, setDiscovering] = useState(true);
-  const [dirtyRoots, setDirtyRoots] = useState<Set<string>>(new Set());
+  // Discovered skills come from the shared module store: cached across visits, so
+  // a revisit paints the last result instantly while a background rescan runs
+  // (no empty-grid flash), and the dashboard's stat card reads the same one scan.
+  const { groups: discovered, dirtyRoots, loading: discovering } = useSkills();
   const [busyRoot, setBusyRoot] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const confirm = useConfirm();
-  // Bumped on every scan; a slower in-flight scan (or its background dirty fetch)
-  // checks this before committing state so it can't clobber a newer scan's results.
-  const discoveryEpoch = useRef(0);
-  // `silent` skips the header spinner — for automatic ticks; the epoch guard
-  // already arbitrates racing scans.
-  const runDiscovery = useCallback(async (opts?: { silent?: boolean }) => {
-    const epoch = ++discoveryEpoch.current;
-    if (!opts?.silent) setDiscovering(true);
-    try {
-      const groups = await api.discoverSkills();
-      if (epoch !== discoveryEpoch.current) return; // a newer scan superseded us
-      setDiscovered(groups);
-      // Flag which skills have uncommitted changes in the background — one batch
-      // call, so the list paints immediately and the badges fill in after. Skip
-      // proposed drafts: they sit in a staging dir that isn't a repo, so never dirty.
-      const roots = groups.flatMap((g) => g.skills.filter((s) => !s.proposed).map((s) => s.root));
-      void api
-        .gitDirtyMany(roots)
-        .then((states) => {
-          if (epoch === discoveryEpoch.current) {
-            setDirtyRoots(new Set(states.filter((d) => d.dirty).map((d) => d.root)));
-          }
-        })
-        .catch(() => {});
-    } catch {
-      // Keep whatever was already found if a rescan fails.
-    } finally {
-      // Unconditional: also clears a manual scan's spinner when a silent
-      // tick superseded it.
-      if (epoch === discoveryEpoch.current) setDiscovering(false);
-    }
-  }, []);
-  useEffect(() => {
-    void runDiscovery();
-  }, [runDiscovery]);
 
   // When a mining run ends (TUI quit, terminal closed, or stopped), rescan:
   // newly staged proposals and freshly dirtied skills should appear without a
@@ -742,20 +709,19 @@ export default function SkillGallery({ embedded = false }: { embedded?: boolean 
   const prevMineStatus = useRef<string | null>(null);
   useEffect(() => {
     const status = mining?.status ?? null;
-    if (prevMineStatus.current === "running" && status !== "running")
-      void runDiscovery({ silent: true });
+    if (prevMineStatus.current === "running" && status !== "running") void refreshSkills();
     prevMineStatus.current = status;
-  }, [mining?.status, runDiscovery]);
+  }, [mining?.status]);
   // And rescan on a slow tick while one is live: the conversation stays open
   // after the mining work lands (the run IS an interactive session), so
   // proposals must surface without waiting for its terminal to close.
   useEffect(() => {
     if (mining?.status !== "running") return;
     const t = setInterval(() => {
-      if (!document.hidden) void runDiscovery({ silent: true });
+      if (!document.hidden) void refreshSkills();
     }, 15000);
     return () => clearInterval(t);
-  }, [mining?.status, runDiscovery]);
+  }, [mining?.status]);
 
   // Reopen the run's conversation: the server returns its live terminal, or
   // revives the recorded agent session in a fresh one if the pane was closed.
@@ -775,14 +741,14 @@ export default function SkillGallery({ embedded = false }: { embedded?: boolean 
       setActionError(null);
       try {
         await api.promoteSkill(root);
-        await runDiscovery();
+        await refreshSkills();
       } catch (e) {
         setActionError(e instanceof Error ? e.message : String(e));
       } finally {
         setBusyRoot(null);
       }
     },
-    [runDiscovery],
+    [],
   );
   const discardProposed = useCallback(
     async (root: string, name: string) => {
@@ -799,14 +765,14 @@ export default function SkillGallery({ embedded = false }: { embedded?: boolean 
       setActionError(null);
       try {
         await api.deleteSkill(root);
-        await runDiscovery();
+        await refreshSkills();
       } catch (e) {
         setActionError(e instanceof Error ? e.message : String(e));
       } finally {
         setBusyRoot(null);
       }
     },
-    [runDiscovery, confirm],
+    [confirm],
   );
   const doDelete = useCallback(
     async (skill: DiscoveredSkill) => {
@@ -823,14 +789,14 @@ export default function SkillGallery({ embedded = false }: { embedded?: boolean 
       try {
         await api.deleteSkill(skill.root);
         removeRecent(skill.root); // drop any stale Recent entry pointing at the deleted folder
-        await runDiscovery();
+        await refreshSkills();
       } catch (e) {
         setActionError(e instanceof Error ? e.message : String(e));
       } finally {
         setBusyRoot(null);
       }
     },
-    [runDiscovery, confirm],
+    [confirm],
   );
 
   const [showPicker, setShowPicker] = useState(false);
@@ -886,7 +852,7 @@ export default function SkillGallery({ embedded = false }: { embedded?: boolean 
               {embedded && actions}
               <button
                 type="button"
-                onClick={() => void runDiscovery()}
+                onClick={() => void refreshSkills()}
                 disabled={discovering}
                 title="Rescan your machine for installed skills"
                 className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"

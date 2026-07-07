@@ -13,6 +13,7 @@ import * as api from "@/lib/api";
 import type { ConnectionInfo, TermSession } from "@/lib/api";
 import { useSessions, isUnread, refresh as refreshSessions, noteCreated, nativeNotifyState } from "@/lib/sessions";
 import { useMining, refreshMining } from "@/lib/mining";
+import { useSkills } from "@/lib/skills";
 import MineDialog from "@/components/MineDialog";
 import * as push from "@/lib/push";
 import { useRemote } from "@/lib/remote";
@@ -262,7 +263,9 @@ export function Component() {
 
   const [connections, setConnections] = useState<ConnectionInfo[] | null>(null);
   const [secretNames, setSecretNames] = useState<string[] | null>(null);
-  const [skillStats, setSkillStats] = useState<{ total: number; dirty: number } | null>(null);
+  // Skills come from the shared cache store (same one the gallery below uses), so
+  // the count is cached across visits and the page runs ONE discovery scan, not two.
+  const skills = useSkills();
 
   // Keep session activity/attention fresh while the dashboard is the visible page
   // (the 5s poll backstop lives in the Sessions workspace, which isn't mounted here;
@@ -277,30 +280,21 @@ export function Component() {
 
   // One-shot overview fetches. Each tolerates a 404 (feature absent on this server)
   // by settling to an empty/zero value so its card just reads "0" rather than hanging.
+  // (Skills are handled by the useSkills() cache store above, not fetched here.)
   useEffect(() => {
     let alive = true;
     api.connectionsList().then((c) => alive && setConnections(c)).catch(() => alive && setConnections([]));
     // secretsList (not just the count) so the Credentials section can show key names.
     api.secretsList().then((l) => alive && setSecretNames(l.map((e) => e.key))).catch(() => alive && setSecretNames([]));
-    void api
-      .discoverSkills()
-      .then(async (groups) => {
-        if (!alive) return;
-        const total = groups.reduce((n, g) => n + g.skills.length, 0);
-        const roots = groups.flatMap((g) => g.skills.filter((s) => !s.proposed).map((s) => s.root));
-        let dirty = 0;
-        try {
-          dirty = (await api.gitDirtyMany(roots)).filter((d) => d.dirty).length;
-        } catch {
-          /* dirty badge is best-effort */
-        }
-        if (alive) setSkillStats({ total, dirty });
-      })
-      .catch(() => alive && setSkillStats({ total: 0, dirty: 0 }));
     return () => {
       alive = false;
     };
   }, []);
+
+  // The stat card: cached count shown instantly on revisit; `loading` is true only
+  // on the very first scan (nothing cached yet), so it never blanks to a spinner
+  // again. `dirtyRoots` excludes proposed drafts already, so its size is the count.
+  const skillStats = skills.loading ? null : { total: skills.total, dirty: skills.dirtyRoots.size };
 
   const sessions = sessionStore.sessions;
   const waiting = sessions.filter((s) => isUnread(s, sessionStore.seen, null));
