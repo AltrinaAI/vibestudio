@@ -263,15 +263,45 @@ export async function imageDataUrl(root: string, rel: string): Promise<string> {
 }
 
 /**
- * Package the skill into a `.skill` file (a deflate zip) and save it via the
- * browser. `vars` (declared env names present in the store) bundles their values
- * as a `.env` so the recipient can run it immediately; empty = declaration-only.
+ * Package the skill into a `.skill` (a deflate zip) and save it, reporting where
+ * it landed. `vars` (declared env names present in the store) bundles their
+ * values as a `.env` so the recipient can run it immediately; empty =
+ * declaration-only.
  *
- * Fetched as a blob rather than a bare `<a download>` so the server's validate
- * gate — and the size cap — surface as a thrown error the caller can show,
- * instead of the browser silently saving a JSON error body as the "file".
+ * On the desktop app (this machine, no remote connected) the server writes the
+ * file into the Downloads folder and returns the real `path`, so the UI can name
+ * it and reveal it — the webview's own blob download is silent and path-less. A
+ * browser/phone client, or one with a remote connected, 404s that route and
+ * falls back to the blob download, where the browser shows its own download UI
+ * (`path` is then null). Packaging errors (bad frontmatter, size cap) propagate
+ * for the caller to show.
  */
-export async function exportSkill(root: string, vars: string[] = []): Promise<void> {
+export async function exportSkill(root: string, vars: string[] = []): Promise<{ path: string | null }> {
+  try {
+    const { path } = await http<{ path: string }>("POST", "download/skill/save", { root, vars });
+    return { path };
+  } catch (e) {
+    // 404 = save-to-disk unavailable here (browser/phone, or a remote is
+    // connected) → the browser blob download below. Anything else is a real
+    // packaging error; let it propagate.
+    if ((e as { status?: number } | null)?.status !== 404) throw e;
+  }
+  await downloadSkillBlob(root, vars);
+  return { path: null };
+}
+
+/** Reveal a saved file in the OS file manager (Finder/Explorer). Pinned-local —
+ *  only reachable from the desktop app on this machine. */
+export const revealPath = (path: string) => http<{ ok: boolean }>("POST", "reveal", { path });
+
+/**
+ * The browser blob-download fallback: fetch the `.skill` and save it via a
+ * synthetic `<a download>`. Fetched as a blob rather than a bare link so the
+ * server's validate gate — and the size cap — surface as a thrown error the
+ * caller can show, instead of the browser silently saving a JSON error body as
+ * the "file".
+ */
+async function downloadSkillBlob(root: string, vars: string[]): Promise<void> {
   const q = new URLSearchParams({ root });
   if (vars.length) q.set("vars", vars.join(","));
   const res = await fetch(`${API_BASE}/api/download/skill?${q.toString()}`);

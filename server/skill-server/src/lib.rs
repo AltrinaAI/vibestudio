@@ -23,7 +23,7 @@ use std::thread;
 use serde_json::{json, Value};
 use skill_core::{
     commit_agent, commitmsg, connections, discover, editor, engine, github, gitops, mining, recents,
-    secrets, skill, sync, update,
+    reveal, secrets, skill, sync, update,
 };
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
@@ -478,6 +478,40 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
             send_reply(request, handle(&method, &url, &body, ctx));
             continue;
         }
+        // Revealing a saved file in the OS file manager is likewise pinned LOCAL
+        // (never proxied) and served only to THIS machine's own client — the file
+        // it reveals is the one just written here. A fronted/phone client 404s;
+        // the SPA never offers Reveal there (it has no local path).
+        if path == "/api/reveal" {
+            if !from_this_machine(&request) {
+                send_reply(request, reveal_unavailable());
+                continue;
+            }
+            let mut body = String::new();
+            if method == Method::Post {
+                let _ = request.as_reader().read_to_string(&mut body);
+            }
+            send_reply(request, handle(&method, &url, &body, ctx));
+            continue;
+        }
+        // Saving a `.skill` straight to disk writes on the ATTENDED machine, so it
+        // must not be proxied. Served only from this machine's own client AND only
+        // when no remote is connected — a connected hub's skills live on the
+        // remote, whose bytes reach the local webview via the proxied blob GET
+        // instead. Otherwise 404 → the SPA falls back to that blob download.
+        if path == "/api/download/skill/save" {
+            let remote_active = ctx.remote.as_ref().and_then(|r| r.active_target()).is_some();
+            if !from_this_machine(&request) || remote_active {
+                send_reply(request, save_unavailable());
+                continue;
+            }
+            let mut body = String::new();
+            if method == Method::Post {
+                let _ = request.as_reader().read_to_string(&mut body);
+            }
+            send_reply(request, handle(&method, &url, &body, ctx));
+            continue;
+        }
         // While a remote is connected, every other /api/* is reverse-proxied to it.
         // (Must precede the local attach branch so the SSE stream proxies too.) BOTH
         // proxy paths run on their OWN thread, so a slow/hung remote can never pin a
@@ -894,6 +928,30 @@ fn editor_unavailable() -> Reply {
     Reply {
         status: 404,
         body: serde_json::to_vec(&json!({ "error": "opening a local editor is not available from here" }))
+            .unwrap_or_default(),
+        content_type: "application/json".into(),
+        extra: vec![],
+    }
+}
+
+/// 404 for `/api/reveal` reached from anywhere but this machine's own client.
+fn reveal_unavailable() -> Reply {
+    Reply {
+        status: 404,
+        body: serde_json::to_vec(&json!({ "error": "revealing files is not available from here" }))
+            .unwrap_or_default(),
+        content_type: "application/json".into(),
+        extra: vec![],
+    }
+}
+
+/// 404 for `/api/download/skill/save` when not from this machine or a remote is
+/// connected — the SPA reads it as "save-to-disk unavailable" and falls back to
+/// the blob download (`/api/download/skill`).
+fn save_unavailable() -> Reply {
+    Reply {
+        status: 404,
+        body: serde_json::to_vec(&json!({ "error": "saving to disk is not available from here" }))
             .unwrap_or_default(),
         content_type: "application/json".into(),
         extra: vec![],
@@ -1359,6 +1417,22 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 Err(e) => json_reply::<()>(Err(e)),
             }
         }
+        // Desktop-only sibling of the blob GET above: write the packaged `.skill`
+        // straight to this machine's Downloads folder and report the path, so the
+        // UI can confirm the save (the webview's blob download is silent) and
+        // reveal it. Pinned local + no-remote by the dispatch loop; a browser/
+        // phone or connected-hub client 404s and falls back to the blob GET.
+        (Method::Post, "/api/download/skill/save") => {
+            let env_vars: Vec<String> = v
+                .get("vars")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            json_reply(
+                skill::save_skill_to_downloads(&s("root"), &env_vars)
+                    .map(|p| json!({ "path": p.to_string_lossy() })),
+            )
+        }
         // The answering server's identity (informational; proxies like any route,
         // so a connected switchboard reports the hub's version, not its own).
         (Method::Get, "/api/health") => json_reply(Ok(json!({
@@ -1436,6 +1510,12 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         (Method::Get, "/api/editor/status") => json_reply(Ok(editor::status())),
         (Method::Post, "/api/editor/open") => {
             json_reply(editor::open(&s("path")).map(|()| json!({ "ok": true })))
+        }
+        // Reveal a saved file in the OS file manager (backs "Reveal in folder" on
+        // the export confirmation). Pinned local + gated on from_this_machine by
+        // the dispatch loop, so the window opens on the screen the user is at.
+        (Method::Post, "/api/reveal") => {
+            json_reply(reveal::reveal(&s("path")).map(|()| json!({ "ok": true })))
         }
         // Unknown /api routes must not fall through to the SPA fallback — a JSON
         // client probing an endpoint would get index.html with a 200.

@@ -14,6 +14,7 @@ import { useMining } from "@/lib/mining";
 import DiffOverlays from "./DiffOverlays";
 import ManagePanel from "./ManagePanel";
 import ExportDialog from "./ExportDialog";
+import ExportedDialog from "./ExportedDialog";
 import { useStudio, skillName } from "./StudioContext";
 import { useReviewAvailable } from "./useReviewAvailable";
 import { studioFilePath, studioPath } from "@/lib/routes";
@@ -78,6 +79,9 @@ export default function StudioLayout() {
 
   const [manageOpen, setManageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  // Set once an export succeeds → the "Skill exported" confirmation (the only
+  // signal on desktop, where the webview saves to Downloads with no UI).
+  const [exported, setExported] = useState<{ dirName: string; path: string | null } | null>(null);
   const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
 
   // Phone-narrow layouts trade the fixed sidebar column for an overlay drawer,
@@ -172,7 +176,8 @@ export default function StudioLayout() {
       return;
     }
     try {
-      await api.exportSkill(data.root);
+      const { path } = await api.exportSkill(data.root);
+      setExported({ dirName: data.dirName, path });
     } catch (e) {
       await confirm({
         title: "Couldn't package the skill",
@@ -249,7 +254,18 @@ export default function StudioLayout() {
           root={data.root}
           dirName={data.dirName}
           declared={requiredEnv(data.frontmatter)}
+          onExported={(result) => {
+            setExportOpen(false);
+            setExported(result);
+          }}
           onClose={() => setExportOpen(false)}
+        />
+      )}
+      {exported && (
+        <ExportedDialog
+          dirName={exported.dirName}
+          path={exported.path}
+          onClose={() => setExported(null)}
         />
       )}
     </div>

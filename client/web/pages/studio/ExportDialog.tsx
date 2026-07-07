@@ -16,11 +16,15 @@ export default function ExportDialog({
   root,
   dirName,
   declared,
+  onExported,
   onClose,
 }: {
   root: string;
   dirName: string;
   declared: string[];
+  /** Export succeeded; hands the saved path (null on the blob fallback) to the
+   *  host, which swaps this dialog for the "Skill exported" confirmation. */
+  onExported: (result: { dirName: string; path: string | null }) => void;
   onClose: () => void;
 }) {
   const [stored, setStored] = useState<Set<string> | null>(null);
@@ -45,8 +49,8 @@ export default function ExportDialog({
     setBusy(true);
     setErr(null);
     try {
-      await api.exportSkill(root, bundling ? present : []);
-      onClose();
+      const { path } = await api.exportSkill(root, bundling ? present : []);
+      onExported({ dirName, path });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {

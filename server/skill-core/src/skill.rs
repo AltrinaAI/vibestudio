@@ -559,6 +559,46 @@ pub fn zip_skill_bytes(root_input: &str, env_vars: &[String]) -> Result<(String,
     Ok((format!("{dir_name}.skill"), buf))
 }
 
+/// Package the skill and write the `.skill` into the user's Downloads folder,
+/// returning where it landed. The desktop app's own export path: the webview's
+/// blob download saves silently with no native UI and no path it can report, so
+/// on the machine the user is at we write the file ourselves and hand back the
+/// destination — the UI names it and offers "Reveal in folder". A name clash is
+/// suffixed (`foo.skill` → `foo (1).skill`) so a previous export is never
+/// clobbered.
+pub fn save_skill_to_downloads(root_input: &str, env_vars: &[String]) -> Result<PathBuf, String> {
+    let (filename, bytes) = zip_skill_bytes(root_input, env_vars)?;
+    let dir = dirs::download_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+        .ok_or("Couldn't locate your Downloads folder.")?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't open {}: {e}", dir.display()))?;
+    let dest = unique_path(&dir, &filename);
+    std::fs::write(&dest, &bytes).map_err(|e| format!("Couldn't save {}: {e}", dest.display()))?;
+    Ok(dest)
+}
+
+/// `dir/name`, or the first free `dir/stem (N).ext` (N≥1) — so a repeat export
+/// sits beside the previous file instead of overwriting it (mirrors the webview
+/// download's own " (N)" collision suffixing).
+fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (name.to_string(), String::new()),
+    };
+    let mut n = 1;
+    loop {
+        let candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 /// Frontmatter keys a `.skill` may declare; anything else fails validation.
 /// Mirrors the skill-creator packager's allow-list (`metadata` is the catch-all
 /// for nested fields like `required-env`).

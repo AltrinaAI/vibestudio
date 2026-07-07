@@ -17,6 +17,7 @@ pub mod pathsafe;
 pub mod process;
 pub mod recents;
 pub mod remotesync;
+pub mod reveal;
 pub mod secrets;
 pub mod session_title;
 pub mod skill;
