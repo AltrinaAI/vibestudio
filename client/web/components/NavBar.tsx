@@ -139,10 +139,13 @@ export default function NavBar({
 
   const brand = (
     <span className="flex items-center gap-1.5 text-brand">
-      <AltrinaMark className="h-5 w-auto" />
-      <span className="whitespace-nowrap text-[0.95rem] font-semibold tracking-tight">VibeStudio</span>
+      <AltrinaMark className="h-5 w-auto shrink-0" />
+      {/* Phones show just the mark (it's the home button and carries the brand);
+          the wordmark + version appear at ≥sm, where there's room. Keeps the bar
+          from crowding the destinations/status cluster off a narrow screen. */}
+      <span className="hidden whitespace-nowrap text-[0.95rem] font-semibold tracking-tight sm:inline">VibeStudio</span>
       {version && (
-        <span className="text-[0.7rem] font-normal tabular-nums text-muted" title={`Version ${version}`}>
+        <span className="hidden text-[0.7rem] font-normal tabular-nums text-muted sm:inline" title={`Version ${version}`}>
           {version}
         </span>
       )}
@@ -150,22 +153,29 @@ export default function NavBar({
   );
 
   return (
-    <header className="z-20 flex h-12 shrink-0 items-center gap-2 border-b border-border px-3 text-sm">
-      {/* (1) identity + location */}
+    <header className="z-20 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-3 text-sm">
+      {/* (1) identity + location. This left side is the flex-shrink sink: on a
+          narrow (phone) screen the brand holds and the breadcrumb truncates, so the
+          destinations/status cluster on the right is never pushed past the viewport
+          edge — the old bug, where the whole non-shrinking row overflowed the screen.
+          overflow-hidden on the header is the hard backstop against any protrusion. */}
       {atHome ? (
-        <span className="px-1.5">{brand}</span>
+        <span className="shrink-0 px-1.5">{brand}</span>
       ) : (
         <button
           type="button"
           onClick={() => navigate("/")}
           title="Back to home"
-          className="flex items-center rounded-md px-1.5 py-1 hover:bg-panel"
+          className="flex shrink-0 items-center rounded-md px-1.5 py-1 hover:bg-panel"
         >
           {brand}
         </button>
       )}
-      {breadcrumb}
-      <div className="ml-auto flex items-center gap-1">
+      {breadcrumb && (
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap [&>span]:min-w-0">{breadcrumb}</div>
+      )}
+      {/* (2-4) destinations + status — pinned (shrink-0), always fully visible */}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
         {/* Three visible buckets, divided to match the IA categories (see header):
             (2) page chrome | (3) destinations | (4) status + controls. */}
         {/* (2) page chrome — owned by the page, here only for space */}

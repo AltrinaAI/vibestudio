@@ -333,7 +333,7 @@ export default function SessionsWorkspace({
               <span className="text-faint" aria-hidden>
                 /
               </span>
-              <span className="font-medium text-fg">Sessions</span>
+              <span className="truncate font-medium text-fg">Sessions</span>
             </>
           }
         >
