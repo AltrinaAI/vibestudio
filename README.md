@@ -2,7 +2,7 @@
 
 The best human interface for **[Agent Skills](https://agentskills.io/home)**. Available on macOS, Linux, and Windows.
 
-![VibeStudio — recent skills, skill mining, and the discovered skills library](./Screenshot.png)
+![VibeStudio — run, teach, and connect your coding agents from one dashboard](./dashboard.png)
 
 We love [agent skills](https://agentskills.io/home). As agents get more powerful, it's easy to feel like losing control over the direction of your project or organization. We think agent skills is the right place to specify your taste, expertise, and customize your way of doing things on an organization level. 
 
