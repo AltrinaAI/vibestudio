@@ -33,8 +33,15 @@ impl skill_server::EditorControl for ShellEditor {
 
     /// Launch VS Code on `path` (a session's working directory). Non-blocking — we
     /// spawn and return; the editor window is the user's feedback. When `remote_host`
-    /// is set the path is on that remote, so open it over VS Code Remote-SSH.
-    fn open(&self, path: &str, remote_host: Option<&str>) -> Result<(), String> {
+    /// is set the path is on that remote, so open it over VS Code Remote-SSH. When
+    /// `conversation` is set and the folder is LOCAL, also resume that agent
+    /// conversation in the editor (see [`open_conversation`]).
+    fn open(
+        &self,
+        path: &str,
+        remote_host: Option<&str>,
+        conversation: Option<skill_server::AgentConversation<'_>>,
+    ) -> Result<(), String> {
         let path = path.trim();
         if path.is_empty() {
             return Err("no folder to open".into());
@@ -52,9 +59,77 @@ impl skill_server::EditorControl for ShellEditor {
         }
         cmd.arg(path)
             .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("failed to launch {name}: {e}"))
+            .map_err(|e| format!("failed to launch {name}: {e}"))?;
+
+        // Also resume the exact conversation in the agent's IDE surface, but only for
+        // a LOCAL session: a remote's transcript store lives on the far host, and an
+        // OS-delivered `vscode://` URI reaches only this machine's extension host, so
+        // firing it at a remote session would resume nothing (or start a blank chat).
+        // The URI scheme follows the resolved build (Insiders listens on its own),
+        // so we never wake a stable VS Code the user doesn't run.
+        if remote_host.is_none() {
+            let scheme = if name.contains("Insiders") { "vscode-insiders" } else { "vscode" };
+            if let Some(c) =
+                conversation.and_then(|c| conversation_uri(c.agent, c.session_id, scheme))
+            {
+                open_conversation(c);
+            }
+        }
+        Ok(())
     }
+}
+
+/// The IDE deep link (under URL `scheme`, e.g. `vscode` / `vscode-insiders`) that
+/// reopens conversation `session_id` for agent family `agent`, or `None` when the
+/// agent has no such handler. Claude Code's is the only one that exists today —
+/// `<scheme>://anthropic.claude-code/open?session=<id>` opens or focuses a chat tab
+/// resumed at that session (the id must belong to the folder we open alongside it,
+/// which it does: it's that session's cwd). The other agents' conversations still
+/// surface in their own extensions' history, because those read the same on-disk
+/// session store — there is just no link to jump straight to one.
+fn conversation_uri(agent: &str, session_id: &str, scheme: &str) -> Option<String> {
+    // The id goes into a URL unescaped, so accept only the token shape we mint
+    // (`--session-id` UUIDs) — anything else is skipped rather than risk mangling.
+    let safe = !session_id.is_empty()
+        && session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    match agent {
+        "claude" if safe => {
+            Some(format!("{scheme}://anthropic.claude-code/open?session={session_id}"))
+        }
+        _ => None,
+    }
+}
+
+/// Hand a `vscode://` deep link to the OS URL opener, after a short delay so the
+/// folder window opened just before it has time to take focus — the handler targets
+/// whichever VS Code window is focused. Detached and best-effort: the editor is the
+/// user's feedback, so a miss here never fails or blocks the folder open.
+fn open_conversation(uri: String) {
+    // Long enough for an already-running VS Code to focus the folder window; a cold
+    // start takes longer, and there the link may open a fresh tab — an acceptable
+    // degrade, not a failure.
+    const FOCUS_SETTLE_MS: u64 = 1500;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(FOCUS_SETTLE_MS));
+        let _ = url_opener(&uri).spawn();
+    });
+}
+
+/// The platform command that hands a URL to its registered handler — the same
+/// invocations the Claude Code docs show (`open` / `xdg-open` / `start`).
+fn url_opener(uri: &str) -> Command {
+    // (program, args that precede the URL). On Windows cmd's `start` reads its first
+    // quoted argument as a window title, so pass an empty title before the URL
+    // (matches the docs' cmd.exe example).
+    #[cfg(target_os = "macos")]
+    let (prog, pre): (&str, &[&str]) = ("open", &[]);
+    #[cfg(windows)]
+    let (prog, pre): (&str, &[&str]) = ("cmd", &["/C", "start", ""]);
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let (prog, pre): (&str, &[&str]) = ("xdg-open", &[]);
+    let mut c = hidden_command(prog);
+    c.args(pre).arg(uri);
+    c
 }
 
 /// The first recognized editor's resolved binary, with its display name.
@@ -150,4 +225,36 @@ fn spawn_command(bin: &Path) -> Command {
         }
     }
     hidden_command(bin)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conversation_uri;
+
+    #[test]
+    fn claude_conversation_deep_link() {
+        // The documented handler, built under whichever build's scheme resolved.
+        assert_eq!(
+            conversation_uri("claude", "1e4f2a3b-0000-4c5d-8e9f-abcdef012345", "vscode").as_deref(),
+            Some("vscode://anthropic.claude-code/open?session=1e4f2a3b-0000-4c5d-8e9f-abcdef012345"),
+        );
+        // Insiders listens on its own scheme, so a stable VS Code is never woken.
+        assert_eq!(
+            conversation_uri("claude", "abc123", "vscode-insiders").as_deref(),
+            Some("vscode-insiders://anthropic.claude-code/open?session=abc123"),
+        );
+    }
+
+    #[test]
+    fn no_link_for_other_agents_or_unsafe_ids() {
+        // Only Claude Code has an IDE deep link today.
+        assert_eq!(conversation_uri("codex", "abc123", "vscode"), None);
+        assert_eq!(conversation_uri("opencode", "ses_123", "vscode"), None);
+        // The id lands in a URL unescaped, so anything but the UUID shape is skipped
+        // (empty, whitespace, or URL metacharacters that would mangle the link).
+        assert_eq!(conversation_uri("claude", "", "vscode"), None);
+        assert_eq!(conversation_uri("claude", "has space", "vscode"), None);
+        assert_eq!(conversation_uri("claude", "a&b=c", "vscode"), None);
+        assert_eq!(conversation_uri("claude", "../etc", "vscode"), None);
+    }
 }
