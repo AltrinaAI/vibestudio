@@ -24,6 +24,12 @@ local-backend = ["dep:skill-term"]
 # `skill-server` serves the UI with no dist on disk (the daemon / release
 # artifact case). Off by default: dev builds shouldn't require `npm run build`.
 embed-ui = ["dep:include_dir"]
+# Pure-Rust SSH transport (russh) for the mobile switchboard, where iOS bans
+# spawning the `ssh` binary. Desktop keeps the shell-out (it inherits the user's
+# ssh config / agent / ProxyJump — a feature, not a dep to drop). The `ring`
+# crypto backend (not the default C-based aws-lc-rs) keeps the aarch64-apple-ios
+# cross-compile FFI-free: the same backend rustls already uses in this tree.
+russh-transport = ["dep:russh", "dep:tokio"]
 
 [dependencies]
 skill-core = { path = "../skill-core" }
@@ -54,3 +60,9 @@ env_logger = { version = "0.11", default-features = false, features = ["humantim
 # Phone access: QR code for the served URL (pure Rust, renders SVG).
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 include_dir = { version = "0.7", optional = true }
+# Mobile-only SSH transport (see the `russh-transport` feature). `ring` backend +
+# rsa/flate2 for real-world host/key/compat coverage; all pure-Rust or ring (no
+# openssl / aws-lc C). tokio is the async runtime russh needs — a small dedicated
+# runtime the otherwise-sync switchboard blocks on.
+russh = { version = "0.62", optional = true, default-features = false, features = ["ring", "flate2", "rsa"] }
+tokio = { version = "1", optional = true, default-features = false, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }

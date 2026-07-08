@@ -1050,6 +1050,19 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let root = skill::resolve_skill_input(&s("path"), ctx.examples_base.as_deref());
             json_reply(skill::build_raw_skill(&root))
         }
+        // Generate an SSH keypair on THIS machine (mobile switchboard): the private half is
+        // returned for the client to store in the OS keystore (iOS Keychain), the public half
+        // to paste into the remote's authorized_keys. Feature-gated; pin this local in the
+        // proxy so it's never forwarded to a connected remote.
+        #[cfg(feature = "russh-transport")]
+        (Method::Post, "/api/ssh/keygen") => {
+            let comment = { let c = s("comment"); if c.is_empty() { "vibestudio".into() } else { c } };
+            json_reply(crate::sshmgr::keygen::generate_ed25519(&comment).map(|k| json!({
+                "privateKey": k.private_openssh,
+                "publicKey": k.public_openssh,
+                "fingerprint": k.fingerprint,
+            })))
+        }
         (Method::Post, "/api/fs/read") => json_reply(skill::read_file_impl(&s("root"), &s("rel"))),
         (Method::Post, "/api/fs/stat") => json_reply(skill::stat_file_impl(&s("root"), &s("rel"))),
         (Method::Post, "/api/fs/write") => {

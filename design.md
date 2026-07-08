@@ -274,6 +274,9 @@ A **local proxy switchboard**; the webview never changes origin.
 
 ## Roadmap
 
+- **Native iPhone app — "full SSH from the phone"** (Termius-parity): in-process russh
+  switchboard (mobile-only; desktop keeps the `ssh` shell-out). Backend done + proven on Linux;
+  remaining Mac work (build split, Keychain, credential UI) and how to test in [MOBILE.md](MOBILE.md).
 - **Kill Rust↔TS wire drift:** generate `api.ts` DTOs from serde structs (`ts-rs`) + a CI check.
 - **Skill-usage feedback loop (mining):** the miner already extracts `skills_used` + distills
   user feedback; recurrent runs can report "skill triggered N times / never since accepted" and

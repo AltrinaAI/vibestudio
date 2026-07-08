@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-use super::ssh::{self, Transport};
+use super::conn::Remote;
 
 /// Idempotent remote install: reuse a runnable binary, else download (curl/wget) to a
 /// temp file, verify it against the published `.sha256` (best-effort — skipped only if
@@ -117,8 +117,8 @@ pub struct Platform {
 /// Detect the remote OS/arch via `uname -sm`. Linux/macOS only; a Windows remote (no
 /// `uname`) yields a clear not-yet-supported error. A WSL distro reports Linux, so it
 /// flows through the normal Linux path.
-pub fn detect(t: &Transport) -> Result<Platform, String> {
-    let out = ssh::capture(t, "uname -sm")
+pub fn detect(remote: &dyn Remote) -> Result<Platform, String> {
+    let out = remote.capture("uname -sm")
         .map_err(|e| format!("Couldn't reach the remote (note: native Windows remotes aren't supported yet — but a WSL distro is). {e}"))?;
     let u = out.trim();
     let target = if u.starts_with("Linux") && u.contains("x86_64") {
@@ -142,7 +142,7 @@ pub fn detect(t: &Transport) -> Result<Platform, String> {
 /// asset URL in turn — version-pinned first, then latest — so a 404 on the pinned URL
 /// (e.g. an unstamped dev build at `0.1.0`) transparently falls back to the latest
 /// release instead of failing the whole connect.
-pub fn ensure_installed(t: &Transport, platform: &Platform, app_version: &str) -> Result<String, String> {
+pub fn ensure_installed(remote: &dyn Remote, platform: &Platform, app_version: &str) -> Result<String, String> {
     let version = server_version(app_version);
     let bin = format!("$HOME/.vibestudio/server/{version}/skill-server");
     let urls = candidate_urls(&version, platform.target);
@@ -150,16 +150,16 @@ pub fn ensure_installed(t: &Transport, platform: &Platform, app_version: &str) -
     let mut last = String::new();
     for url in &urls {
         let script = INSTALL_SCRIPT.replace("__VERSION__", &version).replace("__URL__", url);
-        match ssh::run(t, &script) {
+        match remote.run(&script) {
             Ok(_) => {
-                prune_old_versions(t, &version);
+                prune_old_versions(remote, &version);
                 return Ok(bin);
             }
             // Exit 3 = the remote has neither curl nor wget → download here and pipe it
             // over the same transport (works for no-internet remotes / through ProxyJump).
             Err(e) if e.code == Some(3) => {
-                install_via_pipe(t, &version, &urls)?;
-                prune_old_versions(t, &version);
+                install_via_pipe(remote, &version, &urls)?;
+                prune_old_versions(remote, &version);
                 return Ok(bin);
             }
             // Exit 4 = the downloaded binary didn't match the published checksum.
@@ -186,11 +186,11 @@ pub fn ensure_installed(t: &Transport, platform: &Platform, app_version: &str) -
 /// version ever connected with (see [`KEEP_VERSIONS`]). Runs on every successful
 /// connect, after the current version is in place; failures are logged and ignored —
 /// keeping the remote tidy must never block connecting.
-fn prune_old_versions(t: &Transport, version: &str) {
+fn prune_old_versions(remote: &dyn Remote, version: &str) {
     let script = PRUNE_SCRIPT
         .replace("__VERSION__", version)
         .replace("__KEEP_PLUS_1__", &(KEEP_VERSIONS + 1).to_string());
-    if let Err(e) = ssh::run(t, &script) {
+    if let Err(e) = remote.run(&script) {
         log::debug!("pruning old skill-server versions failed (ignored): {}", e.message);
     }
 }
@@ -199,7 +199,7 @@ fn prune_old_versions(t: &Transport, version: &str) {
 /// here, since the remote can't reach the network), then stream it to the remote over
 /// ssh (`cat > tmp && chmod +x && mv`). Tries each candidate URL in turn, mirroring
 /// `ensure_installed`'s pinned-then-latest order.
-fn install_via_pipe(t: &Transport, version: &str, urls: &[String]) -> Result<(), String> {
+fn install_via_pipe(remote: &dyn Remote, version: &str, urls: &[String]) -> Result<(), String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(120))
@@ -242,6 +242,6 @@ fn install_via_pipe(t: &Transport, version: &str, urls: &[String]) -> Result<(),
     }
 
     let script = PIPE_SCRIPT.replace("__VERSION__", version);
-    ssh::run_with_stdin(t, &script, &bytes)
+    remote.run_with_stdin(&script, &bytes)
         .map_err(|e| format!("Piping skill-server to the remote failed: {}", e.message))
 }

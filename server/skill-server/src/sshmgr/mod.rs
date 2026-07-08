@@ -13,8 +13,17 @@ use std::sync::{Arc, Mutex};
 
 use crate::{RemoteControl, RemoteHost, RemoteStatus, RemoteTarget};
 
+// The transport seam (Remote/SessionHandle): both the ssh/wsl shell-out and russh plug in
+// here, so one connect orchestration drives both.
+mod conn;
 mod lastconn;
 mod provision;
+// Pure-Rust SSH transport for the mobile switchboard (iOS can't spawn `ssh`). Desktop
+// keeps `ssh.rs`; these compile only under the `russh-transport` feature.
+#[cfg(feature = "russh-transport")]
+pub mod keygen;
+#[cfg(feature = "russh-transport")]
+mod russh_tx;
 mod session;
 mod ssh;
 
