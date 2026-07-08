@@ -386,6 +386,25 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     };
     host.addEventListener("paste", onPaste, true);
 
+    // macOS ⌘C — and the native Edit ▸ Copy menu / right-click Copy — fire a DOM
+    // `copy` event, but find no selection to copy: xterm renders to a canvas, so
+    // there is no DOM selection. On the desktop app the OS menu's ⌘C accelerator
+    // also swallows the keystroke before it reaches the keydown chord above, so ⌘C
+    // never copied at all. Catch the copy event directly and serve the terminal's
+    // selection (or the last tmux copy) — ⌘C now copies like a native terminal,
+    // with no reliance on the keystroke reaching xterm. Gated on the terminal being
+    // focused, so copies elsewhere (and copyText's own hidden-textarea copy, which
+    // focuses a node outside `host`) pass through untouched.
+    const onCopy = (e: ClipboardEvent) => {
+      if (!host.contains(document.activeElement)) return;
+      const stashed = Date.now() - lastCopy.at < COPY_STASH_MS ? lastCopy.text : "";
+      const text = term.hasSelection() ? term.getSelection() : stashed;
+      if (!text) return;
+      e.clipboardData?.setData("text/plain", text);
+      e.preventDefault();
+    };
+    document.addEventListener("copy", onCopy);
+
     // xterm 6 has no touch handling, so we translate touch gestures ourselves.
     // The Select toggle picks the mode at gesture start:
     //  • normal — vertical pans become synthetic wheel ticks (one per
@@ -575,6 +594,7 @@ export default function TerminalPane({ id, visible = true }: { id: string; visib
     return () => {
       gone = true;
       host.removeEventListener("paste", onPaste, true);
+      document.removeEventListener("copy", onCopy);
       host.removeEventListener("touchstart", onTouchStart);
       host.removeEventListener("touchmove", onTouchMove);
       host.removeEventListener("touchend", endPan);
