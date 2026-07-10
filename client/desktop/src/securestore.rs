@@ -13,9 +13,7 @@ use std::sync::Mutex;
 use skill_server::{SecureStore, SshProfile};
 
 /// Keychain service the keys are filed under (one generic-password item per
-/// profile id). Namespaced by the iOS bundle id so nothing else collides with it
-/// (`one.vibestudio.app` — `com.vibestudio.app` was taken by another Apple team;
-/// the desktop keeps that older id, but it never instantiates this store).
+/// profile id). Namespaced by bundle id so nothing else collides with it.
 const SERVICE: &str = "one.vibestudio.app.ssh-keys";
 
 pub struct KeychainStore {
@@ -116,7 +114,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         KeychainStore {
             profiles_path: dir.join("ssh_profiles.json"),
-            service: format!("com.vibestudio.test.{}-{tag}", std::process::id()),
+            service: format!("one.vibestudio.test.{}-{tag}", std::process::id()),
             lock: Mutex::new(()),
         }
     }
