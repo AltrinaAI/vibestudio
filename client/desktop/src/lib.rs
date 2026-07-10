@@ -256,8 +256,16 @@ pub fn run() {
                 // backgrounding — on return to foreground, reconnect to the
                 // remembered host (a no-op if the tunnel actually survived; a
                 // reattach, not a relaunch, if the remote server kept running).
+                // Foregrounding arrives as a WINDOW event: tao turns
+                // applicationWillEnterForeground into Event::Resumed, which
+                // tauri-runtime-wry (mobile) forwards as WindowEvent::Resumed.
+                // tauri::RunEvent::Resumed is never produced on iOS — it only
+                // arises from ControlFlow::Poll, which the runner never uses.
                 #[cfg(target_os = "ios")]
-                tauri::RunEvent::Resumed => {
+                tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::Resumed,
+                    ..
+                } => {
                     if let Some(r) = remote_slot.get() {
                         r.resume_check();
                     }

@@ -259,7 +259,9 @@ A **local proxy switchboard**; the webview never changes origin.
   `NotifyControl`), managed over the pinned-local `/api/remote/profiles*` routes and an
   on-device `/api/ssh/keygen` (also pinned local — a key is born where its keystore lives, and
   no route ever returns it). Host keys are TOFU-pinned to `~/.config/vibestudio/russh_known_hosts`
-  (no `~/.ssh` on iOS; fails closed). `RunEvent::Resumed` → `resume_check()` reconnects after
+  (no `~/.ssh` on iOS; fails closed). `WindowEvent::Resumed` → `resume_check()` reconnects after
+  the app foregrounds (on iOS tao/wry deliver applicationWillEnterForeground as a *window*
+  event; `RunEvent::Resumed` is never emitted — it needs `ControlFlow::Poll`) — needed because
   iOS kills the backgrounded tunnel (it ACTIVELY probes the forwarded port's `/api/health`
   rather than trusting the keepalive-lagged liveness flag, which reads stale right after a
   resume). The desktop/mobile build split lives in `client/desktop/Cargo.toml`'s target tables
