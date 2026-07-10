@@ -13,9 +13,10 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use skill_server::{RemoteControl, SshRemoteControl};
+use skill_server::{RemoteControl, SecureStore, SshProfile, SshRemoteControl};
 
 /// Must match the version dir the harness places the binary under.
 const VERSION: &str = "e2e-test";
@@ -65,6 +66,76 @@ fn full_switchboard_over_russh() {
     // (not something local).
     let body = http_get(&base, "/api/health").expect("GET /api/health through the tunnel");
     assert!(body.contains("\"version\""), "health via tunnel missing version: {body}");
+    assert!(body.contains("\"pid\""), "health via tunnel missing pid: {body}");
+
+    ctrl.disconnect(true).expect("disconnect");
+}
+
+/// The MOBILE credential path, end to end: a saved profile in a [`SecureStore`] whose key is
+/// in-memory OpenSSH text (on device it comes from the iOS Keychain; here from the test key
+/// file) resolves a connect id and drives the whole switchboard — no `VIBESTUDIO_RUSSH` env,
+/// no key path, no `ssh` binary.
+///
+/// The connect id is a bare ALIAS (`stored-alias`), not `user@host:port`, on purpose: the two
+/// e2e tests share a process, and the sibling above sets `VIBESTUDIO_RUSSH=1` +
+/// `VIBESTUDIO_RUSSH_KEY`. An alias can't be parsed as `user@host[:port]`, so `creds_for`'s env
+/// fallback yields `None` for it — the connection can ONLY succeed via the store. If the store
+/// thread-through ever regresses, this test fails instead of silently passing on leaked env creds.
+#[test]
+fn full_switchboard_from_a_stored_profile() {
+    let Some((host, port, user, key)) = env() else {
+        eprintln!("skipping: set RUSSH_E2E=1 + RUSSH_IT_HOST/PORT/USER/KEY (see the handoff)");
+        return;
+    };
+
+    struct OneProfile {
+        profile: SshProfile,
+        key_text: String,
+    }
+    impl SecureStore for OneProfile {
+        fn list_profiles(&self) -> Result<Vec<SshProfile>, String> {
+            Ok(vec![self.profile.clone()])
+        }
+        fn get_profile(&self, id: &str) -> Result<Option<SshProfile>, String> {
+            Ok((self.profile.id == id).then(|| self.profile.clone()))
+        }
+        fn put_profile(&self, _p: &SshProfile, _k: &str) -> Result<(), String> {
+            unimplemented!("read-only test store")
+        }
+        fn delete_profile(&self, _id: &str) -> Result<(), String> {
+            unimplemented!("read-only test store")
+        }
+        fn get_private_key(&self, id: &str) -> Result<Option<String>, String> {
+            Ok((self.profile.id == id).then(|| self.key_text.clone()))
+        }
+    }
+
+    let id = "stored-alias".to_string(); // NOT user@host:port — the env fallback can't satisfy it
+    let store = OneProfile {
+        profile: SshProfile {
+            id: id.clone(),
+            host: host.clone(),
+            port: port.parse().expect("RUSSH_IT_PORT"),
+            user: user.clone(),
+        },
+        key_text: std::fs::read_to_string(&key).expect("read the test key file"),
+    };
+
+    let ctrl = SshRemoteControl::with_secure_store(VERSION.to_string(), Some(Arc::new(store)));
+    ctrl.connect(&id).expect("connect kickoff");
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let base = loop {
+        let st = ctrl.status();
+        match st.state.as_str() {
+            "connected" => break ctrl.active_target().expect("target when connected").base_url,
+            "error" => panic!("connect failed: {:?}", st.message),
+            _ if Instant::now() >= deadline => panic!("timed out in state {:?}: {:?}", st.state, st.message),
+            _ => std::thread::sleep(Duration::from_millis(300)),
+        }
+    };
+
+    let body = http_get(&base, "/api/health").expect("GET /api/health through the tunnel");
     assert!(body.contains("\"pid\""), "health via tunnel missing pid: {body}");
 
     ctrl.disconnect(true).expect("disconnect");

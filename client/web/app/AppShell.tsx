@@ -1,10 +1,15 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Spinner } from "@/components/ui";
 import PhoneModal from "@/components/PhoneModal";
 import SessionsHost from "@/pages/sessions/SessionsHost";
 import UpdateBanner from "@/components/UpdateBanner";
+import { useRemote } from "@/lib/remote";
 import { useDiscardBlocker } from "./routeGuard";
+
+// Mobile-only landing (the connect screen). Lazy so the desktop bundle never pulls
+// it — the gate below only ever renders it on the iOS shell.
+const MobileConnect = lazy(() => import("@/pages/MobileConnect"));
 
 /**
  * The single persistent node under the router — it never unmounts across
@@ -12,9 +17,15 @@ import { useDiscardBlocker } from "./routeGuard";
  * always-mounted sibling kept alive (its pty/xterm must survive navigation) and
  * shown only on `/sessions`. The unsaved-changes guard lives here so it covers
  * every navigation, including browser back/forward.
+ *
+ * Mobile has NO local workspace: a phone holds no skills/agents, so the switchboard
+ * only exists to reach a remote. While the mobile app is not connected, the whole
+ * shell IS the connect screen — the workspace (and its Outlet/Sessions) never mount
+ * until a remote is up. Desktop is unaffected (`mobile` is false there).
  */
 export default function AppShell() {
   const onSessions = useLocation().pathname === "/sessions";
+  const { mobile, status } = useRemote();
   useDiscardBlocker();
 
   // The tray's "Open on your phone…" item deep-links to `#/?phone=1`. Handled
@@ -40,6 +51,21 @@ export default function AppShell() {
     window.addEventListener("hashchange", check);
     return () => window.removeEventListener("hashchange", check);
   }, []);
+
+  // Until the one-time mobile probe resolves, render a neutral splash — so neither
+  // the desktop workspace nor the mobile connect screen flashes on the wrong host.
+  // Desktop resolves `mobile = false` in one loopback round-trip (imperceptible).
+  if (mobile === undefined) {
+    return <div className="grid h-dvh place-items-center"><Spinner /></div>;
+  }
+  // Mobile, not connected → the connect screen is the entire app.
+  if (mobile && status.state !== "connected") {
+    return (
+      <Suspense fallback={<div className="grid h-dvh place-items-center"><Spinner /></div>}>
+        <MobileConnect />
+      </Suspense>
+    );
+  }
 
   return (
     <>

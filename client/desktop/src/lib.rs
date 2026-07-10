@@ -1,30 +1,49 @@
-// Tauri desktop shell — a thin CLIENT. It brings up `skill-server` in-process on
-// a loopback port and points the webview at it, so the desktop runs the EXACT
-// same HTTP path as a browser or a remote host. There are no `#[tauri::command]`s:
-// every capability is reached over `/api` (see `server/skill-server`). The shell's
-// only jobs are: host the window, seed the bundled-engine path, own the engine +
-// terminal lifecycle (the in-process server runs with `startup_maintenance:false`,
-// so these fire exactly once), and reap on exit.
+// Tauri shell — a thin CLIENT. It brings up `skill-server` in-process on a
+// loopback port and points the webview at it, so the shell runs the EXACT same
+// HTTP path as a browser or a remote host. There are no `#[tauri::command]`s:
+// every capability is reached over `/api` (see `server/skill-server`). Two
+// shapes from one crate (split by the target tables in Cargo.toml):
 //
-// Lifecycle is TRAY-governed: closing the window hides it (server + phone access
-// stay up); the tray's Quit is the one explicit full-teardown — terminals
-// included. Every other exit (update restart, crash, plain Cmd+Q) leaves tmux
-// agents running for the next launch to pick up.
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
-use tauri::tray::TrayIconBuilder;
+//   * **Desktop** — the full local backend. The shell hosts the window, seeds
+//     the bundled-engine path, owns the engine + terminal lifecycle (the
+//     in-process server runs with `startup_maintenance:false`, so these fire
+//     exactly once), and reaps on exit. Lifecycle is TRAY-governed: closing the
+//     window hides it (server + phone access stay up); the tray's Quit is the
+//     one explicit full-teardown — terminals included. Every other exit (update
+//     restart, crash, plain Cmd+Q) leaves tmux agents running for the next
+//     launch to pick up.
+//   * **Mobile (iOS)** — a pure switchboard: the same loopback server, but with
+//     no local backend; everything happens on the SSH remote it connects to via
+//     the in-process russh transport, with credentials from the Keychain-backed
+//     [`securestore`].
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+#[cfg(desktop)]
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+#[cfg(desktop)]
+use tauri::tray::TrayIconBuilder;
+#[cfg(desktop)]
 use tauri_plugin_notification::NotificationExt;
+#[cfg(desktop)]
 use tauri_plugin_updater::UpdaterExt;
 
+#[cfg(desktop)]
 use skill_core::engine;
 use skill_server::{init_logging, init_logging_to_file, ServerConfig, SshRemoteControl};
 
+#[cfg(desktop)]
 mod editor; // ShellEditor: the "Open in VS Code" control (client-side, pinned-local route)
+// KeychainStore: the mobile switchboard's SSH credential store. Compiled on
+// macOS too (same Security.framework path) so its tests run on a Mac; only the
+// iOS setup path actually wires it in, hence the desktop dead_code allowance.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg_attr(desktop, allow(dead_code))]
+mod securestore;
 
 /// Locate the bundled `llama-server` so the on-device commit-message generator
 /// runs with zero setup. Checks the production bundle (resource dir) then the
 /// dev-vendored tree (`client/desktop/binaries/<triple>/`, populated by
 /// `scripts/fetch-engine.sh`). Returns the first match.
+#[cfg(desktop)]
 fn find_bundled_engine(app: &tauri::App) -> Option<std::path::PathBuf> {
     let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
     let look = |base: std::path::PathBuf| -> Option<std::path::PathBuf> {
@@ -56,11 +75,13 @@ fn find_bundled_engine(app: &tauri::App) -> Option<std::path::PathBuf> {
 /// The shell's half of `skill_core::update`: the server module owns the
 /// `/api/update/*` surface and the version check; only this process can replace
 /// its own binary, so download/install runs here via `tauri-plugin-updater`.
+#[cfg(desktop)]
 struct ShellUpdater {
     app: tauri::AppHandle,
     remote_slot: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>>,
 }
 
+#[cfg(desktop)]
 impl skill_core::update::UpdateControl for ShellUpdater {
     fn can_install(&self) -> bool {
         // The plugin installs every target we ship (dmg-app, NSIS, deb/AppImage);
@@ -83,10 +104,12 @@ impl skill_core::update::UpdateControl for ShellUpdater {
 /// turn-finish deserves a toast (it owns focus + seen state) and posts to the
 /// pinned-local `/api/notify*` routes; only this process can talk to the OS
 /// notification center, so display runs here via `tauri-plugin-notification`.
+#[cfg(desktop)]
 struct ShellNotifier {
     app: tauri::AppHandle,
 }
 
+#[cfg(desktop)]
 impl skill_server::NotifyControl for ShellNotifier {
     fn notify(&self, title: &str, body: &str) -> Result<(), String> {
         self.app
@@ -121,6 +144,7 @@ impl skill_server::NotifyControl for ShellNotifier {
 /// installer and exits this process itself — `RunEvent::Exit` never fires — so
 /// `on_before_exit` must repeat the Exit handler's teardown. macOS/Linux installs
 /// return, and we restart explicitly.
+#[cfg(desktop)]
 async fn install_update(
     app: tauri::AppHandle,
     remote_slot: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>>,
@@ -174,200 +198,38 @@ pub fn run() {
     // SECOND tray and stealing 8765 (which is what strands the phone mapping).
     // Release-only: dev shares the bundle id, so the guard would otherwise send
     // `npm run dev` straight to the installed tray app.
-    #[cfg(not(debug_assertions))]
+    #[cfg(all(desktop, not(debug_assertions)))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main(app); // surface the already-running window (un-hides a tray-hidden one)
         }));
     }
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build()) // self-update; driven from ShellUpdater, no JS API
+            .plugin(tauri_plugin_notification::init()); // OS toasts; driven from ShellNotifier, no JS API
+    }
     builder
-        .plugin(tauri_plugin_updater::Builder::new().build()) // self-update; driven from ShellUpdater, no JS API
-        .plugin(tauri_plugin_notification::init()) // OS toasts; driven from ShellNotifier, no JS API
         .setup(move |app| {
-            // Logger first, so even early startup is captured. Tee to a small on-disk
-            // file (durable for the packaged app, where stderr goes nowhere) + stderr
-            // (so `npm run dev` still shows logs). The in-process server shares this
-            // process, so its `log::*` records land here too. RUST_LOG-gated; quiet by
-            // default. Frontend warns/errors arrive via POST /api/logs/client.
-            let log_path = app.path().app_log_dir().ok().map(|d| d.join("vibestudio.log"));
-            match &log_path {
-                Some(p) => init_logging_to_file(p),
-                None => init_logging(),
-            }
-            if let Some(p) = &log_path {
-                log::info!("on-disk log: {}", p.display());
-            }
-
-            // ── lifecycle this process owns (the in-process server is spawned with
-            //    startup_maintenance:false, so these run exactly once) ──
-            skill_term::sweep_stale(); // GC terminals whose agent finished long ago (live ones persist)
-            // Point the on-device generator at the bundled/vendored llama-server so
-            // it works with no config; an explicit env override still wins. The
-            // in-process server shares this process, so it sees the env var.
-            if std::env::var_os("VIBESTUDIO_LLAMA_SERVER").is_none() {
-                if let Some(p) = find_bundled_engine(app) {
-                    std::env::set_var("VIBESTUDIO_LLAMA_SERVER", p);
-                }
-            }
-            engine::reap_orphans(); // kill any engine orphaned by a previous hard-kill
-            engine::prefetch_model(); // start the one-time model download now, not on first Generate
-
-            // SSH connection manager: provisions the release-matching `skill-server`
-            // onto remotes, so it needs the app version (from tauri.conf.json).
-            let remote = std::sync::Arc::new(SshRemoteControl::new(
-                app.package_info().version.to_string(),
-            ));
-            let _ = remote_slot_setup.set(remote.clone());
-
-            // ── bring up the loopback backend and point the webview at it ──
-            let resource_dir = app.path().resource_dir().ok();
-            let dist = resource_dir
-                .clone()
-                .map(|r| r.join("dist"))
-                .unwrap_or_else(|| std::path::PathBuf::from("dist"));
-            let phone =
-                std::sync::Arc::new(skill_server::PhoneControl::new(app.package_info().version.to_string()));
-            let updater = std::sync::Arc::new(ShellUpdater {
-                app: app.handle().clone(),
-                remote_slot: remote_slot_setup.clone(),
-            }) as std::sync::Arc<dyn skill_core::update::UpdateControl>;
-            let notifier = std::sync::Arc::new(ShellNotifier { app: app.handle().clone() })
-                as std::sync::Arc<dyn skill_server::NotifyControl>;
-            // "Open in VS Code" acts on this machine's screen — a client concern, so
-            // it lives in the shell (see editor.rs), reached over the pinned-local route.
-            let editor = std::sync::Arc::new(editor::ShellEditor)
-                as std::sync::Arc<dyn skill_server::EditorControl>;
-            let make_cfg = |port: u16| ServerConfig {
-                host: "127.0.0.1".into(),
-                port,
-                dist: dist.clone(),
-                bundled_skills: resource_dir.clone().map(|r| r.join("skills")),
-                examples_base: resource_dir.clone(), // resolve bundled examples by relative path
-                startup_maintenance: false,
-                // Plug the SSH connection manager into the local switchboard.
-                remote: Some(remote.clone() as std::sync::Arc<dyn skill_server::RemoteControl>),
-                // Hand the server's update module its installer (see ShellUpdater).
-                updater: Some(updater.clone()),
-                phone: Some(phone.clone()),
-                // OS toasts + dock badge for the SPA's turn-finish notifier.
-                notifier: Some(notifier.clone()),
-                // "Open in VS Code" on this machine (or the remote over Remote-SSH).
-                editor: Some(editor.clone()),
-                ..Default::default()
-            };
-            // Bind the stable phone port first (it's also dev's Vite proxy target),
-            // so a persisted `tailscale serve` mapping finds the app again on the
-            // next launch. Prod falls back to an ephemeral port when it's taken
-            // (the phone mapping goes stale until re-enabled, the app still works);
-            // dev tolerates the failure outright — an external skill-server may
-            // already hold 8765 and back the Vite proxy.
-            let preferred = std::env::var("VIBESTUDIO_PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(skill_server::PHONE_PORT);
-            let port = match skill_server::spawn(make_cfg(preferred)) {
-                Ok(h) => {
-                    phone.set_port(h.addr.port());
-                    h.addr.port()
-                }
-                Err(e) if !tauri::is_dev() => {
-                    log::warn!("port {preferred} taken ({e}); falling back to an ephemeral port");
-                    let h = skill_server::spawn(make_cfg(0))?;
-                    phone.set_port(h.addr.port());
-                    h.addr.port()
-                }
-                Err(e) => {
-                    log::error!("in-process server did not start: {e}");
-                    preferred
-                }
-            };
-            // If we bound an ephemeral port because the exiting process still held
-            // 8765 (an update restart racing shutdown), a persisted `tailscale serve`
-            // mapping now points at a dead port — re-point it so the phone reconnects
-            // without re-enabling. No-op when phone mode was never turned on.
-            phone.clone().resync_on_start();
-
-            // Same-origin model: the webview's origin IS the server, so api.ts's
-            // relative `/api` calls + the SSE EventSource pass CSP `default-src 'self'`.
-            let url = if tauri::is_dev() {
-                "http://localhost:1420".to_string() // Vite serves the UI + proxies /api → 8765
-            } else {
-                format!("http://127.0.0.1:{port}") // the in-process server serves UI + /api
-            };
-            WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::External(url.parse().unwrap()))
-                .title("VibeStudio")
-                .inner_size(1200.0, 800.0)
-                .min_inner_size(720.0, 480.0)
-                // Off by default in wry; enables Cmd/Ctrl +/-/0 whole-window zoom
-                // (native page zoom on Windows, an injected CSS-zoom polyfill on
-                // macOS/Linux). The terminal's DOM renderer stays crisp under it.
-                .zoom_hotkeys_enabled(true)
-                // `target="_blank"` links (release page, GitHub device flow) must
-                // open in the SYSTEM browser — wry's default silently drops them.
-                .on_new_window(|url, _features| {
-                    if matches!(url.scheme(), "http" | "https") {
-                        if let Err(e) = open::that_detached(url.as_str()) {
-                            log::warn!("couldn't open {url} in the system browser: {e}");
-                        }
-                    }
-                    tauri::webview::NewWindowResponse::Deny
-                })
-                .build()?;
-
-            // ── tray: the lifecycle owner. Closing the window only hides it (the
-            // server, terminals, and phone access stay up); Quit here is the ONE
-            // explicit full teardown — every studio terminal on this machine, the
-            // live SSH session, and the engine end with it. Update restarts and
-            // plain window closes never touch the terminals.
-            let open_item = MenuItemBuilder::with_id("open", "Open VibeStudio").build(app)?;
-            let phone_item = MenuItemBuilder::with_id("phone", "Open on your phone…").build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quit VibeStudio").build(app)?;
-            let menu = MenuBuilder::new(app)
-                .item(&open_item)
-                .item(&phone_item)
-                .separator()
-                .item(&quit_item)
-                .build()?;
-            let remote_for_tray = remote.clone();
-            let mut tray = TrayIconBuilder::with_id("main-tray")
-                .tooltip("VibeStudio")
-                .menu(&menu)
-                .on_menu_event(move |app, event| match event.id().as_ref() {
-                    "open" => show_main(app),
-                    "phone" => {
-                        show_main(app);
-                        // The SPA opens the phone modal when it sees this param
-                        // (and strips it) — see RemoteMenu.tsx.
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.eval("window.location.hash = '#/?phone=1'");
-                        }
-                    }
-                    "quit" => {
-                        if let Ok(sessions) = skill_term::list_sessions() {
-                            for s in sessions {
-                                let _ = skill_term::kill_session(&s.id);
-                            }
-                        }
-                        remote_for_tray.shutdown();
-                        engine::shutdown();
-                        app.exit(0);
-                    }
-                    _ => {}
-                });
-            if let Some(icon) = app.default_window_icon() {
-                tray = tray.icon(icon.clone());
-            }
-            tray.build(app)?;
+            #[cfg(desktop)]
+            setup_desktop(app, &remote_slot_setup)?;
+            #[cfg(target_os = "ios")]
+            setup_mobile(app, &remote_slot_setup)?;
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Close = hide to tray; the tray's Quit is how you actually leave.
+            // Desktop: close = hide to tray; the tray's Quit is how you actually
+            // leave. (Mobile has no window close — the OS suspends the app.)
+            #[cfg(desktop)]
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
+            #[cfg(not(desktop))]
+            let _ = (window, event);
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -384,17 +246,270 @@ pub fn run() {
                     if let Some(r) = remote_slot.get() {
                         r.shutdown();
                     }
+                    #[cfg(desktop)]
                     engine::shutdown(); // reap the inference engine child
                 }
                 // macOS: clicking the dock icon with the window hidden re-shows it.
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => show_main(_app),
+                // iOS tears the SSH tunnel down within minutes of the app
+                // backgrounding — on return to foreground, reconnect to the
+                // remembered host (a no-op if the tunnel actually survived; a
+                // reattach, not a relaunch, if the remote server kept running).
+                #[cfg(target_os = "ios")]
+                tauri::RunEvent::Resumed => {
+                    if let Some(r) = remote_slot.get() {
+                        r.resume_check();
+                    }
+                }
                 _ => {}
             }
         });
 }
 
+/// Desktop setup: full local backend + tray-governed lifecycle (see the module
+/// docs). This is the pre-split `setup` body, unchanged in behaviour.
+#[cfg(desktop)]
+fn setup_desktop(
+    app: &tauri::App,
+    remote_slot: &std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Logger first, so even early startup is captured. Tee to a small on-disk
+    // file (durable for the packaged app, where stderr goes nowhere) + stderr
+    // (so `npm run dev` still shows logs). The in-process server shares this
+    // process, so its `log::*` records land here too. RUST_LOG-gated; quiet by
+    // default. Frontend warns/errors arrive via POST /api/logs/client.
+    let log_path = app.path().app_log_dir().ok().map(|d| d.join("vibestudio.log"));
+    match &log_path {
+        Some(p) => init_logging_to_file(p),
+        None => init_logging(),
+    }
+    if let Some(p) = &log_path {
+        log::info!("on-disk log: {}", p.display());
+    }
+
+    // ── lifecycle this process owns (the in-process server is spawned with
+    //    startup_maintenance:false, so these run exactly once) ──
+    skill_term::sweep_stale(); // GC terminals whose agent finished long ago (live ones persist)
+    // Point the on-device generator at the bundled/vendored llama-server so
+    // it works with no config; an explicit env override still wins. The
+    // in-process server shares this process, so it sees the env var.
+    if std::env::var_os("VIBESTUDIO_LLAMA_SERVER").is_none() {
+        if let Some(p) = find_bundled_engine(app) {
+            std::env::set_var("VIBESTUDIO_LLAMA_SERVER", p);
+        }
+    }
+    engine::reap_orphans(); // kill any engine orphaned by a previous hard-kill
+    engine::prefetch_model(); // start the one-time model download now, not on first Generate
+
+    // SSH connection manager: provisions the release-matching `skill-server`
+    // onto remotes, so it needs the app version (from tauri.conf.json).
+    let remote = std::sync::Arc::new(SshRemoteControl::new(
+        app.package_info().version.to_string(),
+    ));
+    let _ = remote_slot.set(remote.clone());
+
+    // ── bring up the loopback backend and point the webview at it ──
+    let resource_dir = app.path().resource_dir().ok();
+    let dist = resource_dir
+        .clone()
+        .map(|r| r.join("dist"))
+        .unwrap_or_else(|| std::path::PathBuf::from("dist"));
+    let phone =
+        std::sync::Arc::new(skill_server::PhoneControl::new(app.package_info().version.to_string()));
+    let updater = std::sync::Arc::new(ShellUpdater {
+        app: app.handle().clone(),
+        remote_slot: remote_slot.clone(),
+    }) as std::sync::Arc<dyn skill_core::update::UpdateControl>;
+    let notifier = std::sync::Arc::new(ShellNotifier { app: app.handle().clone() })
+        as std::sync::Arc<dyn skill_server::NotifyControl>;
+    // "Open in VS Code" acts on this machine's screen — a client concern, so
+    // it lives in the shell (see editor.rs), reached over the pinned-local route.
+    let editor = std::sync::Arc::new(editor::ShellEditor)
+        as std::sync::Arc<dyn skill_server::EditorControl>;
+    let make_cfg = |port: u16| ServerConfig {
+        host: "127.0.0.1".into(),
+        port,
+        dist: dist.clone(),
+        bundled_skills: resource_dir.clone().map(|r| r.join("skills")),
+        examples_base: resource_dir.clone(), // resolve bundled examples by relative path
+        startup_maintenance: false,
+        // Plug the SSH connection manager into the local switchboard.
+        remote: Some(remote.clone() as std::sync::Arc<dyn skill_server::RemoteControl>),
+        // Hand the server's update module its installer (see ShellUpdater).
+        updater: Some(updater.clone()),
+        phone: Some(phone.clone()),
+        // OS toasts + dock badge for the SPA's turn-finish notifier.
+        notifier: Some(notifier.clone()),
+        // "Open in VS Code" on this machine (or the remote over Remote-SSH).
+        editor: Some(editor.clone()),
+        ..Default::default()
+    };
+    // Bind the stable phone port first (it's also dev's Vite proxy target),
+    // so a persisted `tailscale serve` mapping finds the app again on the
+    // next launch. Prod falls back to an ephemeral port when it's taken
+    // (the phone mapping goes stale until re-enabled, the app still works);
+    // dev tolerates the failure outright — an external skill-server may
+    // already hold 8765 and back the Vite proxy.
+    let preferred = std::env::var("VIBESTUDIO_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(skill_server::PHONE_PORT);
+    let port = match skill_server::spawn(make_cfg(preferred)) {
+        Ok(h) => {
+            phone.set_port(h.addr.port());
+            h.addr.port()
+        }
+        Err(e) if !tauri::is_dev() => {
+            log::warn!("port {preferred} taken ({e}); falling back to an ephemeral port");
+            let h = skill_server::spawn(make_cfg(0))?;
+            phone.set_port(h.addr.port());
+            h.addr.port()
+        }
+        Err(e) => {
+            log::error!("in-process server did not start: {e}");
+            preferred
+        }
+    };
+    // If we bound an ephemeral port because the exiting process still held
+    // 8765 (an update restart racing shutdown), a persisted `tailscale serve`
+    // mapping now points at a dead port — re-point it so the phone reconnects
+    // without re-enabling. No-op when phone mode was never turned on.
+    phone.clone().resync_on_start();
+
+    // Same-origin model: the webview's origin IS the server, so api.ts's
+    // relative `/api` calls + the SSE EventSource pass CSP `default-src 'self'`.
+    let url = if tauri::is_dev() {
+        "http://localhost:1420".to_string() // Vite serves the UI + proxies /api → 8765
+    } else {
+        format!("http://127.0.0.1:{port}") // the in-process server serves UI + /api
+    };
+    WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::External(url.parse().unwrap()))
+        .title("VibeStudio")
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(720.0, 480.0)
+        // Off by default in wry; enables Cmd/Ctrl +/-/0 whole-window zoom
+        // (native page zoom on Windows, an injected CSS-zoom polyfill on
+        // macOS/Linux). The terminal's DOM renderer stays crisp under it.
+        .zoom_hotkeys_enabled(true)
+        // `target="_blank"` links (release page, GitHub device flow) must
+        // open in the SYSTEM browser — wry's default silently drops them.
+        .on_new_window(|url, _features| {
+            if matches!(url.scheme(), "http" | "https") {
+                if let Err(e) = open::that_detached(url.as_str()) {
+                    log::warn!("couldn't open {url} in the system browser: {e}");
+                }
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .build()?;
+
+    // ── tray: the lifecycle owner. Closing the window only hides it (the
+    // server, terminals, and phone access stay up); Quit here is the ONE
+    // explicit full teardown — every studio terminal on this machine, the
+    // live SSH session, and the engine end with it. Update restarts and
+    // plain window closes never touch the terminals.
+    let open_item = MenuItemBuilder::with_id("open", "Open VibeStudio").build(app)?;
+    let phone_item = MenuItemBuilder::with_id("phone", "Open on your phone…").build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", "Quit VibeStudio").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .item(&open_item)
+        .item(&phone_item)
+        .separator()
+        .item(&quit_item)
+        .build()?;
+    let remote_for_tray = remote.clone();
+    let mut tray = TrayIconBuilder::with_id("main-tray")
+        .tooltip("VibeStudio")
+        .menu(&menu)
+        .on_menu_event(move |app, event| match event.id().as_ref() {
+            "open" => show_main(app),
+            "phone" => {
+                show_main(app);
+                // The SPA opens the phone modal when it sees this param
+                // (and strips it) — see RemoteMenu.tsx.
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.eval("window.location.hash = '#/?phone=1'");
+                }
+            }
+            "quit" => {
+                if let Ok(sessions) = skill_term::list_sessions() {
+                    for s in sessions {
+                        let _ = skill_term::kill_session(&s.id);
+                    }
+                }
+                remote_for_tray.shutdown();
+                engine::shutdown();
+                app.exit(0);
+            }
+            _ => {}
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+/// Mobile setup (iOS): the pure switchboard. Same loopback server, no local backend
+/// — no terminals/engine (`startup_maintenance` stays false and the local-backend
+/// feature is compiled out), no tray, no updater (the App Store owns updates),
+/// no phone hub (this IS the phone). Credentials come from the Keychain-backed
+/// [`securestore::KeychainStore`]; connects run over the in-process russh
+/// transport (see `skill-server`'s `russh-transport` feature).
+#[cfg(target_os = "ios")]
+fn setup_mobile(
+    app: &tauri::App,
+    remote_slot: &std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Same durable logging as the desktop: on iOS stderr goes nowhere useful,
+    // the app_log_dir file is what you'd pull from the device to debug.
+    let log_path = app.path().app_log_dir().ok().map(|d| d.join("vibestudio.log"));
+    match &log_path {
+        Some(p) => init_logging_to_file(p),
+        None => init_logging(),
+    }
+
+    // The credential store: connection profiles on disk (non-secret), private
+    // keys in the iOS Keychain. Wired into BOTH consumers — the server (for the
+    // /api/remote/profiles* routes the credential UI drives) and the connection
+    // manager (so `connect(id)` resolves a saved profile to russh credentials).
+    let store: std::sync::Arc<dyn skill_server::SecureStore> =
+        std::sync::Arc::new(securestore::KeychainStore::new().map_err(std::io::Error::other)?);
+
+    let remote = std::sync::Arc::new(SshRemoteControl::with_secure_store(
+        app.package_info().version.to_string(),
+        Some(store.clone()),
+    ));
+    let _ = remote_slot.set(remote.clone());
+
+    let resource_dir = app.path().resource_dir().ok();
+    let dist = resource_dir
+        .clone()
+        .map(|r| r.join("dist"))
+        .unwrap_or_else(|| std::path::PathBuf::from("dist"));
+    let handle = skill_server::spawn(ServerConfig {
+        host: "127.0.0.1".into(),
+        port: 0, // ephemeral — nothing on the phone needs a stable port
+        dist,
+        bundled_skills: resource_dir.clone().map(|r| r.join("skills")),
+        examples_base: resource_dir,
+        startup_maintenance: false, // no local terminals/engine to maintain
+        remote: Some(remote as std::sync::Arc<dyn skill_server::RemoteControl>),
+        secure_store: Some(store),
+        ..Default::default()
+    })?;
+
+    // Same-origin model as the desktop: the webview's origin IS the loopback
+    // server (needs the ATS loopback exception in Info.plist).
+    let url = format!("http://127.0.0.1:{}", handle.addr.port());
+    WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::External(url.parse().unwrap()))
+        .build()?;
+    Ok(())
+}
+
 /// Show + focus the main window (tray "Open", macOS dock reopen).
+#[cfg(desktop)]
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();

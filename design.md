@@ -248,6 +248,32 @@ A **local proxy switchboard**; the webview never changes origin.
 - `/api/remote/{list,connect,disconnect,status,last}` is **always local** (`SshRemoteControl`,
   `server/skill-server/src/sshmgr/`); shells out to `ssh`, or `wsl.exe` for `wsl:<distro>`
   targets. A `Transport` enum abstracts the two (a WSL distro is just Linux).
+- **Mobile is remote-ONLY (iPhone, feature `russh-transport`).** A phone holds no
+  skills/agents/engine, so there is **no local workspace on mobile** — the in-process loopback
+  server exists purely as a switchboard that proxies to a remote. iOS can't spawn `ssh`, so the
+  phone speaks SSH in-process (`sshmgr/russh_tx.rs`, russh on `ring`) behind the same seam
+  (`conn.rs`'s `Remote` trait — one connect orchestration drives both; the desktop keeps the
+  shell-out because it inherits `~/.ssh/config`/agent/ProxyJump). Credentials are saved
+  profiles: host/port/user as JSON, the private key in the **iOS Keychain** — the `SecureStore`
+  client-capability trait (impl `client/desktop/src/securestore.rs`, same pattern as
+  `NotifyControl`), managed over the pinned-local `/api/remote/profiles*` routes and an
+  on-device `/api/ssh/keygen` (also pinned local — a key is born where its keystore lives, and
+  no route ever returns it). Host keys are TOFU-pinned to `~/.config/vibestudio/russh_known_hosts`
+  (no `~/.ssh` on iOS; fails closed). `RunEvent::Resumed` → `resume_check()` reconnects after
+  iOS kills the backgrounded tunnel (it ACTIVELY probes the forwarded port's `/api/health`
+  rather than trusting the keepalive-lagged liveness flag, which reads stale right after a
+  resume). The desktop/mobile build split lives in `client/desktop/Cargo.toml`'s target tables
+  (iOS-only; not features — `tauri ios build` can't disable default features) and a
+  `cfg(target_os = "ios")` `setup_mobile`; `scripts/ios-sim.sh` builds + runs it in the
+  Simulator, `gen/apple` holds the Xcode project (ATS loopback exception in its Info.plist).
+  **Connect-first UI:** since a disconnected phone has nothing to show, the SPA gates on a
+  `mobile` flag (the remote store probes whether `/api/remote/profiles` answers) and renders a
+  dedicated full-screen **connect screen** (`pages/MobileConnect.tsx`, Termius-style — big
+  saved-connection cards + an on-device key-gen add flow, shared with the top-chrome
+  `RemoteMenu` via `components/connections.tsx`) instead of the workspace whenever
+  `mobile && status !== connected`. Connecting reveals the normal remote-backed workspace;
+  disconnecting returns to the connect screen. Desktop is untouched (`mobile` is false). Still
+  to prove: on-device/TestFlight validation (background→resume, idle SSE over a real network).
 - While connected, **every other `/api/*` (incl. the `/api/terminal/attach` and `/api/events`
   SSE streams and `/api/phone/*` — the phone hub is the remote) is reverse-proxied** to the
   remote (`proxy.rs`) with the recorded token injected upstream (current servers launch
@@ -274,9 +300,6 @@ A **local proxy switchboard**; the webview never changes origin.
 
 ## Roadmap
 
-- **Native iPhone app — "full SSH from the phone"** (Termius-parity): in-process russh
-  switchboard (mobile-only; desktop keeps the `ssh` shell-out). Backend done + proven on Linux;
-  remaining Mac work (build split, Keychain, credential UI) and how to test in [MOBILE.md](MOBILE.md).
 - **Kill Rust↔TS wire drift:** generate `api.ts` DTOs from serde structs (`ts-rs`) + a CI check.
 - **Skill-usage feedback loop (mining):** the miner already extracts `skills_used` + distills
   user feedback; recurrent runs can report "skill triggered N times / never since accepted" and

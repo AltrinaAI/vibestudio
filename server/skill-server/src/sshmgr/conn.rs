@@ -59,14 +59,21 @@ pub enum LaunchError {
 /// Pick the transport for `host`. Desktop → the user's `ssh`/`wsl.exe`. The mobile
 /// switchboard (feature `russh-transport`) → russh with the stored/env-supplied
 /// credentials; falling through to `ssh` only if no russh credentials resolve (so a desktop
-/// build compiled with the feature still behaves normally).
-pub fn build_remote(host: &str) -> Result<Box<dyn Remote>, String> {
+/// build compiled with the feature still behaves normally). On iOS there is no `ssh` to
+/// fall through to — an unresolved id is an error with the actual fix in it.
+#[cfg_attr(not(feature = "russh-transport"), allow(unused_variables))]
+pub fn build_remote(host: &str, store: Option<&dyn crate::SecureStore>) -> Result<Box<dyn Remote>, String> {
     #[cfg(feature = "russh-transport")]
     {
-        if let Some(creds) = super::russh_tx::creds_for(host) {
+        if let Some(creds) = super::russh_tx::creds_for(host, store)? {
             return Ok(Box::new(super::russh_tx::RusshRemote::connect(creds)?));
         }
     }
+    #[cfg(target_os = "ios")]
+    {
+        return Err(format!("No saved connection for “{host}” — add one (host, user, and a key) first."));
+    }
+    #[allow(unreachable_code)]
     Ok(Box::new(SshRemote::new(host)))
 }
 

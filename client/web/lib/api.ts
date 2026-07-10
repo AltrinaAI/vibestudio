@@ -149,6 +149,39 @@ export const remoteLast = () => http<{ host: string | null }>("GET", "remote/las
 export const remoteConnect = (host: string) => http<{ ok: boolean }>("POST", "remote/connect", { host });
 export const remoteDisconnect = () => http<{ ok: boolean }>("POST", "remote/disconnect");
 
+// --- Saved SSH connections (mobile only) ---
+// The mobile app has no `~/.ssh` — connections are saved profiles whose private
+// key lives in the OS keystore (iOS Keychain), managed over these pinned-local
+// routes. `id` is `user@host:port`, the exact string `remoteConnect` takes. On
+// servers without a credential store (desktop, standalone) these 404 — the UI
+// treats that as "not the mobile app" and hides the credential form.
+export interface SshProfile {
+  id: string;
+  host: string;
+  port: number;
+  user: string;
+}
+/** Resolves null when this server has no credential store (`/api/remote/profiles` 404s). */
+export const sshProfiles = (): Promise<SshProfile[] | null> =>
+  http<SshProfile[]>("GET", "remote/profiles").catch((e: unknown) => {
+    if ((e as { status?: number } | null)?.status === 404) return null;
+    throw e;
+  });
+/** Save a connection: profile to disk, `privateKey` into the OS keystore. The key
+ *  travels in exactly once, here — no route ever returns it. */
+export const sshProfileSave = (p: { host: string; port: number; user: string; privateKey: string }) =>
+  http<{ ok: boolean; id: string }>("POST", "remote/profiles/save", p);
+export const sshProfileDelete = (id: string) => http<{ ok: boolean }>("POST", "remote/profiles/delete", { id });
+/** Generate an ed25519 keypair ON THIS DEVICE (pinned local, never proxied). The
+ *  private half goes straight back out via sshProfileSave; the public half is what
+ *  the user pastes into the server's authorized_keys. */
+export interface GeneratedSshKey {
+  privateKey: string;
+  publicKey: string;
+  fingerprint: string;
+}
+export const sshKeygen = (comment?: string) => http<GeneratedSshKey>("POST", "ssh/keygen", { comment });
+
 // --- "Open on your phone" (desktop only): serve the app over the user's Tailscale
 //     network and show a QR code a phone can scan. Absent (404) on standalone
 //     remote servers — the caller treats that as "unavailable". ---

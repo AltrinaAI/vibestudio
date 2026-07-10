@@ -7,6 +7,9 @@
 //! phone.
 use std::path::Path;
 
+// iOS/Android have no file manager to shell out to; the fallback arm errors
+// without spawning, so the import only exists where an arm uses it.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use crate::process::hidden_command;
 
 /// Open the OS file manager with `path` selected. Best-effort and non-blocking:

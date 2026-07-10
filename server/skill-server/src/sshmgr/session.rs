@@ -33,9 +33,19 @@ impl Session {
 }
 
 /// Run the whole connect flow on a background thread, then store the result — unless a
-/// disconnect or newer connect superseded it (tracked by `generation`).
-pub fn run_connect(state: Arc<Mutex<State>>, host: String, generation: u64, app_version: String) {
-    let result = build_and_connect(&state, &host, generation, &app_version);
+/// disconnect or newer connect superseded it (tracked by `generation`). `resume=true`
+/// marks a reconnect the mobile shell fires on app-resume: it must keep the remembered
+/// host on failure (the radio may not be back yet), where a user-driven connect forgets
+/// a genuinely-dead resume host.
+pub fn run_connect(
+    state: Arc<Mutex<State>>,
+    host: String,
+    generation: u64,
+    app_version: String,
+    store: Option<Arc<dyn crate::SecureStore>>,
+    resume: bool,
+) {
+    let result = build_and_connect(&state, &host, generation, &app_version, store.as_deref());
     let mut s = state.lock().unwrap();
     if s.generation != generation {
         // Superseded — discard, tearing down any session we just built.
@@ -71,7 +81,10 @@ pub fn run_connect(state: Arc<Mutex<State>>, host: String, generation: u64, app_
             // Hybrid resume policy: if the host we just failed to reach IS the remembered
             // resume host, forget it — a genuinely-dead host auto-clears after one failed
             // launch attempt, while an unrelated failed connect leaves the memory intact.
-            if s.last_host.as_deref() == Some(host.as_str()) {
+            // EXCEPT on an app-resume reconnect: that attempt routinely races the radio
+            // coming back after a suspend, so a transient failure must not erase the
+            // remembered host (it would disable auto-reconnect until a manual reconnect).
+            if !resume && s.last_host.as_deref() == Some(host.as_str()) {
                 s.last_host = None;
                 super::lastconn::forget();
             }
@@ -87,8 +100,9 @@ fn build_and_connect(
     host: &str,
     generation: u64,
     app_version: &str,
+    store: Option<&dyn crate::SecureStore>,
 ) -> Result<Session, String> {
-    let remote = conn::build_remote(host)?;
+    let remote = conn::build_remote(host, store)?;
     connect_flow(state, remote.as_ref(), host, generation, app_version)
 }
 

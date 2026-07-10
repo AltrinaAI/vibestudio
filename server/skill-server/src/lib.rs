@@ -228,6 +228,38 @@ pub trait EditorControl: Send + Sync {
     ) -> Result<(), String>;
 }
 
+/// A saved SSH connection profile (the mobile switchboard's equivalent of a
+/// `~/.ssh/config` entry — iOS has no `~/.ssh`). The non-secret half only: the
+/// private key lives in the OS keystore behind [`SecureStore`], keyed by `id`.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SshProfile {
+    /// Stable connection id, `user@host:port` — the exact string the UI passes to
+    /// `/api/remote/connect`, so the switchboard can resolve credentials from it.
+    pub id: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+}
+
+/// Credential storage for the mobile switchboard's russh transport: connection
+/// profiles plus their private keys, the latter in the OS keystore (iOS
+/// Keychain). Implemented in `client/desktop` (same one-way dependency rule as
+/// [`NotifyControl`]); a server without one (desktop, standalone) 404s the
+/// profile routes and the SPA never shows the credential UI. Reached only over
+/// the pinned-local `/api/remote/profiles*` routes — a device's credentials
+/// never leave it.
+pub trait SecureStore: Send + Sync {
+    fn list_profiles(&self) -> Result<Vec<SshProfile>, String>;
+    fn get_profile(&self, id: &str) -> Result<Option<SshProfile>, String>;
+    /// Persist the profile and stash `private_key` (OpenSSH text) in the OS
+    /// keystore under the profile's id. Overwrites an existing profile.
+    fn put_profile(&self, profile: &SshProfile, private_key: &str) -> Result<(), String>;
+    /// Remove the profile and its keystore entry. Ok if absent.
+    fn delete_profile(&self, id: &str) -> Result<(), String>;
+    /// The OpenSSH private key for `id`, or `None` if the keystore has no entry.
+    fn get_private_key(&self, id: &str) -> Result<Option<String>, String>;
+}
+
 /// How to run the server. Build with `..Default::default()` and override fields.
 pub struct ServerConfig {
     /// Bind host. Desktop and CLI both use `127.0.0.1`.
@@ -277,6 +309,10 @@ pub struct ServerConfig {
     /// editor, or on the connected remote over Remote-SSH. `None` (standalone/
     /// browser) = `/api/editor/*` 404s and the SPA hides the button.
     pub editor: Option<Arc<dyn EditorControl>>,
+    /// SSH credential store (mobile only): saved connection profiles + Keychain-
+    /// held private keys for the russh transport. `None` (desktop, standalone) =
+    /// `/api/remote/profiles*` 404s and the SPA hides the credential UI.
+    pub secure_store: Option<Arc<dyn SecureStore>>,
 }
 
 impl Default for ServerConfig {
@@ -295,6 +331,7 @@ impl Default for ServerConfig {
             phone: None,
             notifier: None,
             editor: None,
+            secure_store: None,
         }
     }
 }
@@ -377,6 +414,7 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
         phone: cfg.phone,
         notifier: cfg.notifier,
         editor: cfg.editor,
+        secure_store: cfg.secure_store,
         port: addr.port(),
     });
 
@@ -399,6 +437,7 @@ struct ServerCtx {
     phone: Option<Arc<PhoneControl>>,
     notifier: Option<Arc<dyn NotifyControl>>,
     editor: Option<Arc<dyn EditorControl>>,
+    secure_store: Option<Arc<dyn SecureStore>>,
     /// The ACTUAL bound port — the MCP-connection flow bakes it into the
     /// `/gw/<id>/mcp` gateway URL written into agent configs.
     port: u16,
@@ -476,6 +515,18 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
         // App auto-update — ALWAYS handled locally (never proxied): it's THIS
         // desktop's own update state, not the connected remote's.
         if path.starts_with("/api/update/") {
+            let mut body = String::new();
+            if method == Method::Post {
+                let _ = request.as_reader().read_to_string(&mut body);
+            }
+            send_reply(request, handle(&method, &url, &body, ctx));
+            continue;
+        }
+        // On-device SSH keygen — ALWAYS handled locally (never proxied): the
+        // generated private key must be born on the machine whose keystore will
+        // hold it; forwarding it to a connected remote would mint (and expose)
+        // the key over there instead. 404s on servers without `russh-transport`.
+        if path == "/api/ssh/keygen" {
             let mut body = String::new();
             if method == Method::Post {
                 let _ = request.as_reader().read_to_string(&mut body);

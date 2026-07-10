@@ -21,13 +21,13 @@
 //! seam is the next slice — until then these items are unused off the test path.
 #![allow(dead_code)]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::client::{self, Config, Handle, Handler};
-use russh::keys::{load_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::{decode_secret_key, load_secret_key, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh::ChannelMsg;
 use tokio::io::copy_bidirectional;
 use tokio::net::TcpListener;
@@ -54,10 +54,16 @@ impl Handler for HostKeyPolicy {
     }
 }
 
+/// Serializes TOFU reads/appends: two first-sight connections racing (a probe and a
+/// connect, parallel tests) must not interleave their appends — a torn line reads
+/// back as a mismatched pin and bricks the host forever (TOFU fails closed).
+static TOFU_LOCK: Mutex<()> = Mutex::new(());
+
 /// TOFU decision for `host` given the server's key `fingerprint`: pin-and-accept on first
 /// sight, accept an unchanged key, reject a changed one. Fails CLOSED (reject) on any store
 /// I/O error rather than trusting blindly.
 fn tofu_accept(host: &str, fingerprint: &str) -> bool {
+    let _serialized = TOFU_LOCK.lock().unwrap();
     let Ok(path) = known_hosts_path() else { return false };
     if let Ok(contents) = std::fs::read_to_string(&path) {
         for line in contents.lines() {
@@ -68,11 +74,13 @@ fn tofu_accept(host: &str, fingerprint: &str) -> bool {
             }
         }
     }
-    // First sight — pin it. If we can't persist the pin we can't guarantee future checks, so
-    // reject rather than trust-without-recording.
+    // First sight — pin it, the whole line in ONE write (O_APPEND makes a single
+    // write atomic, so even another PROCESS can't tear it). If we can't persist
+    // the pin we can't guarantee future checks, so reject rather than
+    // trust-without-recording.
     use std::io::Write;
     match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(mut f) => writeln!(f, "{host} {fingerprint}").is_ok(),
+        Ok(mut f) => f.write_all(format!("{host} {fingerprint}\n").as_bytes()).is_ok(),
         Err(_) => false,
     }
 }
@@ -125,22 +133,36 @@ impl Lifeline {
     }
 }
 
+/// Where a connection's private key comes from: an on-disk file (the desktop/dev
+/// env path), or in-memory OpenSSH text (the mobile path — the key lives in the
+/// OS keystore and must never touch disk).
+pub enum KeyMaterial {
+    Path { path: PathBuf, passphrase: Option<String> },
+    Openssh { text: String },
+}
+
+impl KeyMaterial {
+    /// Decode into the key russh authenticates with. `Path` honors its passphrase;
+    /// keystore-held text is stored decrypted (the keystore is the protection).
+    fn load(&self) -> Result<PrivateKey, String> {
+        match self {
+            KeyMaterial::Path { path, passphrase } => load_secret_key(path, passphrase.as_deref())
+                .map_err(|e| format!("could not load the SSH key {}: {e}", path.display())),
+            KeyMaterial::Openssh { text } => decode_secret_key(text, None)
+                .map_err(|e| format!("could not read the stored SSH key: {e}")),
+        }
+    }
+}
+
 impl RusshSession {
-    /// Connect and authenticate with a private key. `passphrase` decrypts an encrypted key.
-    pub fn connect(
-        host: &str,
-        port: u16,
-        user: &str,
-        key_path: &Path,
-        passphrase: Option<&str>,
-    ) -> Result<Self, String> {
+    /// Connect and authenticate with a private key.
+    pub fn connect(host: &str, port: u16, user: &str, key: &KeyMaterial) -> Result<Self, String> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .map_err(|e| format!("could not start the SSH runtime: {e}"))?;
-        let key = load_secret_key(key_path, passphrase)
-            .map_err(|e| format!("could not load the SSH key {}: {e}", key_path.display()))?;
+        let key = key.load()?;
         let host = host.to_string();
         let user = user.to_string();
 
@@ -334,23 +356,42 @@ pub struct RusshCreds {
     pub host: String,
     pub port: u16,
     pub user: String,
-    pub key_path: PathBuf,
-    pub passphrase: Option<String>,
+    pub key: KeyMaterial,
 }
 
-/// Resolve credentials for a connection id, or `None` to fall back to the `ssh` shell-out.
-/// The mobile switchboard will resolve these from its stored profiles; until then (and for
-/// off-device testing) they come from the environment, gated on `VIBESTUDIO_RUSSH=1`: the
-/// connection id is parsed as `user@host[:port]`, the key path is `VIBESTUDIO_RUSSH_KEY`
-/// (optional `VIBESTUDIO_RUSSH_PASSPHRASE`).
-pub fn creds_for(host: &str) -> Option<RusshCreds> {
-    if std::env::var("VIBESTUDIO_RUSSH").ok().as_deref() != Some("1") {
-        return None;
+/// Resolve credentials for a connection id: `Ok(None)` falls back to the `ssh` shell-out.
+///
+/// The device's [`SecureStore`] wins — an id matching a saved profile connects with its
+/// Keychain-held key, and a profile whose key has gone missing is an ERROR (the user must
+/// re-add the connection), never a silent fall-through to a transport iOS doesn't have.
+/// Off-device (dev/tests) credentials come from the environment instead, gated on
+/// `VIBESTUDIO_RUSSH=1`: the id is parsed as `user@host[:port]`, the key path is
+/// `VIBESTUDIO_RUSSH_KEY` (optional `VIBESTUDIO_RUSSH_PASSPHRASE`).
+///
+/// [`SecureStore`]: crate::SecureStore
+pub fn creds_for(host: &str, store: Option<&dyn crate::SecureStore>) -> Result<Option<RusshCreds>, String> {
+    if let Some(store) = store {
+        if let Some(profile) = store.get_profile(host)? {
+            let text = store.get_private_key(host)?.ok_or_else(|| {
+                format!("The key for {host} is missing from the keystore — remove the connection and add it again.")
+            })?;
+            return Ok(Some(RusshCreds {
+                host: profile.host,
+                port: profile.port,
+                user: profile.user,
+                key: KeyMaterial::Openssh { text },
+            }));
+        }
     }
-    let (user, h, port) = parse_target(host)?;
-    let key_path = std::env::var("VIBESTUDIO_RUSSH_KEY").ok().filter(|s| !s.is_empty())?.into();
+    if std::env::var("VIBESTUDIO_RUSSH").ok().as_deref() != Some("1") {
+        return Ok(None);
+    }
+    let Some((user, h, port)) = parse_target(host) else { return Ok(None) };
+    let Some(path) = std::env::var("VIBESTUDIO_RUSSH_KEY").ok().filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
     let passphrase = std::env::var("VIBESTUDIO_RUSSH_PASSPHRASE").ok().filter(|s| !s.is_empty());
-    Some(RusshCreds { host: h, port, user, key_path, passphrase })
+    Ok(Some(RusshCreds { host: h, port, user, key: KeyMaterial::Path { path: path.into(), passphrase } }))
 }
 
 /// Parse `user@host[:port]` (port defaults to 22).
@@ -375,7 +416,7 @@ pub struct RusshRemote {
 
 impl RusshRemote {
     pub fn connect(creds: RusshCreds) -> Result<Self, String> {
-        let session = RusshSession::connect(&creds.host, creds.port, &creds.user, &creds.key_path, creds.passphrase.as_deref())?;
+        let session = RusshSession::connect(&creds.host, creds.port, &creds.user, &creds.key)?;
         Ok(Self { session: Arc::new(session) })
     }
 }
@@ -482,6 +523,79 @@ fn tail(stderr: &str) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// An in-memory SecureStore standing in for the iOS Keychain-backed one.
+    struct MemStore {
+        profiles: Vec<crate::SshProfile>,
+        keys: Mutex<HashMap<String, String>>,
+    }
+
+    impl crate::SecureStore for MemStore {
+        fn list_profiles(&self) -> Result<Vec<crate::SshProfile>, String> {
+            Ok(self.profiles.clone())
+        }
+        fn get_profile(&self, id: &str) -> Result<Option<crate::SshProfile>, String> {
+            Ok(self.profiles.iter().find(|p| p.id == id).cloned())
+        }
+        fn put_profile(&self, _profile: &crate::SshProfile, _key: &str) -> Result<(), String> {
+            unimplemented!("not exercised here")
+        }
+        fn delete_profile(&self, _id: &str) -> Result<(), String> {
+            unimplemented!("not exercised here")
+        }
+        fn get_private_key(&self, id: &str) -> Result<Option<String>, String> {
+            Ok(self.keys.lock().unwrap().get(id).cloned())
+        }
+    }
+
+    fn profile(id: &str) -> crate::SshProfile {
+        crate::SshProfile { id: id.into(), host: "pi.local".into(), port: 2022, user: "harvey".into() }
+    }
+
+    // The store is the mobile path's source of truth: a saved profile resolves to
+    // in-memory key material (never a disk path), carrying the profile's own
+    // host/port/user — not a parse of the connection id.
+    #[test]
+    fn creds_resolve_from_the_store_first() {
+        let id = "harvey@pi.local:2022";
+        let store = MemStore {
+            profiles: vec![profile(id)],
+            keys: Mutex::new(HashMap::from([(id.to_string(), "KEYTEXT".to_string())])),
+        };
+        let creds = creds_for(id, Some(&store)).expect("no store error").expect("resolves");
+        assert_eq!((creds.host.as_str(), creds.port, creds.user.as_str()), ("pi.local", 2022, "harvey"));
+        assert!(
+            matches!(creds.key, KeyMaterial::Openssh { ref text } if text == "KEYTEXT"),
+            "key must be the stored text, in memory"
+        );
+    }
+
+    // A profile whose key vanished from the keystore must ERROR — falling through
+    // to the ssh shell-out would be a dead end on iOS and a confusing one anywhere.
+    #[test]
+    fn missing_stored_key_is_an_error_not_a_fallthrough() {
+        let id = "harvey@pi.local:2022";
+        let store = MemStore { profiles: vec![profile(id)], keys: Mutex::new(HashMap::new()) };
+        let Err(e) = creds_for(id, Some(&store)) else { panic!("must error") };
+        assert!(e.contains("missing"), "should say the key is missing: {e}");
+    }
+
+    // An id with no saved profile falls through (→ the ssh shell-out on desktop);
+    // the store's presence alone must not capture every connect.
+    #[test]
+    fn unknown_id_falls_through_to_the_default_transport() {
+        let store = MemStore { profiles: vec![], keys: Mutex::new(HashMap::new()) };
+        // (Relies on VIBESTUDIO_RUSSH not being set to 1 in the test env, same as
+        // every non-opt-in run of this suite.)
+        assert!(creds_for("some-alias", Some(&store)).expect("no error").is_none());
+    }
+}
+
 // Integration test against a REAL OpenSSH server. Skipped unless RUSSH_IT_* are set, so
 // `cargo test` in CI (no sshd) is a no-op; run it by pointing the vars at a live host:
 //   RUSSH_IT_HOST=127.0.0.1 RUSSH_IT_PORT=2222 RUSSH_IT_USER=$USER \
@@ -506,7 +620,8 @@ mod it {
             eprintln!("skipping: set RUSSH_IT_HOST/PORT/USER/KEY to run against a live sshd");
             return;
         };
-        let sess = RusshSession::connect(&host, port, &user, key.as_ref(), None).expect("connect+auth");
+        let key = KeyMaterial::Path { path: key.into(), passphrase: None };
+        let sess = RusshSession::connect(&host, port, &user, &key).expect("connect+auth");
 
         // 1. exec + capture stdout.
         let out = sess.exec("echo hello_russh; uname -s").expect("exec");
@@ -566,7 +681,8 @@ mod it {
             }
         });
 
-        let sess = RusshSession::connect(&host, port, &user, key.as_ref(), None).expect("connect");
+        let key = KeyMaterial::Path { path: key.into(), passphrase: None };
+        let sess = RusshSession::connect(&host, port, &user, &key).expect("connect");
         let fwd = sess.open_forward(0, "127.0.0.1", drip_port).expect("open_forward");
         let mut conn = std::net::TcpStream::connect(("127.0.0.1", fwd.local_port())).unwrap();
         conn.set_read_timeout(Some(Duration::from_secs(25))).unwrap();
