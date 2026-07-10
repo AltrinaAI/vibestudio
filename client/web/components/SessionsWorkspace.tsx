@@ -10,7 +10,6 @@ import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
 import { log } from "@/lib/log";
 import * as push from "@/lib/push";
-import { useRemote } from "@/lib/remote";
 import * as store from "@/lib/sessions";
 
 // Legacy key string — keep the old "terminals" word so existing users' saved rail width survives the rename.
@@ -111,23 +110,12 @@ export default function SessionsWorkspace({
   }, []);
   const canOpenEditor = !!vscode?.available;
   const editorName = vscode?.name ?? "VS Code";
-  // A local Claude session with a known id can be opened AT its conversation (the
-  // extension's `vscode://anthropic.claude-code/open?session=` deep link), not just
-  // its folder. Not for other agents (no such link) nor a connected remote (its
-  // transcript lives on the far host, out of the local extension's reach).
-  const remoteConnected = useRemote().status.state === "connected";
-  const opensConversation = (s: TermSession) =>
-    !remoteConnected && s.agent === "claude" && !!s.sessionId;
   const openInEditor = useCallback((s: TermSession) => {
-    const session = s.agent === "claude" && s.sessionId ? { agent: s.agent, id: s.sessionId } : undefined;
-    api.editorOpen(s.cwd, session).catch((e) =>
+    api.editorOpen(s.cwd).catch((e) =>
       log.warn("sessions", "open in editor failed", e instanceof Error ? e.message : String(e)),
     );
   }, []);
-  const editorTitle = (s: TermSession) =>
-    opensConversation(s)
-      ? `Open this session's folder and Claude conversation in ${editorName}`
-      : `Open this session's folder in ${editorName}`;
+  const editorTitle = () => `Open this session's folder in ${editorName}`;
 
   // Unread dot — the predicate (and its bell-not-activity rationale) lives with
   // the store; this just binds it to this workspace's own selection.
@@ -349,7 +337,7 @@ export default function SessionsWorkspace({
             <button
               type="button"
               onClick={() => openInEditor(active)}
-              title={editorTitle(active)}
+              title={editorTitle()}
               aria-label={`Open ${active.label} in ${editorName}`}
               className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
             >
@@ -425,7 +413,7 @@ export default function SessionsWorkspace({
                 type="button"
                 onClick={() => openInEditor(active)}
                 aria-label={`Open ${active.label} in ${editorName}`}
-                title={editorTitle(active)}
+                title={editorTitle()}
                 className="shrink-0 rounded p-1 text-muted hover:bg-panel hover:text-fg"
               >
                 <OpenExternalIcon />
@@ -458,7 +446,7 @@ export default function SessionsWorkspace({
                       type="button"
                       onClick={() => openInEditor(active)}
                       aria-label={`Open ${active.label} in ${editorName}`}
-                      title={editorTitle(active)}
+                      title={editorTitle()}
                       className="rounded p-1 text-muted hover:bg-panel hover:text-fg"
                     >
                       <OpenExternalIcon />

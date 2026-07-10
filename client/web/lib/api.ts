@@ -1090,16 +1090,9 @@ export const notifyBadge = (count: number) =>
 /** Whether a local VS Code is installed & reachable from this client. A 404
  *  (phone/remote origin, or no server support) surfaces as a thrown error. */
 export const editorStatus = () => http<{ available: boolean; name?: string }>("GET", "editor/status");
-/** Launch VS Code on `path` (a session's working directory). When `session` is
- *  given AND its agent exposes an IDE deep link (Claude Code today), the editor
- *  ALSO resumes that exact conversation; the server ignores it for other agents and
- *  when a remote is connected (the transcript lives on the far host). */
-export const editorOpen = (path: string, session?: { agent: string; id: string }) =>
-  http<{ ok: boolean }>("POST", "editor/open", {
-    path,
-    agent: session?.agent,
-    sessionId: session?.id,
-  }).then(() => {});
+/** Launch VS Code on `path` (a session's working directory). */
+export const editorOpen = (path: string) =>
+  http<{ ok: boolean }>("POST", "editor/open", { path }).then(() => {});
 
 // Web Push — notifications with the app closed. NOT pinned-local: with a remote
 // hub connected these proxy to it, so subscriptions live next to the bell

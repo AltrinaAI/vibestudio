@@ -194,18 +194,6 @@ pub trait NotifyControl: Send + Sync {
     fn set_badge(&self, _count: u32) {}
 }
 
-/// A live session's agent conversation, so the editor can ALSO resume that exact
-/// conversation — not just open the folder. Passed to [`EditorControl::open`] and
-/// acted on only for a LOCAL session (a remote's transcript store lives on the far
-/// host, and an OS-delivered `vscode://` URI reaches only the local extension host)
-/// whose agent exposes an IDE deep link. Claude Code is the only one today.
-pub struct AgentConversation<'a> {
-    /// Agent family — `"claude"`, `"codex"`, ….
-    pub agent: &'a str,
-    /// The agent's own conversation id (Claude's forced `--session-id`).
-    pub session_id: &'a str,
-}
-
 /// Opening a session's folder in the user's local editor (VS Code) — the "Open in
 /// VS Code" affordance. A CLIENT-machine capability, not agent work: it acts on the
 /// screen the user is at, so it's implemented in `client/desktop` (same one-way
@@ -217,15 +205,8 @@ pub trait EditorControl: Send + Sync {
     fn detect(&self) -> Option<String>;
     /// Open `path` in the editor. `remote_host` set → the folder is on that SSH
     /// remote, so open it over VS Code Remote-SSH (a local window attached over the
-    /// same SSH the tunnel uses); `None` → open the local path directly. When
-    /// `conversation` is set and the folder is local, ALSO resume that agent
-    /// conversation in the editor (best-effort, agent-specific).
-    fn open(
-        &self,
-        path: &str,
-        remote_host: Option<&str>,
-        conversation: Option<AgentConversation<'_>>,
-    ) -> Result<(), String>;
+    /// same SSH the tunnel uses); `None` → open the local path directly.
+    fn open(&self, path: &str, remote_host: Option<&str>) -> Result<(), String>;
 }
 
 /// A saved SSH connection profile (the mobile switchboard's equivalent of a
@@ -1635,16 +1616,7 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                     .as_ref()
                     .filter(|r| r.active_target().is_some())
                     .and_then(|r| r.status().host);
-                // The live agent conversation to also resume in the editor, when the
-                // session carries one (agent family + its own session id). The editor
-                // decides whether the agent supports it and only acts locally.
-                let agent = s("agent");
-                let sid = s("sessionId");
-                let convo = (!agent.is_empty() && !sid.is_empty())
-                    .then_some(AgentConversation { agent: &agent, session_id: &sid });
-                json_reply(
-                    ed.open(&s("path"), host.as_deref(), convo).map(|()| json!({ "ok": true })),
-                )
+                json_reply(ed.open(&s("path"), host.as_deref()).map(|()| json!({ "ok": true })))
             }
             None => editor_unavailable(),
         },
