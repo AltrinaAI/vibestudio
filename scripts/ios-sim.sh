@@ -14,4 +14,4 @@ APP="client/desktop/gen/apple/build/arm64-sim/VibeStudio.app"
 xcrun simctl boot "$DEVICE" 2>/dev/null || true
 open -a Simulator
 xcrun simctl install booted "$APP"
-xcrun simctl launch --console-pty booted com.vibestudio.app
+xcrun simctl launch --console-pty booted one.vibestudio.app

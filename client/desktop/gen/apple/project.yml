@@ -1,6 +1,6 @@
 name: vibestudio
 options:
-  bundleIdPrefix: com.vibestudio.app
+  bundleIdPrefix: one.vibestudio.app
   deploymentTarget:
     iOS: 14.0
 fileGroups: [../../src]
@@ -11,7 +11,7 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: VibeStudio
-      PRODUCT_BUNDLE_IDENTIFIER: com.vibestudio.app
+      PRODUCT_BUNDLE_IDENTIFIER: one.vibestudio.app
 targetTemplates:
   app:
     type: application
