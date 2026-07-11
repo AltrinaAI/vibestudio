@@ -153,7 +153,7 @@ export default function NavBar({
   );
 
   return (
-    <header className="z-20 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-3 text-sm">
+    <header className="z-20 flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 overflow-hidden border-b border-border px-3 pt-[env(safe-area-inset-top)] text-sm">
       {/* (1) identity + location. This left side is the flex-shrink sink: on a
           narrow (phone) screen the brand holds and the breadcrumb truncates, so the
           destinations/status cluster on the right is never pushed past the viewport

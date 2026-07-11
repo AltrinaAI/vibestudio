@@ -5,10 +5,13 @@
     <!-- interactive-widget: the soft keyboard must resize the layout (Chromium
          defaults to resizes-visual since 108, leaving h-dvh full-height with the
          terminal buried under the keyboard). WebKit ignores this key — that path
-         is lib/softKeyboard.ts. -->
+         is lib/softKeyboard.ts.
+         viewport-fit=cover: on iOS the webview runs edge-to-edge, so the layout
+         (not WKWebView's flaky automatic insets) owns the notch/status-bar gap —
+         NavBar and the mobile connect screen pad by env(safe-area-inset-top). -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <!-- Tracks the OS scheme only (the in-app toggle can diverge); matches --bg. -->
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />

@@ -69,7 +69,7 @@ export default function MobileConnect() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-6 px-6 pb-10 pt-12">
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-6 px-6 pb-10 pt-[calc(3rem+env(safe-area-inset-top))]">
       <header className="space-y-2">
         <Wordmark />
         <h1 className="text-2xl font-bold tracking-tight text-fg">Connect to a computer</h1>
