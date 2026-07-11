@@ -12,6 +12,8 @@ settingGroups:
     base:
       PRODUCT_NAME: VibeStudio
       PRODUCT_BUNDLE_IDENTIFIER: one.vibestudio.app
+      DEVELOPMENT_TEAM: 5J5PGFKG9H
+      CODE_SIGN_STYLE: Automatic
 targetTemplates:
   app:
     type: application
