@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support — VibeStudio</title>
+<meta name="description" content="Getting started with VibeStudio, frequently asked questions, and how to get help.">
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --fg: #22211e;
+    --muted: #6e6d67;
+    --accent: #2f5fd0;
+    --rule: #e7e5de;
+    --card: #f1efe9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413;
+      --fg: #e8e6e1;
+      --muted: #9b9992;
+      --accent: #8fb0ff;
+      --rule: #2b2a28;
+      --card: #1e1d1b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.65;
+  }
+  .wrap {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem;
+  }
+  .home {
+    display: inline-block;
+    margin-bottom: 2rem;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+  }
+  .home:hover { color: var(--fg); }
+  h1 {
+    font-size: 1.7rem;
+    line-height: 1.25;
+    letter-spacing: -0.02em;
+    margin: 0 0 2rem;
+  }
+  h2 {
+    font-size: 1.15rem;
+    letter-spacing: -0.01em;
+    margin: 2.25rem 0 0.5rem;
+  }
+  h3 {
+    font-size: 1rem;
+    margin: 1.75rem 0 0.25rem;
+  }
+  p { margin: 0.75rem 0; }
+  a { color: var(--accent); }
+  a:hover { text-decoration: none; }
+  ul { padding-left: 1.25rem; margin: 0.75rem 0; }
+  li { margin: 0.4rem 0; }
+  ol.steps { padding-left: 1.25rem; margin: 0.75rem 0; }
+  ol.steps li { margin: 0.75rem 0; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--card);
+    padding: 0.1em 0.35em;
+    border-radius: 5px;
+  }
+  pre {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    margin: 0.75rem 0;
+  }
+  pre code { background: none; padding: 0; }
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  footer a { color: var(--muted); }
+  footer .links { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="home" href="index.html">&larr; VibeStudio</a>
+
+  <main>
+    <h1>Support</h1>
+
+    <h2>What you need</h2>
+    <p>VibeStudio runs coding agents on <strong>your own computer</strong> — a Mac or Linux machine with SSH enabled that your phone can reach (same network, a VPN like Tailscale, or a machine with a public address). The app does not provide computers; it connects to yours.</p>
+
+    <h2>Getting started on iOS</h2>
+    <ol class="steps">
+      <li><strong>Add a connection.</strong> Tap <strong>+</strong> and enter your computer's host (name or IP), port (usually <code>22</code>), and your username on that machine.</li>
+      <li><strong>Generate a key.</strong> VibeStudio creates an SSH key pair on your phone. The private key stays in the iOS Keychain; you only ever handle the public key.</li>
+      <li><strong>Install the public key.</strong> Copy the public key and append it to <code>~/.ssh/authorized_keys</code> on your computer, for the user you entered in step 1. For example, on the computer:
+        <pre><code>echo 'PASTE_PUBLIC_KEY_HERE' &gt;&gt; ~/.ssh/authorized_keys</code></pre>
+      </li>
+      <li><strong>Save</strong> the connection.</li>
+      <li><strong>Connect.</strong> VibeStudio signs in over SSH, sets up its server on the machine, and you're ready to work.</li>
+    </ol>
+
+    <h2>Frequently asked questions</h2>
+
+    <h3>I can't connect at all.</h3>
+    <p>Check the basics first: is the host, port, and username exactly right? Is the public key installed (step 3 above)? Can your phone actually reach the machine — are they on the same network, or connected through something like <a href="https://tailscale.com">Tailscale</a>? On a Mac, also confirm SSH is on: System Settings &rarr; General &rarr; Sharing &rarr; Remote Login.</p>
+
+    <h3>It says authentication was rejected.</h3>
+    <p>The connection reached the machine, but the key isn't accepted — almost always because the public key isn't in <code>~/.ssh/authorized_keys</code> for <em>that</em> user. Double-check you added it under the same username you entered in the app, and that the file wasn't mangled when pasting (each key is a single line).</p>
+
+    <h3>What runs on my computer?</h3>
+    <p>A small server that VibeStudio installs into <code>~/.vibestudio</code>. It runs only while you're connected and exits when you disconnect. You can remove it any time by deleting that folder.</p>
+
+    <h3>Does my code pass through your servers?</h3>
+    <p>No. Your phone connects directly to your computer over SSH. There is no relay, no cloud, and no account — see the <a href="privacy.html">privacy policy</a>.</p>
+
+    <h2>Get help</h2>
+    <p>Found a bug or stuck on something? Open an issue on <a href="https://github.com/AltrinaAI/vibestudio/issues">GitHub</a> or email <a href="mailto:harvey@generalagency.ai">harvey@generalagency.ai</a>.</p>
+  </main>
+
+  <footer>
+    <div class="links">
+      <a href="index.html">Home</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="https://github.com/AltrinaAI/vibestudio">GitHub</a>
+    </div>
+  </footer>
+</div>
+</body>
+</html>
