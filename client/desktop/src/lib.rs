@@ -470,6 +470,19 @@ fn setup_mobile(
     app: &tauri::App,
     remote_slot: &std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // FIRST, before anything reads config: pin skill-core's config dir to the app
+    // sandbox. skill-core resolves it from `~/.config` via `dirs::home_dir()`, but
+    // an iOS app process has no `HOME` — `home_dir()` returns None there, so the
+    // default resolution errors and `KeychainStore::new()` below (plus every other
+    // config reader: last-host, known_hosts) would fail, panicking setup at launch.
+    // Tauri resolves the OS-sandboxed dir correctly on device; hand it to skill-core.
+    // (The Simulator hides this: it inherits the Mac's HOME, so the crash is
+    // device-only — it's what took down the first TestFlight build.)
+    if let Ok(cfg) = app.path().app_config_dir().or_else(|_| app.path().app_data_dir()) {
+        let _ = std::fs::create_dir_all(&cfg);
+        skill_core::paths::set_config_dir(cfg);
+    }
+
     // Same durable logging as the desktop: on iOS stderr goes nowhere useful,
     // the app_log_dir file is what you'd pull from the device to debug.
     let log_path = app.path().app_log_dir().ok().map(|d| d.join("vibestudio.log"));

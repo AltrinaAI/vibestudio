@@ -1,10 +1,24 @@
 //! Where VibeStudio keeps its per-user state on disk. One helper so every module
 //! (secrets, recents, the remote-connection memory) resolves the SAME directory:
-//! `$XDG_CONFIG_HOME/vibestudio` or `~/.config/vibestudio`.
+//! the [`set_config_dir`] override if set, else `$XDG_CONFIG_HOME/vibestudio` or
+//! `~/.config/vibestudio`.
 use std::path::PathBuf;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
-/// The config directory. Honors `XDG_CONFIG_HOME`, else `~/.config/vibestudio`.
+/// An explicit config dir set by the embedding shell, overriding all env/HOME
+/// resolution. Needed on iOS: an app process has no `HOME`, so `dirs::home_dir()`
+/// returns `None` (its iOS fallback is a hard `None`) and the default resolution
+/// would error — the shell hands us the OS-sandboxed path instead.
+static OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Pin the config directory to `dir`, bypassing env/HOME resolution. Call once,
+/// at startup, before anything reads config. Later calls are ignored (first wins).
+pub fn set_config_dir(dir: PathBuf) {
+    let _ = OVERRIDE.set(dir);
+}
+
+/// The config directory. The [`set_config_dir`] override wins; else honors
+/// `XDG_CONFIG_HOME`, else `~/.config/vibestudio`.
 pub fn config_dir() -> Result<PathBuf, String> {
     let dir = resolve_config_dir()?;
     migrate_legacy_config_dir();
@@ -12,6 +26,9 @@ pub fn config_dir() -> Result<PathBuf, String> {
 }
 
 fn resolve_config_dir() -> Result<PathBuf, String> {
+    if let Some(dir) = OVERRIDE.get() {
+        return Ok(dir.clone());
+    }
     if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
         if !x.is_empty() {
             return Ok(PathBuf::from(x).join("vibestudio"));
