@@ -18,7 +18,13 @@ import { log } from "@/lib/log";
 // VITE_API_BASE (e.g. point a Vite dev server at a remote skill-server).
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
-async function http<T>(method: "GET" | "POST", path: string, args?: Record<string, unknown>): Promise<T> {
+// Switchboard routes are pinned to the local server and safe to repeat: profile
+// save/delete overwrite by id, connect/disconnect are guarded server-side, and
+// keygen just mints an unused keypair. Through-tunnel POSTs (sessions, git…) are
+// NOT in this set — a blind repeat could double-apply.
+const RETRYABLE_POST = /^(remote|ssh)\//;
+
+async function http<T>(method: "GET" | "POST", path: string, args?: Record<string, unknown>, retried = false): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/api/${path}`, {
@@ -27,8 +33,17 @@ async function http<T>(method: "GET" | "POST", path: string, args?: Record<strin
       body: method === "POST" ? JSON.stringify(args ?? {}) : undefined,
     });
   } catch (e) {
-    // Transport failure (server unreachable / dropped tunnel). Console-only in dev;
-    // not forwarded — the log endpoint lives on the very server that's unreachable.
+    // Transport failure (server unreachable / dropped tunnel). On iOS this is the
+    // signature of returning to foreground: the webview's pooled keep-alive
+    // connection was reset during the suspension (WebKit's one-shot "Load failed",
+    // never auto-retried for POSTs), or the shell is respawning a reclaimed
+    // listener. One delayed retry cures both — but only where a repeat is safe.
+    if (!retried && (method === "GET" || RETRYABLE_POST.test(path))) {
+      await new Promise((r) => setTimeout(r, 400));
+      return http(method, path, args, true);
+    }
+    // Console-only in dev; not forwarded — the log endpoint lives on the very
+    // server that's unreachable.
     log.debug("api", `${method} ${path} — network error`, e instanceof Error ? e.message : String(e));
     throw e;
   }

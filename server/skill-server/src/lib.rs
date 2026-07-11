@@ -343,6 +343,21 @@ impl ServerHandle {
     }
 }
 
+/// Probe a loopback server's `/api/health`. Tight timeouts: this backs the iOS
+/// shell's foreground check for a listener the OS reclaimed during an app
+/// suspension (tiny_http's accept thread dies for good on the first accept
+/// error), so it must answer fast whether the server is live, gone, or bound
+/// but no longer accepting.
+pub fn loopback_alive(port: u16) -> bool {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(1))
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .get(&format!("http://127.0.0.1:{port}/api/health"))
+        .call()
+        .is_ok()
+}
+
 /// Bind synchronously (so a bind error surfaces here), then serve on background
 /// worker threads. Returns immediately with the bound address.
 pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {

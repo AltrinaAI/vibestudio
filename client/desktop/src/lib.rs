@@ -187,6 +187,12 @@ pub fn run() {
     let remote_slot: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
     let remote_slot_setup = remote_slot.clone();
+    // iOS: the loopback server plus the means to respawn it — see [`LocalServer`].
+    #[cfg(target_os = "ios")]
+    let local_slot: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<LocalServer>>> =
+        std::sync::Arc::new(std::sync::OnceLock::new());
+    #[cfg(target_os = "ios")]
+    let local_slot_setup = local_slot.clone();
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
     // Single instance FIRST, so a second launch short-circuits before it spawns a
@@ -215,7 +221,7 @@ pub fn run() {
             #[cfg(desktop)]
             setup_desktop(app, &remote_slot_setup)?;
             #[cfg(target_os = "ios")]
-            setup_mobile(app, &remote_slot_setup)?;
+            setup_mobile(app, &remote_slot_setup, &local_slot_setup)?;
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -266,6 +272,12 @@ pub fn run() {
                     event: tauri::WindowEvent::Resumed,
                     ..
                 } => {
+                    // The switchboard itself first: iOS may have reclaimed the
+                    // loopback listener during the suspension, and with it gone
+                    // nothing else is reachable — the tunnel check included.
+                    if let Some(ls) = local_slot.get() {
+                        ls.heal(_app.clone());
+                    }
                     if let Some(r) = remote_slot.get() {
                         r.resume_check();
                     }
@@ -459,6 +471,61 @@ fn setup_desktop(
     Ok(())
 }
 
+/// iOS: the in-process loopback server plus the means to bring it back. When the
+/// app is suspended, iOS may reclaim its sockets; tiny_http's single accept
+/// thread exits for good on the first accept error, so a reclaimed listener
+/// means the server is dead for the rest of the process — every webview fetch
+/// fails ("Load failed") until relaunch. The workers are detached with nothing
+/// to join or reuse; recovery is a fresh [`skill_server::spawn`] on foreground.
+#[cfg(target_os = "ios")]
+struct LocalServer {
+    /// The currently bound port — the webview's origin embeds it.
+    port: std::sync::atomic::AtomicU16,
+    /// A heal is already probing/respawning; don't stack another.
+    healing: std::sync::atomic::AtomicBool,
+    /// Spawn a fresh server on the given port (0 = ephemeral); returns the bound port.
+    respawn: Box<dyn Fn(u16) -> std::io::Result<u16> + Send + Sync>,
+}
+
+#[cfg(target_os = "ios")]
+impl LocalServer {
+    /// Foreground check, off-thread: probe the listener, and if iOS reclaimed it
+    /// respawn — on the SAME port first, so the loaded SPA (whose origin is
+    /// frozen at launch) keeps working with all its state; on a fresh port with
+    /// a webview reload only if the old bind lingers.
+    fn heal(self: &std::sync::Arc<Self>, app: tauri::AppHandle) {
+        use std::sync::atomic::Ordering;
+        if self.healing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            let port = me.port.load(Ordering::SeqCst);
+            if !skill_server::loopback_alive(port) {
+                log::warn!("loopback server on {port} is gone after resume; respawning");
+                match (me.respawn)(port).or_else(|_| (me.respawn)(0)) {
+                    Ok(p) if p == port => log::info!("loopback server rebound on {p}"),
+                    Ok(p) => {
+                        me.port.store(p, Ordering::SeqCst);
+                        log::warn!("loopback server moved to {p}; reloading the webview");
+                        let url = format!("http://127.0.0.1:{p}");
+                        let on_main = app.clone();
+                        let _ = app.run_on_main_thread(move || {
+                            if let Some(w) = on_main.get_webview_window("main") {
+                                if let Ok(u) = url.parse() {
+                                    let _ = w.navigate(u);
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => log::error!("couldn't respawn the loopback server: {e}"),
+                }
+            }
+            me.healing.store(false, Ordering::SeqCst);
+        });
+    }
+}
+
 /// Mobile setup (iOS): the pure switchboard. Same loopback server, no local backend
 /// — no terminals/engine (`startup_maintenance` stays false and the local-backend
 /// feature is compiled out), no tray, no updater (the App Store owns updates),
@@ -469,6 +536,7 @@ fn setup_desktop(
 fn setup_mobile(
     app: &tauri::App,
     remote_slot: &std::sync::Arc<std::sync::OnceLock<std::sync::Arc<SshRemoteControl>>>,
+    local_slot: &std::sync::Arc<std::sync::OnceLock<std::sync::Arc<LocalServer>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // FIRST, before anything reads config: pin skill-core's config dir to the app
     // sandbox. skill-core resolves it from `~/.config` via `dirs::home_dir()`, but
@@ -509,21 +577,34 @@ fn setup_mobile(
         .clone()
         .map(|r| r.join("dist"))
         .unwrap_or_else(|| std::path::PathBuf::from("dist"));
-    let handle = skill_server::spawn(ServerConfig {
-        host: "127.0.0.1".into(),
-        port: 0, // ephemeral — nothing on the phone needs a stable port
-        dist,
-        bundled_skills: resource_dir.clone().map(|r| r.join("skills")),
-        examples_base: resource_dir,
-        startup_maintenance: false, // no local terminals/engine to maintain
-        remote: Some(remote as std::sync::Arc<dyn skill_server::RemoteControl>),
-        secure_store: Some(store),
-        ..Default::default()
-    })?;
+    // A factory rather than a one-shot config: the same spawn must be repeatable
+    // from LocalServer::heal after iOS reclaims the listener across a suspension.
+    let make_config = {
+        let bundled_skills = resource_dir.clone().map(|r| r.join("skills"));
+        let remote = remote as std::sync::Arc<dyn skill_server::RemoteControl>;
+        move |port: u16| ServerConfig {
+            host: "127.0.0.1".into(),
+            port, // 0 = ephemeral — nothing on the phone needs a stable port
+            dist: dist.clone(),
+            bundled_skills: bundled_skills.clone(),
+            examples_base: resource_dir.clone(),
+            startup_maintenance: false, // no local terminals/engine to maintain
+            remote: Some(remote.clone()),
+            secure_store: Some(store.clone()),
+            ..Default::default()
+        }
+    };
+    let handle = skill_server::spawn(make_config(0))?;
+    let port = handle.addr.port();
+    let _ = local_slot.set(std::sync::Arc::new(LocalServer {
+        port: std::sync::atomic::AtomicU16::new(port),
+        healing: std::sync::atomic::AtomicBool::new(false),
+        respawn: Box::new(move |p| skill_server::spawn(make_config(p)).map(|h| h.addr.port())),
+    }));
 
     // Same-origin model as the desktop: the webview's origin IS the loopback
     // server (needs the ATS loopback exception in Info.plist).
-    let url = format!("http://127.0.0.1:{}", handle.addr.port());
+    let url = format!("http://127.0.0.1:{port}");
     WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::External(url.parse().unwrap()))
         .build()?;
     Ok(())
