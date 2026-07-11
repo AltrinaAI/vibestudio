@@ -21,7 +21,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 #[cfg(desktop)]
 use tauri::tray::TrayIconBuilder;
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 use tauri_plugin_notification::NotificationExt;
 #[cfg(desktop)]
 use tauri_plugin_updater::UpdaterExt;
@@ -104,12 +104,12 @@ impl skill_core::update::UpdateControl for ShellUpdater {
 /// turn-finish deserves a toast (it owns focus + seen state) and posts to the
 /// pinned-local `/api/notify*` routes; only this process can talk to the OS
 /// notification center, so display runs here via `tauri-plugin-notification`.
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 struct ShellNotifier {
     app: tauri::AppHandle,
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 impl skill_server::NotifyControl for ShellNotifier {
     fn notify(&self, title: &str, body: &str) -> Result<(), String> {
         self.app
@@ -134,9 +134,15 @@ impl skill_server::NotifyControl for ShellNotifier {
     fn set_badge(&self, count: u32) {
         // Dock badge (macOS) / launcher count (some Linux DEs). Windows has no
         // numeric badge — the Err is deliberately dropped (quiet degradation).
+        // iOS app-icon badges go through UNUserNotificationCenter rather than the
+        // window API, and aren't wired yet (the toast is the signal that matters),
+        // so it's a no-op there.
+        #[cfg(desktop)]
         if let Some(w) = self.app.get_webview_window("main") {
             let _ = w.set_badge_count((count > 0).then_some(count as i64));
         }
+        #[cfg(not(desktop))]
+        let _ = count;
     }
 }
 
@@ -212,9 +218,13 @@ pub fn run() {
     }
     #[cfg(desktop)]
     {
-        builder = builder
-            .plugin(tauri_plugin_updater::Builder::new().build()) // self-update; driven from ShellUpdater, no JS API
-            .plugin(tauri_plugin_notification::init()); // OS toasts; driven from ShellNotifier, no JS API
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build()); // self-update; driven from ShellUpdater, no JS API
+    }
+    // Notifications on desktop AND iOS (agent turn-finish toasts); driven from
+    // ShellNotifier via the pinned-local /api/notify* routes, no JS API.
+    #[cfg(any(desktop, target_os = "ios"))]
+    {
+        builder = builder.plugin(tauri_plugin_notification::init());
     }
     builder
         .setup(move |app| {
@@ -560,11 +570,18 @@ fn setup_mobile(
     }
 
     // The credential store: connection profiles on disk (non-secret), private
-    // keys in the iOS Keychain. Wired into BOTH consumers — the server (for the
-    // /api/remote/profiles* routes the credential UI drives) and the connection
-    // manager (so `connect(id)` resolves a saved profile to russh credentials).
-    let store: std::sync::Arc<dyn skill_server::SecureStore> =
-        std::sync::Arc::new(securestore::KeychainStore::new().map_err(std::io::Error::other)?);
+    // keys in the iOS Keychain (or an app-private file store if the Keychain
+    // won't open — resolve() degrades rather than crashing). Wired into BOTH
+    // consumers — the server (for the /api/remote/profiles* routes the credential
+    // UI drives) and the connection manager (so `connect(id)` resolves a saved
+    // profile to russh credentials).
+    let cfg_dir = app
+        .path()
+        .app_config_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .map_err(std::io::Error::other)?;
+    let store = skill_core::keystore::resolve(securestore::platform_native(), &cfg_dir)
+        .map_err(std::io::Error::other)?;
 
     let remote = std::sync::Arc::new(SshRemoteControl::with_secure_store(
         app.package_info().version.to_string(),
@@ -579,6 +596,14 @@ fn setup_mobile(
         .unwrap_or_else(|| std::path::PathBuf::from("dist"));
     // A factory rather than a one-shot config: the same spawn must be repeatable
     // from LocalServer::heal after iOS reclaims the listener across a suspension.
+    // Native notifications, the same control the desktop uses: turn-finish
+    // events arrive from the remote hub over SSE, the SPA posts the pinned-local
+    // /api/notify* routes, and this fires an iOS local notification on the phone
+    // the user is holding. (Delivery while the app runs or is briefly
+    // backgrounded; true closed-app push needs APNs — see the notifications
+    // note in docs/plans.)
+    let notifier = std::sync::Arc::new(ShellNotifier { app: app.handle().clone() })
+        as std::sync::Arc<dyn skill_server::NotifyControl>;
     let make_config = {
         let bundled_skills = resource_dir.clone().map(|r| r.join("skills"));
         let remote = remote as std::sync::Arc<dyn skill_server::RemoteControl>;
@@ -591,6 +616,7 @@ fn setup_mobile(
             startup_maintenance: false, // no local terminals/engine to maintain
             remote: Some(remote.clone()),
             secure_store: Some(store.clone()),
+            notifier: Some(notifier.clone()),
             ..Default::default()
         }
     };

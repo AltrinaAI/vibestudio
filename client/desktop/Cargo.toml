@@ -62,6 +62,10 @@ tauri-plugin-single-instance = "2"
 # deliberately excluded rather than half-supported. ──
 [target.'cfg(target_os = "ios")'.dependencies]
 skill-server = { path = "../../server/skill-server", default-features = false, features = ["russh-transport"] }
+# Native local notifications for agent turn-finish events (the iOS app's own
+# notification channel; the desktop table has its own copy). Driven by
+# ShellNotifier via the pinned-local /api/notify* routes — no JS API.
+tauri-plugin-notification = "2"
 
 # Keychain access for the SecureStore (SSH private keys live in the iOS
 # Keychain). Compiled on macOS too — same Security.framework path — so the

@@ -1,16 +1,43 @@
-//! The shell's half of [`skill_server::SecureStore`] — the mobile switchboard's
-//! SSH credential store. Profiles (host/port/user — nothing secret) live as JSON
-//! in the app config dir; **private keys live in the OS Keychain** via the
-//! `keyring` crate (Security.framework on iOS and macOS), keyed by the profile's
-//! connection id. Same one-way dependency rule as `ShellNotifier`: the trait is
-//! the server's, the OS-keystore implementation is the client shell's.
+//! The shell's native backend for [`skill_server::SecureStore`] — the mobile
+//! switchboard's SSH credential store. Profiles (host/port/user — nothing
+//! secret) live as JSON in the app config dir; **private keys live in the OS
+//! Keychain** via the `keyring` crate (Security.framework on iOS and macOS),
+//! keyed by the profile's connection id. Same one-way dependency rule as
+//! `ShellNotifier`: the trait (and the file fallback) are the core's, the
+//! OS-keystore implementation is the client shell's.
 //!
-//! Compiled for macOS as well as iOS so the exact Keychain code path is
-//! unit-testable on a Mac; only the mobile setup wires it into the server.
+//! [`platform_native`] is the registry seam (the [`skill_core::keystore`]
+//! strategy): it maps this OS to its native keystore, or `None` when there
+//! isn't one wired up — in which case the caller falls back to the core's
+//! file-backed store. Compiled for macOS as well as iOS so the exact Keychain
+//! code path is unit-testable on a Mac.
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use skill_server::{SecureStore, SshProfile};
+
+/// This platform's native OS keystore, or `None` if VibeStudio hasn't wired one
+/// for this OS (Android, headless Linux) — then [`skill_core::keystore::resolve`]
+/// falls back to the file store. Add an arm to wire a new platform's native
+/// backend; nothing else changes.
+pub fn platform_native() -> Option<Arc<dyn SecureStore>> {
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    {
+        match KeychainStore::new() {
+            Ok(s) => Some(Arc::new(s) as Arc<dyn SecureStore>),
+            // A Keychain that won't open shouldn't abort startup — return None so
+            // the caller degrades to the app-private file store (see resolve()).
+            Err(e) => {
+                log::warn!("native keystore unavailable, falling back to file store: {e}");
+                None
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    {
+        None
+    }
+}
 
 /// Keychain service the keys are filed under (one generic-password item per
 /// profile id). Namespaced by bundle id so nothing else collides with it.

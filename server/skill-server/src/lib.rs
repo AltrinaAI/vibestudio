@@ -209,37 +209,12 @@ pub trait EditorControl: Send + Sync {
     fn open(&self, path: &str, remote_host: Option<&str>) -> Result<(), String>;
 }
 
-/// A saved SSH connection profile (the mobile switchboard's equivalent of a
-/// `~/.ssh/config` entry — iOS has no `~/.ssh`). The non-secret half only: the
-/// private key lives in the OS keystore behind [`SecureStore`], keyed by `id`.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct SshProfile {
-    /// Stable connection id, `user@host:port` — the exact string the UI passes to
-    /// `/api/remote/connect`, so the switchboard can resolve credentials from it.
-    pub id: String,
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-}
-
-/// Credential storage for the mobile switchboard's russh transport: connection
-/// profiles plus their private keys, the latter in the OS keystore (iOS
-/// Keychain). Implemented in `client/desktop` (same one-way dependency rule as
-/// [`NotifyControl`]); a server without one (desktop, standalone) 404s the
-/// profile routes and the SPA never shows the credential UI. Reached only over
-/// the pinned-local `/api/remote/profiles*` routes — a device's credentials
-/// never leave it.
-pub trait SecureStore: Send + Sync {
-    fn list_profiles(&self) -> Result<Vec<SshProfile>, String>;
-    fn get_profile(&self, id: &str) -> Result<Option<SshProfile>, String>;
-    /// Persist the profile and stash `private_key` (OpenSSH text) in the OS
-    /// keystore under the profile's id. Overwrites an existing profile.
-    fn put_profile(&self, profile: &SshProfile, private_key: &str) -> Result<(), String>;
-    /// Remove the profile and its keystore entry. Ok if absent.
-    fn delete_profile(&self, id: &str) -> Result<(), String>;
-    /// The OpenSSH private key for `id`, or `None` if the keystore has no entry.
-    fn get_private_key(&self, id: &str) -> Result<Option<String>, String>;
-}
+// The mobile switchboard's SSH credential store — the trait, the profile type,
+// and the file-backed fallback all live in `skill-core` (see its `keystore`
+// module) so both this crate and the standalone binary reach them; the native
+// OS-keystore backends live in `client/desktop`. Re-exported so existing
+// `skill_server::{SecureStore, SshProfile}` paths keep resolving.
+pub use skill_core::keystore::{FileSecureStore, SecureStore, SshProfile};
 
 /// How to run the server. Build with `..Default::default()` and override fields.
 pub struct ServerConfig {

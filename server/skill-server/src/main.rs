@@ -13,6 +13,12 @@
 //   --lifeline-stdin  exit when stdin hits EOF — the desktop holds the SSH channel's
 //                     stdin open, so the server dies the instant that session drops
 //                     (orphan prevention; pairs with ssh ServerAlive + the held pipe)
+//   --mobile-dev    serve the PHONE experience in a desktop browser: wire a
+//                   file-backed SecureStore (config dir) so /api/remote/profiles*
+//                   + the connect flow light up and the SPA renders mobile mode.
+//                   No Mac/simulator needed. Pair with `--features russh-transport`
+//                   for the in-process russh transport + on-device keygen (the
+//                   exact iOS path); without it, connect falls back to system `ssh`.
 //   defaults: --host 127.0.0.1  --port 8765  --dist ./dist  (override with SKILL_DIST)
 //
 // On start it prints exactly one machine-readable line to stdout, flushed first:
@@ -22,6 +28,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use skill_server::{init_logging, spawn, PhoneControl, RemoteControl, ServerConfig, SshRemoteControl};
+use std::sync::Arc;
 
 fn main() {
     // Install the logger first (stderr; level via RUST_LOG) so even early failures
@@ -43,6 +50,7 @@ fn main() {
     let mut token: Option<String> =
         std::env::var("VIBESTUDIO_SERVER_TOKEN").ok().filter(|t| !t.is_empty());
     let mut lifeline_stdin = false;
+    let mut mobile_dev = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -51,6 +59,7 @@ fn main() {
             "--dist" => { i += 1; dist = args.get(i).cloned().unwrap_or(dist); }
             "--token" => { i += 1; token = args.get(i).cloned().filter(|t| !t.is_empty()); }
             "--lifeline-stdin" => lifeline_stdin = true,
+            "--mobile-dev" => mobile_dev = true,
             _ => {}
         }
         i += 1;
@@ -64,8 +73,29 @@ fn main() {
     // NOT a server bound to a public interface (so a bare public server can't be used
     // to ssh outward). The desktop wires the SAME manager into its in-process server.
     let is_loopback = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
+    // `--mobile-dev`: a file-backed SecureStore turns this standalone server into
+    // the phone switchboard for browser development. The store is wired into BOTH
+    // the connection manager (so `connect(id)` resolves a saved profile) and the
+    // server config (so the profile routes are served) — exactly as the iOS shell
+    // wires its Keychain store.
+    let secure_store: Option<Arc<dyn skill_server::SecureStore>> = if mobile_dev {
+        match skill_core::paths::ensure_config_dir()
+            .and_then(|dir| skill_core::keystore::resolve(None, &dir))
+        {
+            Ok(s) => Some(s),
+            Err(e) => {
+                log::error!("--mobile-dev: couldn't open the credential store: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
     let remote: Option<std::sync::Arc<dyn RemoteControl>> = if !lifeline_stdin && is_loopback {
-        Some(std::sync::Arc::new(SshRemoteControl::new(env!("CARGO_PKG_VERSION").to_string())))
+        Some(std::sync::Arc::new(SshRemoteControl::with_secure_store(
+            env!("CARGO_PKG_VERSION").to_string(),
+            secure_store.clone(),
+        )))
     } else {
         None
     };
@@ -88,6 +118,7 @@ fn main() {
         startup_maintenance: true,
         remote,
         phone: phone.clone(),
+        secure_store,
         ..Default::default()
     };
     let handle = match spawn(cfg) {

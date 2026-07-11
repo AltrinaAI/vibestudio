@@ -36,5 +36,10 @@ table, and the on-device commit-message reference example).
 - `npm run build` — `tsc --noEmit && vite build` (the SPA lives in `client/web`,
   built to `./dist` at the repo root).
 - `npm run lint` — ESLint.
+- **Mobile UX in a browser (no Mac/simulator):** `cargo run -p skill-server
+  --features russh-transport -- --mobile-dev` + `npm run dev:vite`, then a phone
+  viewport in the browser device toolbar. Mobile mode is server-detected (the
+  server answering `/api/remote/profiles`), not device-detected, so the full
+  phone experience runs on Linux with hot reload. See [plans/mobile-ux.md](plans/mobile-ux.md).
 
 Heed deprecation notices and follow the existing patterns in the relevant crate/module.

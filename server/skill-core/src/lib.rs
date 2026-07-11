@@ -10,6 +10,7 @@ pub mod filetypes;
 pub mod github;
 pub mod gitops;
 pub mod gpu;
+pub mod keystore;
 pub mod mining;
 pub mod paths;
 pub mod pathsafe;
