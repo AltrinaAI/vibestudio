@@ -269,7 +269,7 @@ mod tests {
         let (status, v) = call(Method::Get, "/api/remote/profiles", "", &ctx);
         assert_eq!(status, 200);
         assert_eq!(v[0]["id"], "harvey@pi.local:2022");
-        assert!(v.to_string().to_lowercase().contains("key") == false, "no key material on the list route: {v}");
+        assert!(!v.to_string().to_lowercase().contains("key"), "no key material on the list route: {v}");
         assert!(store.get_private_key("harvey@pi.local:2022").unwrap().is_some(), "key stored");
 
         let (status, _) = call(Method::Post, "/api/remote/profiles/delete", &json!({ "id": "harvey@pi.local:2022" }).to_string(), &ctx);
