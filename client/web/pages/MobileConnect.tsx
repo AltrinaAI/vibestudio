@@ -58,7 +58,7 @@ export default function MobileConnect() {
         <div>
           <p className="text-sm text-fg">{status.message || "Connecting…"}</p>
           <p className="mt-1 text-xs text-faint">
-            Connecting to <span className="font-mono">{status.host}</span>. First-time setup installs a small server on the computer.
+            Connecting to <span className="break-all font-mono">{status.host}</span>. First-time setup installs a small server on the computer.
           </p>
         </div>
         <button type="button" onClick={() => void cancel()} className="text-sm text-muted underline-offset-2 hover:underline">

@@ -151,7 +151,7 @@ export function RemoteDialog({ onClose, onOpenPhone }: { onClose: () => void; on
           {connected ? (
             <>
               <p className="text-sm text-fg">
-                Connected to <span className="font-mono text-ok">{status.host}</span>. The whole app — skills, files, git,
+                Connected to <span className="break-all font-mono text-ok">{status.host}</span>. The whole app — skills, files, git,
                 secrets, and terminals — is running on this host.
               </p>
               <div className="flex justify-end gap-2">
@@ -169,7 +169,7 @@ export function RemoteDialog({ onClose, onOpenPhone }: { onClose: () => void; on
                 <Spinner className="h-4 w-4" /> {status.message || "Connecting…"}
               </p>
               <p className="text-xs text-faint">
-                Connecting to <span className="font-mono">{status.host || value}</span>. First-time setup downloads a small
+                Connecting to <span className="break-all font-mono">{status.host || value}</span>. First-time setup downloads a small
                 server to the remote.
               </p>
               <div className="flex justify-end pt-1">

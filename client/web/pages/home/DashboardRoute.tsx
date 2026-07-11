@@ -145,7 +145,7 @@ function StatCard({
         {icon}
         <span className="text-[0.68rem] font-semibold uppercase tracking-wider">{label}</span>
       </div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight text-fg">{value}</div>
+      <div className="mt-2 wrap-break-word text-2xl font-semibold tracking-tight text-fg">{value}</div>
       {sub != null && (
         <span className={`mt-0.5 text-xs ${subTone === "warn" ? "text-warn" : subTone === "ok" ? "text-ok" : "text-muted"}`}>
           {sub}
@@ -153,7 +153,9 @@ function StatCard({
       )}
     </>
   );
-  const cls = "flex flex-col rounded-xl border border-border bg-surface p-4 text-left";
+  // min-w-0: a grid child otherwise refuses to shrink below its content, so one
+  // long unbreakable value (an SSH host id) would widen the whole page.
+  const cls = "flex min-w-0 flex-col rounded-xl border border-border bg-surface p-4 text-left";
   return onClick ? (
     <button type="button" onClick={onClick} className={`${cls} transition-all hover:-translate-y-0.5 hover:border-border-strong hover:bg-panel`}>
       {body}
@@ -161,6 +163,15 @@ function StatCard({
   ) : (
     <div className={cls}>{body}</div>
   );
+}
+
+// The switchboard reports the full connection id ("user@host:port"); the stat
+// card is a glance, so show just the machine's name — the dialog behind the tap
+// has the rest. IPs stay whole (their first label alone would say nothing).
+function hostLabel(id: string): string {
+  const host = id.replace(/^[^@]*@/, "").replace(/:\d+$/, "");
+  if (/^[\d.]+$/.test(host)) return host;
+  return host.split(".")[0] || host;
 }
 
 function ConnectionCard({ c, onClick }: { c: ConnectionInfo; onClick: () => void }) {
@@ -398,7 +409,17 @@ export function Component() {
             <StatCard
               icon={<ServerIcon />}
               label="Server"
-              value={remoteConnected ? remote.status.host || "Remote" : "Local"}
+              value={
+                remoteConnected ? (
+                  remote.status.host ? (
+                    <span title={remote.status.host}>{hostLabel(remote.status.host)}</span>
+                  ) : (
+                    "Remote"
+                  )
+                ) : (
+                  "Local"
+                )
+              }
               sub={remoteConnected ? "connected over SSH" : "running on this machine"}
               subTone={remoteConnected ? "ok" : "muted"}
               onClick={remote.available ? () => setRemoteOpen(true) : undefined}
