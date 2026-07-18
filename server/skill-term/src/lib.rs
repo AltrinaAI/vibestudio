@@ -264,8 +264,34 @@ fn resolve_cli(spec: &Spec) -> Option<String> {
 
 fn tmux_bin() -> String {
     static TMUX: OnceLock<String> = OnceLock::new();
-    TMUX.get_or_init(|| which("tmux").unwrap_or_else(|| "tmux".to_string()))
-        .clone()
+    TMUX.get_or_init(|| {
+        which("tmux")
+            .or_else(|| bundled_tmux_beside(&std::env::current_exe().ok()?))
+            .unwrap_or_else(|| "tmux".to_string())
+    })
+    .clone()
+}
+
+/// The sidecar tmux shipped in the same directory as `exe`, if present. The
+/// macOS .app carries one (Tauri `externalBin` lands next to the app binary in
+/// `Contents/MacOS`) because fresh Macs have no tmux; a standalone
+/// `skill-server` dropped on a remote host can carry one the same way. The
+/// host's own tmux (PATH, then login-shell PATH) always wins — see [`tmux_bin`].
+fn bundled_tmux_beside(exe: &std::path::Path) -> Option<String> {
+    let cand = exe.parent()?.join("tmux");
+    cand.is_file().then(|| cand.to_string_lossy().into_owned())
+}
+
+/// A failed tmux spawn is almost always "not installed" — say so, with the
+/// fix, instead of leaking a raw OS error into the UI.
+fn tmux_spawn_err(e: std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        "tmux isn't installed on this machine — install it (brew install tmux on macOS, \
+apt install tmux on Debian/Ubuntu), then try again."
+            .into()
+    } else {
+        format!("Couldn't start tmux: {e}")
+    }
 }
 
 /// A `tmux` command that works even when the backend itself runs inside a tmux
@@ -720,7 +746,7 @@ fn create_session_inner(
             "-P", "-F", "#{window_id}", "sleep", "60",
         ])
         .output()
-        .map_err(|e| format!("Couldn't start tmux: {e}"))?;
+        .map_err(tmux_spawn_err)?;
     if !out.status.success() {
         log::error!("tmux new-session failed (agent={})", opt.agent);
         return Err("tmux couldn't create the session.".into());
@@ -762,7 +788,7 @@ fn create_session_inner(
     let status = tmux()
         .args(["new-window", "-t", &name, "-c", &cwd_resolved, "bash", "-lc", &line])
         .status()
-        .map_err(|e| format!("Couldn't start tmux: {e}"))?;
+        .map_err(tmux_spawn_err)?;
     if !status.success() {
         let _ = kill_session(&name);
         log::error!("tmux new-window failed (agent={}, cwd={cwd_resolved})", opt.agent);
@@ -781,8 +807,10 @@ fn create_session_inner(
     // so run-shell does the expansion at bell time.
     let _ = tmux().args(["set-option", "-t", &name, "monitor-bell", "on"]).output();
     let _ = tmux().args(["set-option", "-t", &name, "@ass_bell_at", "0"]).output();
+    // The path is double-quoted inside the single-quoted run-shell body: the
+    // bundled sidecar lives under the .app, whose install path may contain spaces.
     let bell_hook = format!(
-        "run-shell '{tmux} set-option -t {name} @ass_bell_at \"#{{window_activity}}\"'",
+        "run-shell '\"{tmux}\" set-option -t {name} @ass_bell_at \"#{{window_activity}}\"'",
         tmux = tmux_bin(),
     );
     let _ = tmux().args(["set-hook", "-t", &name, "alert-bell", &bell_hook]).output();
@@ -1314,6 +1342,26 @@ mod tests {
     fn basename_trims() {
         assert_eq!(basename("/home/x/proj/"), "proj");
         assert_eq!(basename("/home/x/proj"), "proj");
+    }
+
+    #[test]
+    fn bundled_tmux_beside_finds_a_sidecar_next_to_the_exe() {
+        let dir = std::env::temp_dir().join(format!("ass-sidecar-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("skill-server");
+        assert!(bundled_tmux_beside(&exe).is_none(), "no sidecar → None");
+        std::fs::write(dir.join("tmux"), b"").unwrap();
+        let found = bundled_tmux_beside(&exe).expect("sidecar next to the exe is found");
+        assert_eq!(std::path::Path::new(&found).file_name().unwrap(), "tmux");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn tmux_spawn_err_explains_a_missing_binary() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(tmux_spawn_err(missing).contains("isn't installed"));
+        let other = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(tmux_spawn_err(other).starts_with("Couldn't start tmux:"));
     }
 
     #[test]
