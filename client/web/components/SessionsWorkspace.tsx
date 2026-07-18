@@ -189,14 +189,23 @@ export default function SessionsWorkspace({
     onActiveChange?.(activeId);
   }, [activeId, onActiveChange]);
 
+  // A failed close must be visible — a silent ✕ is indistinguishable from a
+  // dead button (bitten once by the tmux locale bug). Attributed to its row's
+  // label, cleared on success or once the session is gone anyway.
+  const [killError, setKillError] = useState<{ id: string; msg: string } | null>(null);
   const kill = async (id: string) => {
     try {
       await api.terminalKill(id);
-    } catch {
-      /* already gone */
+      setKillError(null);
+    } catch (e) {
+      const label = sessions.find((s) => s.id === id)?.label ?? id;
+      setKillError({ id, msg: `${label} — ${e instanceof Error ? e.message : String(e)}` });
     }
     await refresh();
   };
+  useEffect(() => {
+    if (killError && !loading && !sessions.some((s) => s.id === killError.id)) setKillError(null);
+  }, [sessions, loading, killError]);
 
   // Manual rail reorder — no handle, no affordance: press a row and drag it. The
   // row itself is the drag surface (native HTML5 drag is unreliable in the macOS
@@ -428,6 +437,9 @@ export default function SessionsWorkspace({
               <PlusIcon />
             </button>
           </div>
+          {killError && (
+            <p className="border-b border-border bg-surface px-2 py-1 text-xs text-danger">{killError.msg}</p>
+          )}
           <main className="min-h-0 flex-1 bg-surface">{pane}</main>
         </div>
       ) : (
@@ -464,6 +476,7 @@ export default function SessionsWorkspace({
               </div>
             )}
             <div className="min-h-0 flex-1 overflow-auto p-2">
+              {killError && <p className="px-2 pb-1 text-xs text-danger">{killError.msg}</p>}
               {loading ? (
                 <p className="px-2 py-3 text-sm text-muted">Loading…</p>
               ) : sessions.length === 0 ? (

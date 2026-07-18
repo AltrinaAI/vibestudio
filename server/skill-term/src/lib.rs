@@ -298,6 +298,12 @@ apt install tmux on Debian/Ubuntu), then try again."
 /// pane (`-d` creates are fine within tmux; we only must not inherit `$TMUX`).
 fn tmux() -> Command {
     let mut c = hidden_command(tmux_bin());
+    // `-u` forces UTF-8 regardless of locale: a GUI-launched app has no LANG/
+    // LC_*, and a locale-less tmux ASCII-sanitizes client output — the literal
+    // tabs in our list-sessions format came back as `_`, corrupting every
+    // parsed session id (macOS installed builds; dev boxes always have LANG).
+    // See tests::tmux_u_keeps_output_raw_without_locale.
+    c.arg("-u");
     c.env_remove("TMUX");
     c
 }
@@ -397,12 +403,23 @@ fn session_exists(id: &str) -> bool {
 }
 
 /// Kill a session (idempotent — a missing session is treated as success).
+/// Loud on any real failure: a swallowed error here once left a ✕ that did
+/// nothing (the locale bug made ids unmatchable). The goal state is "no such
+/// session", so killing an already-gone session stays Ok.
 pub fn kill_session(id: &str) -> Result<(), String> {
     if !id.starts_with(PREFIX) {
         return Err("Invalid terminal id.".into());
     }
-    let _ = tmux().args(["kill-session", "-t", id]).output();
-    Ok(())
+    let out = tmux().args(["kill-session", "-t", id]).output();
+    match out {
+        Ok(o) if o.status.success() => Ok(()),
+        _ if !session_exists(id) => Ok(()),
+        Ok(o) => Err(format!(
+            "Couldn't close the session: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Err(format!("Couldn't close the session: {e}")),
+    }
 }
 
 /// How long a finished (agent-exited), unattached session sticks around before
@@ -908,6 +925,7 @@ pub fn attach(id: &str, cols: u16, rows: u16) -> Result<(Arc<Attachment>, Receiv
         .map_err(|e| format!("openpty failed: {e}"))?;
 
     let mut cmd = CommandBuilder::new(tmux_bin());
+    cmd.arg("-u"); // force UTF-8 — no locale in a GUI-launched env (see tmux())
     cmd.arg("attach-session");
     cmd.arg("-t");
     cmd.arg(id);
@@ -1368,6 +1386,38 @@ mod tests {
     fn sanitize_meta_strips_separators() {
         assert_eq!(sanitize_meta("a\tb\nc\rd"), "a b c d");
         assert_eq!(sanitize_meta("plain"), "plain");
+    }
+
+    // Pins the load-bearing `-u` semantics: with NO locale in the environment
+    // (a GUI-launched macOS app has none) a tmux client ASCII-sanitizes its
+    // output — tabs and non-ASCII become `_` — which corrupted every parsed
+    // session id. `-u` must keep list-sessions output raw with locale scrubbed.
+    // Isolated TMUX_TMPDIR: own tmux server, never the shared one.
+    #[test]
+    fn tmux_u_keeps_output_raw_without_locale() {
+        if which("tmux").is_none() {
+            eprintln!("tmux not installed — skipping");
+            return;
+        }
+        let tmpdir = std::env::temp_dir().join(format!("ass-u-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmpdir).unwrap();
+        let run = |args: &[&str]| {
+            let mut c = hidden_command(tmux_bin());
+            c.arg("-u").args(args);
+            c.env_remove("TMUX").env_remove("LANG").env_remove("LC_ALL").env_remove("LC_CTYPE");
+            c.env("TMUX_TMPDIR", &tmpdir);
+            c.output().expect("tmux runs")
+        };
+        run(&["new-session", "-d", "-s", "rt-u", "-x", "80", "-y", "24", "sleep", "30"]);
+        run(&["set-option", "-t", "rt-u", "@l", "a · b"]);
+        let out = run(&["list-sessions", "-F", "#{session_name}\t#{@l}\tEND"]);
+        let s = String::from_utf8_lossy(&out.stdout).into_owned();
+        run(&["kill-server"]);
+        let _ = std::fs::remove_dir_all(&tmpdir);
+        assert!(
+            s.contains("rt-u\ta · b\tEND"),
+            "raw tabs + UTF-8 must survive -u without locale; got {s:?}"
+        );
     }
 
     #[test]
