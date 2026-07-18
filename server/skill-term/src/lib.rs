@@ -23,7 +23,7 @@
 //!     stay reviewable for a week, but can't pile up forever. A session with a
 //!     live agent (or any non-shell foreground process) is never reaped.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -338,60 +338,212 @@ fn basename(p: &str) -> String {
         .to_string()
 }
 
+// ──────────────────────────── session registry ─────────────────────────────
+
+/// Session metadata lives HERE, not in tmux. Free text round-tripped through
+/// tmux's stdout is what broke on locale-less hosts (output sanitization — see
+/// [`tmux`]); after that, the tmux wire carries only safe alphabets (a minted
+/// name and numeric fields) and everything human-readable lives in one JSON
+/// file per session, in a directory every backend on this machine shares —
+/// the same machine-wide invariant as the tmux server itself. The legacy
+/// `@ass_*` options are still WRITTEN so older backends keep working during
+/// the auto-update window, and sessions THEY create are lazily backfilled
+/// into the registry by [`backfill_legacy`].
+mod registry {
+    use serde::{Deserialize, Serialize};
+    use std::path::PathBuf;
+
+    #[derive(Serialize, Deserialize, Clone, Default)]
+    pub(crate) struct Meta {
+        pub label: String,
+        pub agent: String,
+        pub cwd: String,
+        pub created: String,
+        #[serde(default)]
+        pub session_id: String,
+    }
+
+    fn dir() -> Option<PathBuf> {
+        skill_core::paths::config_dir().ok().map(|d| d.join("terminals"))
+    }
+
+    /// `None` for anything that isn't a name we minted — the id can arrive
+    /// from the HTTP API, so the filename must be shape-validated, never
+    /// trusted (a crafted "ass-../…" id must not become a path).
+    fn file(name: &str) -> Option<PathBuf> {
+        super::valid_session_name(name).then_some(())?;
+        dir().map(|d| d.join(format!("{name}.json")))
+    }
+
+    pub(crate) fn write(name: &str, meta: &Meta) -> Result<(), String> {
+        let path = file(name).ok_or("invalid session name or no config dir")?;
+        let parent = path.parent().ok_or("no registry dir")?;
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        // tmp+rename: readers never see a torn file. The tmp name is
+        // pid-suffixed because backfill means a session can have more than one
+        // concurrent writer (two backends' pollers); the renames then race, but
+        // both carry identical settled content, and rename is atomic.
+        let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
+        std::fs::write(&tmp, serde_json::to_vec(meta).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn read(name: &str) -> Option<Meta> {
+        serde_json::from_slice(&std::fs::read(file(name)?).ok()?).ok()
+    }
+
+    pub(crate) fn remove(name: &str) {
+        if let Some(p) = file(name) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// Grace before an entry with no matching session may be reaped: protects
+    /// an in-flight create (registry written moments before `new-session`).
+    const ORPHAN_GRACE_SECS: u64 = 600;
+
+    /// Drop entries whose session no longer exists (killed outside the app, or
+    /// every session died with a reboot — tmux sessions don't survive one).
+    pub(crate) fn sweep_orphans(live: &std::collections::HashSet<String>) {
+        if let Some(d) = dir() {
+            sweep_orphans_in(&d, live);
+        }
+    }
+
+    pub(crate) fn sweep_orphans_in(d: &std::path::Path, live: &std::collections::HashSet<String>) {
+        let Ok(entries) = std::fs::read_dir(d) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            if live.contains(&name) {
+                continue;
+            }
+            let age_ok = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .map(|el| el.as_secs() > ORPHAN_GRACE_SECS)
+                .unwrap_or(false);
+            if age_ok {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+}
+
+/// Strict shape of a name WE minted (`ass-<pid>-<secs>-<seq>`). The
+/// list-sessions parse trusts nothing else on the wire — a user's own session
+/// name can contain spaces or any bytes, and must simply be skipped.
+fn valid_session_name(n: &str) -> bool {
+    n.strip_prefix(PREFIX)
+        .map(|rest| {
+            let parts: Vec<&str> = rest.split('-').collect();
+            parts.len() == 3
+                && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .unwrap_or(false)
+}
+
 // ──────────────────────────── session lifecycle ────────────────────────────
 
 /// List the app's live sessions (queries tmux, so this is correct within the
 /// current backend lifetime regardless of in-process attachment state).
 pub fn list_sessions() -> Result<Vec<SessionInfo>, String> {
+    Ok(list_sessions_checked().unwrap_or_default())
+}
+
+/// Like [`list_sessions`], but distinguishes "tmux answered" from "couldn't
+/// even run tmux" (`None`) — [`sweep_stale`] must not treat a transient spawn
+/// failure as "every session is gone" and reap the whole registry.
+fn list_sessions_checked() -> Option<Vec<SessionInfo>> {
+    // The wire carries ONLY safe alphabets — a minted [a-z0-9-] name and two
+    // numeric fields, space-separated — so no locale, sanitizer, tmux version,
+    // or user session name can corrupt the parse. Free text used to ride this
+    // line and got ASCII-mangled on locale-less hosts; it lives in the session
+    // registry now (see `mod registry`).
+    //
     // `window_activity`, not `session_activity`: the latter is frozen unless a
     // client is attached, but the rail's unread dot is for *background*
     // (unattached) sessions — so it must reflect raw pane output. Our sessions
     // are single-window by construction, so the current window's activity is the
     // session's activity.
-    let fmt = format!(
-        "#{{session_name}}{s}#{{@ass_label}}{s}#{{@ass_agent}}{s}#{{@ass_cwd}}{s}#{{@ass_created}}{s}#{{window_activity}}{s}#{{@ass_bell_at}}{s}#{{@ass_session_id}}",
-        s = SEP
-    );
-    let out = match tmux().args(["list-sessions", "-F", &fmt]).output() {
-        Ok(o) => o,
-        Err(_) => return Ok(vec![]),
-    };
+    let out = tmux()
+        .args(["list-sessions", "-F", "#{session_name} #{window_activity} #{@ass_bell_at}"])
+        .output()
+        .ok()?;
     // Non-zero exit just means "no tmux server running yet" → no sessions.
     if !out.status.success() {
-        return Ok(vec![]);
+        return Some(vec![]);
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let mut sessions = Vec::new();
     for line in text.lines() {
-        let f: Vec<&str> = line.split(SEP).collect();
-        if f.first().map(|n| n.starts_with(PREFIX)) != Some(true) {
-            continue;
+        let mut f = line.split_whitespace();
+        let Some(name) = f.next() else { continue };
+        if !valid_session_name(name) {
+            continue; // not ours (user sessions can be named anything)
         }
-        let g = |i: usize| f.get(i).copied().unwrap_or("").to_string();
-        let id = g(0);
-        let label = {
-            let l = g(1);
-            if l.is_empty() {
-                id.clone()
-            } else {
-                l
-            }
-        };
+        let activity = f.next().unwrap_or("").to_string();
+        // Empty (→ "0" on the client) for sessions created before the bell
+        // hook existed, or any that haven't belled yet.
+        let bell_at = f.next().unwrap_or("").to_string();
+        let meta = registry::read(name).or_else(|| backfill_legacy(name)).unwrap_or_default();
         sessions.push(SessionInfo {
-            id,
-            label,
-            agent: g(2),
-            cwd: g(3),
-            created: g(4),
-            activity: g(5),
-            // Empty (→ "0" on the client) for sessions created before the bell
-            // hook existed, or any that haven't belled yet.
-            bell_at: g(6),
+            id: name.to_string(),
+            label: if meta.label.is_empty() { name.to_string() } else { meta.label },
+            agent: meta.agent,
+            cwd: meta.cwd,
+            created: meta.created,
+            activity,
+            bell_at,
             // Empty for shells / resumed / pre-existing sessions (no forced id).
-            session_id: g(7),
+            session_id: meta.session_id,
         });
     }
-    Ok(sessions)
+    Some(sessions)
+}
+
+/// One-time migration: a session created by an older backend has its metadata
+/// only in `@ass_*` options. Read them once (tab-framed; the `-u` on [`tmux`]
+/// keeps the bytes faithful), persist to the registry, and never ask tmux for
+/// free text again.
+fn backfill_legacy(name: &str) -> Option<registry::Meta> {
+    let fmt = format!(
+        "#{{@ass_label}}{SEP}#{{@ass_agent}}{SEP}#{{@ass_cwd}}{SEP}#{{@ass_created}}{SEP}#{{@ass_session_id}}"
+    );
+    let out = tmux().args(["display-message", "-p", "-t", name, &fmt]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let f: Vec<&str> = text.lines().next().unwrap_or("").split(SEP).collect();
+    let g = |i: usize| f.get(i).copied().unwrap_or("").to_string();
+    let meta = registry::Meta { label: g(0), agent: g(1), cwd: g(2), created: g(3), session_id: g(4) };
+    if meta.label.is_empty() && meta.agent.is_empty() && meta.cwd.is_empty() {
+        return None; // nothing stored — nothing worth persisting
+    }
+    // Persist only a provably SETTLED snapshot: an old backend writes the
+    // options in several tmux calls right after new-session, and a poll can
+    // land mid-create — persisting that partial read would freeze it forever
+    // (the registry is write-once; a successful read ends backfilling). All
+    // options land within milliseconds of `created`, so a stamp ≥10s old means
+    // the set is complete. Until then the partial meta is display-only and the
+    // next poll re-reads.
+    let settled = meta
+        .created
+        .parse::<u64>()
+        .ok()
+        .zip(SystemTime::now().duration_since(UNIX_EPOCH).ok())
+        .map(|(c, now)| now.as_secs().saturating_sub(c) >= 10)
+        .unwrap_or(false);
+    if settled {
+        if let Err(e) = registry::write(name, &meta) {
+            log::warn!("couldn't backfill terminal registry for {name}: {e}");
+        }
+    }
+    Some(meta)
 }
 
 fn session_exists(id: &str) -> bool {
@@ -412,8 +564,14 @@ pub fn kill_session(id: &str) -> Result<(), String> {
     }
     let out = tmux().args(["kill-session", "-t", id]).output();
     match out {
-        Ok(o) if o.status.success() => Ok(()),
-        _ if !session_exists(id) => Ok(()),
+        Ok(o) if o.status.success() => {
+            registry::remove(id);
+            Ok(())
+        }
+        _ if !session_exists(id) => {
+            registry::remove(id);
+            Ok(())
+        }
         Ok(o) => Err(format!(
             "Couldn't close the session: {}",
             String::from_utf8_lossy(&o.stderr).trim()
@@ -433,26 +591,33 @@ const GC_IDLE_SECS: u64 = 7 * 24 * 3600;
 /// it is unattached, every pane is back at a plain shell (the agent exited),
 /// and nothing has touched it for [`GC_IDLE_SECS`].
 pub fn sweep_stale() {
-    if let Ok(sessions) = list_sessions() {
-        for s in sessions {
-            let _ = gc_session_if_stale(&s.id, GC_IDLE_SECS);
+    // `checked`: if tmux couldn't even run, skip — an empty list here must mean
+    // "the sessions are really gone", or the orphan sweep would eat live
+    // sessions' metadata on a transient spawn failure.
+    let Some(sessions) = list_sessions_checked() else { return };
+    let mut live = HashSet::new();
+    for s in sessions {
+        if !gc_session_if_stale(&s.id, GC_IDLE_SECS) {
+            live.insert(s.id);
         }
     }
+    registry::sweep_orphans(&live);
 }
 
 /// Reap `id` iff stale (see [`sweep_stale`]); returns whether it was reaped.
 /// Per-session so tests can target their own sessions with a zero cutoff
 /// without sweeping a developer's real terminals.
 fn gc_session_if_stale(id: &str, idle_secs: u64) -> bool {
-    let fmt = format!("#{{session_attached}}{SEP}#{{session_activity}}");
-    let Ok(out) = tmux().args(["display-message", "-p", "-t", id, &fmt]).output() else {
+    // Space-separated numeric fields: nothing on this line a sanitizer can touch.
+    let fmt = "#{session_attached} #{session_activity}";
+    let Ok(out) = tmux().args(["display-message", "-p", "-t", id, fmt]).output() else {
         return false;
     };
     if !out.status.success() {
         return false; // session gone (or tmux unhappy) — nothing to do
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut f = text.trim().split(SEP);
+    let mut f = text.split_whitespace();
     let attached = f.next().unwrap_or("1");
     let activity: u64 = f.next().and_then(|s| s.parse().ok()).unwrap_or(u64::MAX);
     if attached != "0" {
@@ -778,8 +943,22 @@ fn create_session_inner(
     let _ = tmux().args(["set-option", "-s", "exit-empty", "off"]).output();
 
     let label = format!("{} · {}", opt.label, basename(&cwd_resolved));
-    // Sanitize every stored value: tabs/newlines (legal in paths) would corrupt
-    // the tab-separated `list-sessions` parse.
+    // The registry is the metadata source of truth (see `mod registry`); a
+    // failed write degrades to a bare-name rail row, never a failed create.
+    let meta = registry::Meta {
+        label: label.clone(),
+        agent: opt.agent.clone(),
+        cwd: cwd_resolved.clone(),
+        created: secs.to_string(),
+        session_id: session_id.unwrap_or_default().to_string(),
+    };
+    if let Err(e) = registry::write(&name, &meta) {
+        log::warn!("terminal registry write failed for {name}: {e}");
+    }
+    // Legacy `@ass_*` copies: only OLDER backends read these now (dev and
+    // installed builds share the machine's tmux server across an auto-update
+    // window) — drop after a few releases. Sanitized because the old readers
+    // parse tab-separated list-sessions output.
     let set = |k: &str, v: &str| {
         let _ = tmux().args(["set-option", "-t", &name, k, &sanitize_meta(v)]).output();
     };
@@ -1386,6 +1565,93 @@ mod tests {
     fn sanitize_meta_strips_separators() {
         assert_eq!(sanitize_meta("a\tb\nc\rd"), "a b c d");
         assert_eq!(sanitize_meta("plain"), "plain");
+    }
+
+    #[test]
+    fn valid_session_name_accepts_only_minted_shapes() {
+        assert!(valid_session_name("ass-13800-1784338461-0"));
+        assert!(!valid_session_name("ass-13800-1784338461")); // missing seq
+        assert!(!valid_session_name("ass-1-2-x")); // non-digit
+        assert!(!valid_session_name("assistant-1-2-3")); // wrong prefix world
+        assert!(!valid_session_name("my session")); // user session, spaces
+        // The v1.1.1 sanitizer garble must never validate again:
+        assert!(!valid_session_name("ass-13800-1784338461-0_Claude Code _ x_/Users/h"));
+        // And an API-supplied id must never become a path:
+        assert!(!valid_session_name("ass-../1-2-3"));
+    }
+
+    #[test]
+    fn registry_roundtrip_and_traversal_guard() {
+        let name = format!("ass-{}-1-1", std::process::id());
+        let meta = registry::Meta {
+            label: "Claude Code · skillviewer".into(),
+            agent: "claude".into(),
+            cwd: "/tmp/x".into(),
+            created: "123".into(),
+            session_id: "".into(),
+        };
+        registry::write(&name, &meta).expect("write");
+        let got = registry::read(&name).expect("read back");
+        assert_eq!(got.label, meta.label);
+        assert_eq!(got.cwd, meta.cwd);
+        registry::remove(&name);
+        assert!(registry::read(&name).is_none(), "removed");
+        // Invalid names are rejected before they can become paths.
+        assert!(registry::write("ass-../1-2-3", &meta).is_err());
+        assert!(registry::read("ass-../1-2-3").is_none());
+    }
+
+    #[test]
+    fn sweep_orphans_respects_live_and_grace() {
+        let d = std::env::temp_dir().join(format!("ass-sweep-test-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let old = |p: &std::path::Path| {
+            let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
+            let t = SystemTime::now() - std::time::Duration::from_secs(3600);
+            f.set_times(std::fs::FileTimes::new().set_modified(t)).unwrap();
+        };
+        std::fs::write(d.join("ass-1-1-1.json"), b"{}").unwrap(); // dead but old
+        old(&d.join("ass-1-1-1.json"));
+        std::fs::write(d.join("ass-2-2-2.json"), b"{}").unwrap(); // live and old
+        old(&d.join("ass-2-2-2.json"));
+        std::fs::write(d.join("ass-3-3-3.json"), b"{}").unwrap(); // dead but young
+        let live = HashSet::from(["ass-2-2-2".to_string()]);
+        registry::sweep_orphans_in(&d, &live);
+        assert!(!d.join("ass-1-1-1.json").exists(), "dead+old reaped");
+        assert!(d.join("ass-2-2-2.json").exists(), "live kept");
+        assert!(d.join("ass-3-3-3.json").exists(), "young kept (in-flight create)");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    // Registry is the metadata source of truth; a session whose registry file
+    // vanished (older-backend create, wiped dir) must be backfilled from the
+    // legacy @ass_* options and keep its label.
+    #[test]
+    fn tmux_list_backfills_registry_from_legacy_options() {
+        if which("tmux").is_none() {
+            eprintln!("tmux not installed — skipping");
+            return;
+        }
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let s = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
+        let _guard = SessionGuard(s.id.clone());
+        assert!(registry::read(&s.id).is_some(), "create writes the registry");
+        registry::remove(&s.id); // simulate an old-backend session
+        let listed = list_sessions().unwrap();
+        let found = listed.iter().find(|x| x.id == s.id).expect("still listed");
+        assert!(found.label.contains('·'), "label backfilled from @ass_*: {}", found.label);
+        // Fresh `created` stamp → the snapshot may still be mid-write on an old
+        // backend, so backfill must show it but NOT persist it yet.
+        assert!(registry::read(&s.id).is_none(), "unsettled snapshot is display-only");
+        // Age the session past the settle window → next list persists it.
+        let old = (SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 60).to_string();
+        let _ = tmux().args(["set-option", "-t", &s.id, "@ass_created", &old]).output();
+        let listed = list_sessions().unwrap();
+        let found = listed.iter().find(|x| x.id == s.id).expect("still listed");
+        assert!(found.label.contains('·'), "label survives: {}", found.label);
+        assert!(registry::read(&s.id).is_some(), "settled snapshot is persisted");
+        let _ = kill_session(&s.id);
+        assert!(registry::read(&s.id).is_none(), "kill removes the registry entry");
     }
 
     // Pins the load-bearing `-u` semantics: with NO locale in the environment
